@@ -25,7 +25,7 @@ import {
   ResultReleasePolicy, 
   AssessmentResult,
   DAR_AL_SALAM_SEED
-} from '../../types/umed';
+} from '../../types/umed.ts';
 import { 
   getQuestionBanks, 
   createQuestionBank, 
@@ -36,7 +36,7 @@ import {
   createAssessment, 
   getAssessmentResultsForAdmin, 
   releaseAssessmentResults 
-} from '../../services/assessmentService';
+} from '../../services/assessmentService.ts';
 
 interface AssessmentManagerProps {
   universityId: string;

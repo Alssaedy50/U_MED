@@ -19,10 +19,10 @@ import {
   HardDrive,
   FileCheck
 } from 'lucide-react';
-import { DAR_AL_SALAM_SEED } from '../../types/umed';
-import { fetchUniversities, fetchStudyLevels, fetchStudyPeriods } from '../../services/academicService';
-import { getQuestionBanks, getAssessments } from '../../services/assessmentService';
-import { fetchEducationalResources } from '../../services/resourceService';
+import { DAR_AL_SALAM_SEED } from '../../types/umed.ts';
+import { fetchUniversities, fetchStudyLevels, fetchStudyPeriods } from '../../services/academicService.ts';
+import { getQuestionBanks, getAssessments } from '../../services/assessmentService.ts';
+import { fetchEducationalResources } from '../../services/resourceService.ts';
 
 interface BackupRestoreConsoleProps {
   adminEmail?: string;

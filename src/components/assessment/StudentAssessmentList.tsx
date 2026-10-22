@@ -26,13 +26,13 @@ import {
   AssessmentQuestionPublic, 
   AssessmentResult, 
   AssessmentType 
-} from '../../types/umed';
+} from '../../types/umed.ts';
 import { 
   getPublishedAssessmentsForStudent, 
   startAttemptServer, 
   getStudentAttempts, 
   getStudentResults 
-} from '../../services/assessmentService';
+} from '../../services/assessmentService.ts';
 import ExamTakingModal from './ExamTakingModal';
 
 interface StudentAssessmentListProps {

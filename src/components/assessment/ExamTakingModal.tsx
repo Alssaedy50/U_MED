@@ -26,8 +26,8 @@ import {
   AssessmentAttempt, 
   AssessmentQuestionPublic, 
   AssessmentResult 
-} from '../../types/umed';
-import { saveProgressServer, submitAttemptServer } from '../../services/assessmentService';
+} from '../../types/umed.ts';
+import { saveProgressServer, submitAttemptServer } from '../../services/assessmentService.ts';
 
 interface ExamTakingModalProps {
   assessment: Assessment;
