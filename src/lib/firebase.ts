@@ -19,6 +19,7 @@ import {
 import { 
   getFirestore, 
   initializeFirestore,
+  setLogLevel,
   doc, 
   getDoc, 
   setDoc, 
@@ -27,6 +28,10 @@ import {
   query,
   getDocs
 } from 'firebase/firestore';
+
+try {
+  setLogLevel('silent');
+} catch (e) {}
 import firebaseConfig from '../../firebase-applet-config.json';
 import { UserRole, UserRoleDoc, UserProfile, AuditLog } from '../types/umed.ts';
 

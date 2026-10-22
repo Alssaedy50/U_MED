@@ -28,7 +28,8 @@ import {
   BookOpen,
   Trophy,
   HardDrive,
-  Plus
+  Plus,
+  ExternalLink
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext.tsx';
 import { UserRole, UserRoleDoc, AuditLog } from './types/umed.ts';
@@ -62,6 +63,7 @@ export default function App() {
     isOnline, 
     firestoreConnected, 
     firestoreLatency, 
+    firestoreError,
     loginGoogle, 
     loginEmail, 
     registerEmail, 
@@ -279,6 +281,24 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {firestoreError && (
+        <div className="bg-amber-950/90 border-b border-amber-600/60 px-4 py-2.5 text-amber-200 text-xs flex flex-wrap items-center justify-between gap-3 shadow-md">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span className="font-medium">{firestoreError}</span>
+          </div>
+          <a
+            href="https://console.developers.google.com/apis/api/securetoken.googleapis.com/overview?project=1072983768253"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-xs transition-colors shrink-0 shadow flex items-center gap-1"
+          >
+            <span>تفعيل الخدمة في Google Cloud</span>
+            <ExternalLink className="w-3 h-3" />
+          </a>
+        </div>
+      )}
 
       {/* 2. Platform Main Header */}
       <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-40">
