@@ -1,0 +1,207 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // -------------------------------------------------------------------------
+    // Helper Functions
+    // -------------------------------------------------------------------------
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    function isInitialOwnerEmail() {
+      return isAuthenticated() &&
+        request.auth.token.email != null &&
+        (request.auth.token.email == 'alssaedy500@gmail.com' || request.auth.token.email == 'alssaedy50@gmail.com');
+    }
+
+    function getRoleDoc() {
+      return get(/databases/$(database)/documents/userRoles/$(request.auth.uid));
+    }
+
+    function isPlatformOwner() {
+      return isAuthenticated() && (
+        isInitialOwnerEmail() ||
+        (exists(/databases/$(database)/documents/userRoles/$(request.auth.uid)) &&
+         getRoleDoc().data.role == 'platform_owner')
+      );
+    }
+
+    function isUniversityAdmin(universityId) {
+      return isAuthenticated() && (
+        isPlatformOwner() ||
+        (exists(/databases/$(database)/documents/userRoles/$(request.auth.uid)) &&
+         getRoleDoc().data.role == 'university_admin' &&
+         (getRoleDoc().data.assignedUniversityId == universityId || universityId == null))
+      );
+    }
+
+    function isAnyAdmin() {
+      return isAuthenticated() && (
+        isPlatformOwner() ||
+        (exists(/databases/$(database)/documents/userRoles/$(request.auth.uid)) &&
+         getRoleDoc().data.role == 'university_admin')
+      );
+    }
+
+    // -------------------------------------------------------------------------
+    // System Connectivity Probe
+    // -------------------------------------------------------------------------
+    match /system/{docId} {
+      allow read: if true;
+      allow write: if isPlatformOwner();
+    }
+
+    // -------------------------------------------------------------------------
+    // User Roles & Profiles
+    // -------------------------------------------------------------------------
+
+    match /userRoles/{uid} {
+      allow read: if isAuthenticated() && (request.auth.uid == uid || isAnyAdmin());
+      allow write: if isPlatformOwner() || (isOwner(uid) && isInitialOwnerEmail());
+    }
+
+    match /userProfiles/{uid} {
+      allow read: if isAuthenticated();
+      allow create, update: if isOwner(uid) || isPlatformOwner();
+      allow delete: if isPlatformOwner();
+    }
+
+    // -------------------------------------------------------------------------
+    // Academic Hierarchy
+    // -------------------------------------------------------------------------
+
+    match /countries/{countryId} {
+      allow read: if true;
+      allow write: if isPlatformOwner();
+    }
+
+    match /universities/{universityId} {
+      allow read: if true;
+      allow create, delete: if isPlatformOwner();
+      allow update: if isUniversityAdmin(universityId);
+    }
+
+    match /colleges/{collegeId} {
+      allow read: if true;
+      allow write: if isAnyAdmin();
+    }
+
+    match /programs/{programId} {
+      allow read: if true;
+      allow write: if isAnyAdmin();
+    }
+
+    match /curriculumVersions/{curriculumId} {
+      allow read: if true;
+      allow write: if isAnyAdmin();
+    }
+
+    match /studyLevels/{levelId} {
+      allow read: if true;
+      allow write: if isAnyAdmin();
+    }
+
+    match /studyPeriods/{periodId} {
+      allow read: if true;
+      allow write: if isAnyAdmin();
+    }
+
+    match /courseOfferings/{courseId} {
+      allow read: if true;
+      allow write: if isAnyAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // Student Enrollments & Change Requests
+    // -------------------------------------------------------------------------
+
+    match /studentEnrollments/{enrollmentId} {
+      allow read: if isAuthenticated() && 
+        (resource.data.uid == request.auth.uid || isAnyAdmin());
+      allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid;
+      allow update: if isAnyAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      allow delete: if isPlatformOwner();
+    }
+
+    match /academicChangeRequests/{requestId} {
+      allow read: if isAuthenticated() && 
+        (resource.data.uid == request.auth.uid || isAnyAdmin());
+      allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid;
+      allow update: if isAnyAdmin();
+      allow delete: if isPlatformOwner();
+    }
+
+    // -------------------------------------------------------------------------
+    // Educational Resources (Low-Bandwidth Materials)
+    // -------------------------------------------------------------------------
+
+    match /educationalResources/{resourceId} {
+      allow read: if isAuthenticated() && 
+        (resource.data.status == 'published' || isAnyAdmin());
+      allow write: if isAnyAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // Assessments, Questions & Protected Answer Keys
+    // -------------------------------------------------------------------------
+
+    match /questionBanks/{bankId} {
+      allow read, write: if isAnyAdmin();
+    }
+
+    // Admin Full Questions (includes answer keys - restricted to admins)
+    match /questions/{questionId} {
+      allow read, write: if isAnyAdmin();
+    }
+
+    // Public Question Stems & Options (NO Answer Keys - readable by authenticated students)
+    match /assessmentQuestions/{questionId} {
+      allow read: if isAuthenticated();
+      allow write: if isAnyAdmin();
+    }
+
+    // PROTECTED ANSWER KEYS: NEVER readable directly by students; restricted to admins
+    match /questionAnswerKeys/{questionId} {
+      allow read, write: if isAnyAdmin();
+    }
+
+    match /assessments/{assessmentId} {
+      allow read: if isAuthenticated() && 
+        (resource.data.status == 'published' || isAnyAdmin());
+      allow write: if isAnyAdmin();
+    }
+
+    // Assessment Attempts (Student Progressive Saving)
+    match /assessmentAttempts/{attemptId} {
+      allow read: if isAuthenticated() && (resource.data.uid == request.auth.uid || isAnyAdmin());
+      allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid;
+      allow update: if isAuthenticated() && (resource.data.uid == request.auth.uid || isAnyAdmin());
+      allow delete: if isPlatformOwner();
+    }
+
+    // Assessment Results (Controlled Release)
+    match /assessmentResults/{resultId} {
+      allow read: if isAuthenticated() && 
+        (resource.data.uid == request.auth.uid || isAnyAdmin());
+      allow create, update: if isAuthenticated() && (request.resource.data.uid == request.auth.uid || isAnyAdmin());
+      allow delete: if isPlatformOwner();
+    }
+
+    // -------------------------------------------------------------------------
+    // Audit Logs (Immutable)
+    // -------------------------------------------------------------------------
+
+    match /auditLogs/{logId} {
+      allow read: if isAnyAdmin();
+      allow create: if isAuthenticated();
+      allow update, delete: if false; // Immutable audit trail
+    }
+
+  }
+}

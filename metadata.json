@@ -1,0 +1,6 @@
+{
+  "name": "UMED - Yemen Medical Education Platform",
+  "description": "Yemen-First Medical Education Platform with configurable academic structures, low-bandwidth educational library, and trusted assessment engine.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,29 @@
+{
+  "id": "/",
+  "name": "UMED — منصة التعليم الطبي اليمنية",
+  "short_name": "UMED",
+  "description": "منصة التعليم الطبي الشاملة لطلاب كليات الطب في الجمهورية اليمنية — محاضرات، بنوك أسئلة، اختبارات ومسابقات طبية",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "orientation": "portrait-primary",
+  "dir": "rtl",
+  "lang": "ar",
+  "categories": ["education", "medical"],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
