@@ -17,7 +17,9 @@ service cloud.firestore {
     function isInitialOwnerEmail() {
       return isAuthenticated() &&
         request.auth.token.email != null &&
-        (request.auth.token.email == 'alssaedy500@gmail.com' || request.auth.token.email == 'alssaedy50@gmail.com');
+        (request.auth.token.email == 'alssaedy500@gmail.com' || 
+         request.auth.token.email == 'alssaedy50@gmail.com' ||
+         request.auth.token.email == 'doctoshi50@gmail.com');
     }
 
     function hasRoleDoc() {

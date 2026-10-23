@@ -130,6 +130,18 @@ export default function App() {
     } catch (e) {}
   };
 
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+      document.documentElement.classList.remove('theme-light');
+      document.body.classList.remove('theme-light');
+    } else {
+      document.documentElement.classList.remove('dark');
+      document.documentElement.classList.add('theme-light');
+      document.body.classList.add('theme-light');
+    }
+  }, [isDarkMode]);
+
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
   const [authTab, setAuthTab] = useState<'login' | 'register'>('login');
   const [authMethod, setAuthMethod] = useState<'phone' | 'email'>('phone');
@@ -1822,8 +1834,8 @@ export default function App() {
 
                   {/* Self-Account Cloud Deletion Confirmation Modal */}
                   {showDeleteAccountModal && (
-                    <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-xs flex items-center justify-center p-4">
-                      <div className="max-w-md w-full bg-slate-900 border border-rose-500/50 rounded-2xl p-6 shadow-2xl space-y-4">
+                    <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto overscroll-contain">
+                      <div className="max-w-md w-full my-auto bg-slate-900 border border-rose-500/50 rounded-2xl p-6 shadow-2xl space-y-4">
                         <div className="flex items-center justify-between pb-3 border-b border-slate-800">
                           <h3 className="text-sm font-bold text-rose-300 flex items-center gap-2">
                             <ShieldAlert className="w-5 h-5 text-rose-400" />

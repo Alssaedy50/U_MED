@@ -34,7 +34,7 @@ import {
   getStudentResults,
   subscribeToAssessments
 } from '../../services/assessmentService.ts';
-import ExamTakingModal from './ExamTakingModal';
+import ExamTakingModal from './ExamTakingModal.tsx';
 
 interface StudentAssessmentListProps {
   universityId: string;

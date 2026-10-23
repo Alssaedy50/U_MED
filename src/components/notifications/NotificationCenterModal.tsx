@@ -182,9 +182,9 @@ export default function NotificationCenterModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
+    <div className="umed-modal-overlay bg-black/60 backdrop-blur-sm animate-fade-in" dir="rtl">
       <div 
-        className={`w-full max-w-lg max-h-[90vh] flex flex-col rounded-2xl shadow-2xl border overflow-hidden ${
+        className={`umed-modal-panel w-full max-w-lg rounded-2xl shadow-2xl border ${
           isDarkMode 
             ? 'bg-slate-900 border-slate-800 text-slate-100' 
             : 'bg-white border-slate-200 text-slate-800'

@@ -56,7 +56,8 @@ import {
   deleteUserAccountCompletelyFromCloud,
   fetchPrimaryOwnerIdentity,
   syncAndDeduplicatePrimaryOwnerIdentity,
-  writeAuditLogToCloud
+  writeAuditLogToCloud,
+  INITIAL_OWNER_EMAILS
 } from '../../lib/firebase.ts';
 import { fetchUniversities, fetchStudyLevels } from '../../services/academicService.ts';
 import { getRoleLabelArabic } from '../../services/batchGovernanceService.ts';
@@ -460,24 +461,22 @@ export default function PlatformUsersManager({
           </div>
         </div>
 
-        <form onSubmit={handleSyncPrimaryOwner} className="grid grid-cols-1 md:grid-cols-12 gap-3.5 text-xs items-end">
-          <div className="md:col-span-3">
-            <label className="block text-slate-300 mb-1 font-semibold">البريد الأساسي الأول (ثابت):</label>
-            <div className="px-3 py-2.5 rounded-xl bg-slate-950 border border-amber-500/40 text-amber-300 font-mono font-bold flex items-center justify-between" dir="ltr">
-              <span>alssaedy50@gmail.com</span>
-              <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+        <form onSubmit={handleSyncPrimaryOwner} className="space-y-4 text-xs">
+          <div>
+            <label className="block text-slate-300 mb-1.5 font-semibold">حسابات البريد الإلكتروني للمالك الأساسي (محمية وثابتة):</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+              {INITIAL_OWNER_EMAILS.map((email, idx) => (
+                <div key={email} className="px-3 py-2.5 rounded-xl bg-slate-950 border border-amber-500/40 text-amber-300 font-mono font-bold flex items-center justify-between text-[11px]" dir="ltr">
+                  <span className="truncate">{email}</span>
+                  <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0 mr-1" />
+                </div>
+              ))}
             </div>
           </div>
 
-          <div className="md:col-span-3">
-            <label className="block text-slate-300 mb-1 font-semibold">البريد الأساسي الثاني (ثابت):</label>
-            <div className="px-3 py-2.5 rounded-xl bg-slate-950 border border-amber-500/40 text-amber-300 font-mono font-bold flex items-center justify-between" dir="ltr">
-              <span>alssaedy500@gmail.com</span>
-              <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            </div>
-          </div>
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 items-end">
 
-          <div className="md:col-span-2">
+          <div className="md:col-span-4">
             <label className="block text-slate-300 mb-1 font-semibold">رقم هاتف المالك الأساسي:</label>
             <input
               type="tel"
@@ -490,7 +489,7 @@ export default function PlatformUsersManager({
             />
           </div>
 
-          <div className="md:col-span-2">
+          <div className="md:col-span-5">
             <label className="block text-slate-300 mb-1 font-semibold">اسم المالك الأساسي:</label>
             <input
               type="text"
@@ -501,7 +500,7 @@ export default function PlatformUsersManager({
             />
           </div>
 
-          <div className="md:col-span-2">
+          <div className="md:col-span-3">
             <button
               type="submit"
               disabled={ownerSyncLoading}
@@ -515,8 +514,9 @@ export default function PlatformUsersManager({
               <span>تثبيت ومنع التكرار</span>
             </button>
           </div>
-        </form>
-      </div>
+        </div>
+      </form>
+    </div>
 
       {/* 2. Summary Statistics & Cloud Export Toolbar */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-5">

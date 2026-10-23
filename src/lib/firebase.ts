@@ -7,6 +7,7 @@
  */
 
 import { initializeApp, getApps, getApp } from 'firebase/app';
+import { getAnalytics, isSupported, Analytics } from 'firebase/analytics';
 import { 
   getAuth, 
   signInWithPopup, 
@@ -58,14 +59,17 @@ export const firebaseConfig = {
   storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || firebaseAppletConfig.storageBucket,
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseAppletConfig.messagingSenderId,
   appId: import.meta.env.VITE_FIREBASE_APP_ID || firebaseAppletConfig.appId,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || firebaseAppletConfig.measurementId,
   firestoreDatabaseId: import.meta.env.VITE_FIREBASE_DATABASE_ID || firebaseAppletConfig.firestoreDatabaseId,
 };
 
 // Primary Platform Owner Official Details (Non-duplicable & Strictly Reserved)
 export const INITIAL_OWNER_EMAILS = [
   'alssaedy50@gmail.com',
-  'alssaedy500@gmail.com'
-];
+  'alssaedy500@gmail.com',
+  'doctoshi50@gmail.com',
+  (import.meta.env.VITE_INITIAL_OWNER_EMAIL || '').trim().toLowerCase()
+].filter(Boolean);
 
 export const INITIAL_OWNER_EMAIL = INITIAL_OWNER_EMAILS[0];
 export const DEFAULT_OWNER_PHONE = '+967770000001';
@@ -80,7 +84,19 @@ export const isInitialOwnerEmail = (email?: string | null): boolean => {
 export const isPrimaryOwnerEmail = isInitialOwnerEmail;
 
 // 1. Initialize Firebase App
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+export const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+
+// Safe Client Analytics Initialization (Guarded with isSupported() for browser/iFrame safety)
+export let analytics: Analytics | null = null;
+if (typeof window !== 'undefined') {
+  isSupported()
+    .then((supported) => {
+      if (supported) {
+        analytics = getAnalytics(app);
+      }
+    })
+    .catch(() => {});
+}
 
 // 2. Export Auth & Firestore instances (forced long-polling prevents 10s WebChannel timeout in iFrames)
 export const auth = getAuth(app);
@@ -1876,7 +1892,7 @@ export async function fetchAllUsersForPlatformOwner(): Promise<ManagedCloudUserR
       archivedAt: prof?.archivedAt,
       archiveReason: prof?.archiveReason,
       isPrimaryOwner: isOwner,
-      ownerLinkedEmails: isOwner ? ['alssaedy50@gmail.com', 'alssaedy500@gmail.com'] : undefined,
+      ownerLinkedEmails: isOwner ? INITIAL_OWNER_EMAILS : undefined,
       createdAt: prof?.createdAt || enr?.enrolledAt || roleDoc?.assignedAt || new Date().toISOString(),
       updatedAt: prof?.updatedAt || enr?.updatedAt || roleDoc?.assignedAt || new Date().toISOString()
     });
@@ -1893,10 +1909,15 @@ export async function fetchAllUsersForPlatformOwner(): Promise<ManagedCloudUserR
     ownerRecords[0]?.uid ||
     'owner-primary-umed';
 
+  const preferredOwnerEmail =
+    (auth.currentUser && isInitialOwnerEmail(auth.currentUser.email) ? auth.currentUser.email : undefined) ||
+    ownerConfig.primaryEmail ||
+    INITIAL_OWNER_EMAILS[0];
+
   unifiedOwner = {
     uid: preferredOwnerUid,
     displayNameArabic: ownerConfig.displayNameArabic || DEFAULT_OWNER_NAME_ARABIC,
-    email: 'alssaedy50@gmail.com',
+    email: preferredOwnerEmail,
     phone: ownerConfig.phone || DEFAULT_OWNER_PHONE,
     academicStudentNumber: ownerConfig.academicStudentNumber || DEFAULT_OWNER_ACADEMIC_ID,
     role: 'platform_owner',
@@ -1910,13 +1931,13 @@ export async function fetchAllUsersForPlatformOwner(): Promise<ManagedCloudUserR
     isActive: true,
     isArchived: false,
     isPrimaryOwner: true,
-    ownerLinkedEmails: ['alssaedy50@gmail.com', 'alssaedy500@gmail.com'],
+    ownerLinkedEmails: INITIAL_OWNER_EMAILS,
     createdAt: ownerRecords[0]?.createdAt || '2024-01-01T00:00:00.000Z',
     updatedAt: ownerConfig.updatedAt || new Date().toISOString()
   };
 
   // Deduplicate non-owner records by email or phone if any legacy duplicate existed
-  const seenEmails = new Set<string>(['alssaedy50@gmail.com', 'alssaedy500@gmail.com']);
+  const seenEmails = new Set<string>(INITIAL_OWNER_EMAILS.map(e => e.toLowerCase()));
   const seenPhones = new Set<string>([unifiedOwner.phone]);
   const deduplicatedUsers: ManagedCloudUserRecord[] = [unifiedOwner];
 

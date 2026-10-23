@@ -6,7 +6,8 @@
  * Mounts Unified API Routes from ./api/index.ts + Vite Dev Middleware or Static Production Build
  */
 
-import express, { Request, Response } from 'express';
+import express from 'express';
+import type { Request, Response } from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -20,7 +21,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT) || 3000;
-const INITIAL_OWNER_EMAIL = (process.env.INITIAL_OWNER_EMAIL || 'alssaedy50@gmail.com, alssaedy500@gmail.com').trim().toLowerCase();
+const INITIAL_OWNER_EMAIL = (process.env.INITIAL_OWNER_EMAIL || 'alssaedy50@gmail.com, alssaedy500@gmail.com, doctoshi50@gmail.com').trim().toLowerCase();
 
 async function startServer() {
   // Explicitly serve Service Worker with standard PWA and scope headers

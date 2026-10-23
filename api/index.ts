@@ -7,12 +7,13 @@
  * Hardened with Cryptographic Token Verification, Strict RBAC Middleware, and Tamper-Proof Scoring
  */
 
-import express, { Request, Response, NextFunction } from 'express';
+import express from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { UserRoleDoc, AuditLog, QuestionItemFull, Assessment } from '../src/types/umed.ts';
+import type { UserRoleDoc, AuditLog, QuestionItemFull, Assessment } from '../src/types/umed.ts';
 
 dotenv.config();
 
@@ -32,6 +33,7 @@ const FIREBASE_PROJECT_ID = (
 const INITIAL_OWNER_EMAILS = [
   'alssaedy500@gmail.com',
   'alssaedy50@gmail.com',
+  'doctoshi50@gmail.com',
   (process.env.INITIAL_OWNER_EMAIL || '').trim().toLowerCase()
 ].filter(Boolean);
 
