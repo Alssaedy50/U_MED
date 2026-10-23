@@ -64,13 +64,13 @@ import { getRoleLabelArabic } from '../../services/batchGovernanceService.ts';
 interface PlatformUsersManagerProps {
   callerUid: string;
   callerEmail: string;
-  callerRole: UserRole;
+  callerRole?: UserRole;
 }
 
 export default function PlatformUsersManager({
   callerUid,
   callerEmail,
-  callerRole
+  callerRole = 'platform_owner'
 }: PlatformUsersManagerProps) {
   const [users, setUsers] = useState<ManagedCloudUserRecord[]>([]);
   const [universities, setUniversities] = useState<University[]>([]);

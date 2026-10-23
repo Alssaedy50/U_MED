@@ -71,7 +71,8 @@ import {
 } from '../../services/batchGovernanceService.ts';
 import {
   uploadFileToCloudFirestore,
-  saveEducationalResource
+  saveEducationalResource,
+  resolveResourceFileUrl
 } from '../../services/resourceService.ts';
 
 interface HierarchyGovernanceConsoleProps {
@@ -663,16 +664,6 @@ export default function HierarchyGovernanceConsole({
                 <Building2 className="w-3.5 h-3.5 text-teal-400" />
                 <span>الجامعة النشطة (نطاق العزل المؤسسي):</span>
               </label>
-              {callerRole === 'platform_owner' && (
-                <button
-                  type="button"
-                  onClick={() => setShowNewUnivModal(true)}
-                  className="text-[11px] text-teal-400 hover:text-teal-300 font-bold flex items-center gap-1"
-                >
-                  <Plus className="w-3 h-3" />
-                  <span>إضافة جامعة مستقلة جديدة</span>
-                </button>
-              )}
             </div>
             {callerRole === 'platform_owner' ? (
               <select
@@ -893,29 +884,16 @@ export default function HierarchyGovernanceConsole({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-300 mb-1 font-semibold">معرف الحساب (UID):</label>
-                  <input
-                    type="text"
-                    value={targetUid}
-                    onChange={(e) => setTargetUid(e.target.value)}
-                    placeholder="يُملأ تلقائياً عند اختيار طالب"
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-300 font-mono text-[11px]"
-                    dir="ltr"
-                  />
-                </div>
-                <div>
-                  <label className="block text-slate-300 mb-1 font-semibold">رقم القيد (اختياري):</label>
-                  <input
-                    type="text"
-                    value={targetAcadNum}
-                    onChange={(e) => setTargetAcadNum(e.target.value)}
-                    placeholder="MED-2025-101"
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-300 font-mono text-[11px]"
-                    dir="ltr"
-                  />
-                </div>
+              <div>
+                <label className="block text-slate-300 mb-1 font-semibold">رقم القيد الأكاديمي (اختياري):</label>
+                <input
+                  type="text"
+                  value={targetAcadNum}
+                  onChange={(e) => setTargetAcadNum(e.target.value)}
+                  placeholder="MED-2025-101"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-300 font-mono text-[11px]"
+                  dir="ltr"
+                />
               </div>
 
               <button
@@ -1493,15 +1471,39 @@ export default function HierarchyGovernanceConsole({
 
                     {n.attachmentUrl && (
                       <div className="pt-1">
-                        <a
-                          href={n.attachmentUrl.startsWith('umed-cloud://') ? '#library' : n.attachmentUrl}
-                          target={n.attachmentUrl.startsWith('umed-cloud://') ? undefined : '_blank'}
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1.5 text-xs text-teal-300 hover:text-teal-200 font-semibold bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800"
-                        >
-                          <LinkIcon className="w-3.5 h-3.5" />
-                          <span>{n.attachmentLabel || 'فتح المرفق / الرابط المرسل'}</span>
-                        </a>
+                        {n.attachmentUrl.startsWith('umed-cloud://') ? (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                const resolved = await resolveResourceFileUrl(n.attachmentUrl!);
+                                if (resolved) {
+                                  const a = document.createElement('a');
+                                  a.href = resolved;
+                                  a.download = n.attachmentLabel || 'umed-attachment';
+                                  a.target = '_blank';
+                                  document.body.appendChild(a);
+                                  a.click();
+                                  document.body.removeChild(a);
+                                }
+                              } catch (e) {}
+                            }}
+                            className="inline-flex items-center gap-1.5 text-xs text-teal-300 hover:text-teal-200 font-semibold bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800"
+                          >
+                            <LinkIcon className="w-3.5 h-3.5" />
+                            <span>{n.attachmentLabel || 'تحميل / فتح المرفق السحابي'}</span>
+                          </button>
+                        ) : (
+                          <a
+                            href={n.attachmentUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 text-xs text-teal-300 hover:text-teal-200 font-semibold bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800"
+                          >
+                            <LinkIcon className="w-3.5 h-3.5" />
+                            <span>{n.attachmentLabel || 'فتح المرفق / الرابط المرسل'}</span>
+                          </a>
+                        )}
                       </div>
                     )}
 
@@ -1517,79 +1519,6 @@ export default function HierarchyGovernanceConsole({
                 ))}
               </div>
             )}
-          </div>
-        </div>
-      )}
-
-      {/* Modal: Quick Add Independent University (Platform Owner) */}
-      {showNewUnivModal && callerRole === 'platform_owner' && (
-        <div className="fixed inset-0 z-50 bg-black/75 flex items-start sm:items-center justify-center p-3 sm:p-4 overflow-y-auto overscroll-contain">
-          <div className="max-w-md w-full max-h-[calc(100dvh-1.5rem)] sm:max-h-[90dvh] overflow-y-auto my-auto bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 space-y-4 shadow-2xl">
-            <h3 className="text-base font-bold text-white">إضافة جامعة يمنية مستقلة جديدة</h3>
-            <p className="text-xs text-slate-400">
-              سيتم إنشاء هيكل أكاديمي ومستويات دراسية مستقلة تماماً لهذه الجامعة بحيث تكون معزولة عن بقية الجامعات.
-            </p>
-            <form onSubmit={handleCreateNewUniversity} className="space-y-3 text-xs">
-              <div>
-                <label className="block text-slate-300 mb-1 font-semibold">اسم الجامعة بالعربية:</label>
-                <input
-                  type="text"
-                  required
-                  value={newUnivNameAr}
-                  onChange={(e) => setNewUnivNameAr(e.target.value)}
-                  placeholder="مثال: جامعة صنعاء / جامعة العلوم والتكنولوجيا"
-                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
-                />
-              </div>
-              <div>
-                <label className="block text-slate-300 mb-1 font-semibold">اسم الجامعة بالإنجليزية:</label>
-                <input
-                  type="text"
-                  value={newUnivNameEn}
-                  onChange={(e) => setNewUnivNameEn(e.target.value)}
-                  placeholder="Sana'a University"
-                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
-                  dir="ltr"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-300 mb-1 font-semibold">المدينة:</label>
-                  <input
-                    type="text"
-                    value={newUnivCityAr}
-                    onChange={(e) => setNewUnivCityAr(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-slate-300 mb-1 font-semibold">نوع الجامعة:</label>
-                  <select
-                    value={newUnivType}
-                    onChange={(e) => setNewUnivType(e.target.value as 'public' | 'private')}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
-                  >
-                    <option value="public">حكومية</option>
-                    <option value="private">أهلية / خاصة</option>
-                  </select>
-                </div>
-              </div>
-              <div className="flex gap-2 pt-2">
-                <button
-                  type="submit"
-                  className="flex-1 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold"
-                >
-                  إنشاء الجامعة وتفعيل عزلها
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowNewUnivModal(false)}
-                  className="px-4 py-2.5 rounded-xl bg-slate-800 text-slate-300"
-                >
-                  إلغاء
-                </button>
-              </div>
-            </form>
           </div>
         </div>
       )}

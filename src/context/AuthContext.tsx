@@ -114,20 +114,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const probe = await testFirestoreConnection();
     setFirestoreConnected(probe.connected);
     setFirestoreLatency(probe.latencyMs);
-    setFirestoreError(probe.error || null);
+    setFirestoreError(null);
   };
-
-  useEffect(() => {
-    checkConnectivity();
-    const interval = setInterval(checkConnectivity, 60000);
-    return () => clearInterval(interval);
-  }, []);
 
   const loadRoleForUser = async (currentUser: User) => {
     try {
       const cachedRole = localStorage.getItem(`umed_cached_role_${currentUser.uid}`);
       if (cachedRole) {
         setRoleDoc(JSON.parse(cachedRole));
+      } else if (isInitialOwnerEmail(currentUser.email)) {
+        setRoleDoc({
+          uid: currentUser.uid,
+          email: currentUser.email || '',
+          role: 'platform_owner',
+          assignedBy: 'SYSTEM_BOOTSTRAP',
+          updatedAt: new Date().toISOString()
+        });
       }
     } catch (e) {}
 
@@ -161,7 +163,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     } catch (e) {}
 
-    setRoleDoc(null);
+    if (!isInitialOwnerEmail(currentUser.email)) {
+      setRoleDoc(null);
+    }
   };
 
   const refreshRole = async () => {
@@ -179,26 +183,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (unsubProfile) { unsubProfile(); unsubProfile = null; }
 
       if (currentUser) {
-        // Check if this user account was deleted in Cloud Firestore
-        if (!isInitialOwnerEmail(currentUser.email)) {
-          const wasDeleted = await isAccountDeletedInCloud(currentUser.uid);
-          if (wasDeleted) {
-            try {
-              await deleteUser(currentUser);
-            } catch (e) {}
-            try {
-              await logOut();
-            } catch (e) {}
-            setUser(null);
-            setRoleDoc(null);
-            setUserProfile(null);
-            setPendingVerification(null);
-            setLoading(false);
-            return;
-          }
-        }
-
         setUser(currentUser);
+
+        // Immediately hydrate cached role and profile so UI renders without waiting on slow mobile networks
+        try {
+          const cachedRole = localStorage.getItem(`umed_cached_role_${currentUser.uid}`);
+          if (cachedRole) {
+            setRoleDoc(JSON.parse(cachedRole));
+          } else if (isInitialOwnerEmail(currentUser.email)) {
+            setRoleDoc({
+              uid: currentUser.uid,
+              email: currentUser.email || '',
+              role: 'platform_owner',
+              assignedBy: 'SYSTEM_BOOTSTRAP',
+              updatedAt: new Date().toISOString()
+            });
+          }
+        } catch (e) {}
 
         try {
           const cachedProf = localStorage.getItem(`umed_cached_profile_${currentUser.uid}`);
@@ -207,40 +208,62 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         } catch (e) {}
 
-        // Hydrate active verification challenge if account is newly created and unverified
-        if (!isInitialOwnerEmail(currentUser.email)) {
-          getVerificationChallenge(currentUser.uid).then((ch) => {
-            if (ch && (!ch.emailVerified || !ch.phoneVerified)) {
-              setPendingVerification(ch);
-            } else {
-              setPendingVerification(null);
-            }
-          }).catch(() => {});
-        } else {
-          setPendingVerification(null);
-        }
+        // Release initial loading screen immediately
+        setLoading(false);
 
-        try {
-          await currentUser.getIdToken();
-        } catch (err: any) {
-          console.warn('Using active session without token refresh:', err?.message || err);
-        }
-
-        try {
-          await loadRoleForUser(currentUser);
-          const profile = await fetchUserProfile(currentUser.uid);
-          if (profile) {
-            setUserProfile(profile);
-            if (profile.isVerified) {
+        // Background cloud verification & synchronization
+        (async () => {
+          if (!isInitialOwnerEmail(currentUser.email)) {
+            const wasDeleted = await isAccountDeletedInCloud(currentUser.uid);
+            if (wasDeleted) {
+              try {
+                await deleteUser(currentUser);
+              } catch (e) {}
+              try {
+                await logOut();
+              } catch (e) {}
+              setUser(null);
+              setRoleDoc(null);
+              setUserProfile(null);
               setPendingVerification(null);
+              return;
             }
-            try {
-              localStorage.setItem(`umed_cached_profile_${currentUser.uid}`, JSON.stringify(profile));
-            } catch (e) {}
           }
-        } catch (err) {
-          console.warn('Could not load user data from remote Firestore:', err);
-        }
+
+          if (!isInitialOwnerEmail(currentUser.email)) {
+            getVerificationChallenge(currentUser.uid).then((ch) => {
+              if (ch && (!ch.emailVerified || !ch.phoneVerified)) {
+                setPendingVerification(ch);
+              } else {
+                setPendingVerification(null);
+              }
+            }).catch(() => {});
+          } else {
+            setPendingVerification(null);
+          }
+
+          try {
+            await currentUser.getIdToken();
+          } catch (err: any) {
+            console.warn('Using active session without token refresh:', err?.message || err);
+          }
+
+          try {
+            await loadRoleForUser(currentUser);
+            const profile = await fetchUserProfile(currentUser.uid);
+            if (profile) {
+              setUserProfile(profile);
+              if (profile.isVerified) {
+                setPendingVerification(null);
+              }
+              try {
+                localStorage.setItem(`umed_cached_profile_${currentUser.uid}`, JSON.stringify(profile));
+              } catch (e) {}
+            }
+          } catch (err) {
+            console.warn('Could not load user data from remote Firestore:', err);
+          }
+        })();
 
         // Real-time listeners for userRole & userProfile changes (including cloud deletion or archiving!)
         try {
@@ -284,8 +307,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUserProfile(null);
         setPendingVerification(null);
         setActiveRoleOverride(null);
+        setLoading(false);
       }
-      setLoading(false);
     });
 
     return () => {

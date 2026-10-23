@@ -526,15 +526,8 @@ export default function StudentDashboard({
             </div>
 
             {courses.length === 0 ? (
-              <div className="text-center py-8 text-slate-400 text-xs space-y-3">
-                <p>يمكنك الوصول مباشرة إلى جميع محاضرات وشرائح وفيديوهات هذا البلوك عبر المكتبة الطبية الرقمية.</p>
-                <button
-                  onClick={() => switchSection('library')}
-                  className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold inline-flex items-center gap-1.5"
-                >
-                  <FileText className="w-3.5 h-3.5" />
-                  <span>استعراض المحاضرات والملفات</span>
-                </button>
+              <div className="text-center py-6 text-slate-400 text-xs">
+                <p>لم تتم إضافة مقررات مخصصة لهذا البلوك بعد. يمكنك الوصول إلى محاضرات وشرائح وفيديوهات البلوك عبر زر «فتح المكتبة الرقمية» أعلاه.</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

@@ -518,30 +518,12 @@ export default function App() {
       } transition-colors duration-200`}
       dir="rtl"
     >
-      {firestoreError && (
-        <div className="bg-amber-950/90 border-b border-amber-600/60 px-4 py-2.5 text-amber-200 text-xs flex flex-wrap items-center justify-between gap-3 shadow-md">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-            <span className="font-medium">{firestoreError}</span>
-          </div>
-          <a
-            href="https://console.developers.google.com/apis/api/securetoken.googleapis.com/overview?project=1072983768253"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-xs transition-colors shrink-0 shadow flex items-center gap-1"
-          >
-            <span>تفعيل الخدمة في Google Cloud</span>
-            <ExternalLink className="w-3 h-3" />
-          </a>
-        </div>
-      )}
-
       {/* IF INITIALIZING AUTH SESSION ON RELOAD: DO NOT FLASH LOGIN FORM */}
       {loading ? (
         <div className="min-h-[100dvh] flex items-center justify-center p-4 overflow-y-auto">
           <div className="max-w-md w-full my-auto bg-slate-900/80 border border-slate-800 rounded-2xl p-8 sm:p-10 text-center space-y-3 shadow-2xl">
             <RefreshCw className="w-8 h-8 animate-spin text-teal-400 mx-auto" />
-            <h2 className="text-sm font-bold text-white">جارٍ استعادة جلستك النشطة في منصة UMED...</h2>
+            <h2 className="text-sm font-bold text-white">جارٍ استعادة جلستك النشطة في منصة UMED</h2>
             <p className="text-xs text-slate-400">يرجى الانتظار لحظة ريثما يتم التحقق من بيانات الحساب والقيد الأكاديمي</p>
           </div>
         </div>
@@ -1272,6 +1254,13 @@ export default function App() {
                   {getRoleLabelArabic(activeRole)}
                 </span>
               </div>
+              <button
+                onClick={logout}
+                className="w-full py-1.5 px-2.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/50 text-rose-300 border border-rose-800/50 text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>تسجيل الخروج من الحساب</span>
+              </button>
             </div>
           </aside>
 
@@ -1296,13 +1285,48 @@ export default function App() {
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
+                  {(isTruePlatformOwner || isAuthorizedAdmin) && (
+                    <button
+                      onClick={() => {
+                        if (activeRole === 'student') {
+                          setActiveRoleOverride(isTruePlatformOwner ? 'platform_owner' : (roleDoc?.role || 'university_admin'));
+                          setActiveTab(isTruePlatformOwner ? 'users_manager' : 'roles');
+                        } else {
+                          setActiveRoleOverride('student');
+                          setActiveTab('student_dashboard');
+                        }
+                      }}
+                      className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-colors ${
+                        activeRole === 'student'
+                          ? 'bg-teal-600/20 hover:bg-teal-600/30 text-teal-300 border-teal-500/40'
+                          : 'bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border-indigo-500/40'
+                      }`}
+                      title="التبديل السريع بين بوابة الإدارة ومعاينة واجهة الطالب"
+                    >
+                      {activeRole === 'student' ? (
+                        <>
+                          <ShieldCheck className="w-3.5 h-3.5 text-teal-400" />
+                          <span>العودة لبوابة الإدارة</span>
+                        </>
+                      ) : (
+                        <>
+                          <GraduationCap className="w-3.5 h-3.5 text-indigo-400" />
+                          <span className="hidden sm:inline">معاينة كطالب</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+
                   <button
-                    onClick={() => setActiveTab('auth')}
-                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                    title="الإعدادات والحساب"
+                    onClick={() => setIsDarkMode(!isDarkMode)}
+                    className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
+                    title={isDarkMode ? 'التبديل إلى الوضع النهاري الفاتح' : 'التبديل إلى الوضع الليلي الداكن'}
                   >
-                    <Settings className="w-3.5 h-3.5 text-teal-400" />
-                    <span className="hidden sm:inline">الإعدادات</span>
+                    {isDarkMode ? (
+                      <Sun className="w-4 h-4 text-amber-400" />
+                    ) : (
+                      <Moon className="w-4 h-4 text-indigo-400" />
+                    )}
                   </button>
                 </div>
               </div>
@@ -1361,6 +1385,7 @@ export default function App() {
                   <PlatformUsersManager
                     callerUid={user.uid}
                     callerEmail={user.email || ''}
+                    callerRole={activeRole}
                   />
                 )}
 
@@ -1627,82 +1652,10 @@ export default function App() {
                           {activeRole === 'student' && <CheckCircle2 className="w-4 h-4 text-indigo-400" />}
                         </button>
                       </div>
-
-                      {isOwnerMode && (
-                        <div className="pt-3 border-t border-slate-800 space-y-2.5 text-xs">
-                          {bootstrapMessage && (
-                            <div className="p-2.5 rounded-lg bg-emerald-950/50 border border-emerald-800 text-emerald-300">
-                              {bootstrapMessage}
-                            </div>
-                          )}
-                          <button
-                            onClick={handleBootstrapOwner}
-                            disabled={bootstrapLoading}
-                            className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold transition-colors"
-                          >
-                            {bootstrapLoading ? 'جاري التحقق والمزامنة...' : 'تأكيد ومزامنة صلاحية المالك في قاعدة بيانات السحابة'}
-                          </button>
-                        </div>
-                      )}
                     </div>
                   )}
 
-                  {/* 3. Cloud & Network Diagnostics */}
-                  <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
-                    <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-                      <div>
-                        <h2 className="text-base font-bold text-white flex items-center gap-2">
-                          <Database className="w-5 h-5 text-teal-400" />
-                          <span>حالة الاتصال والمزامنة السحابية</span>
-                        </h2>
-                        <p className="text-xs text-slate-400 mt-0.5">
-                          مؤشرات اتصال الشبكة وقاعدة البيانات السحابية (تعمل تلقائياً في الخلفية)
-                        </p>
-                      </div>
-                      <button
-                        onClick={checkConnectivity}
-                        className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        <span>فحص الاتصال</span>
-                      </button>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                      <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-between">
-                        <span className="text-slate-400">حالة شبكة الإنترنت:</span>
-                        {isOnline ? (
-                          <span className="flex items-center gap-1.5 text-emerald-400 font-bold">
-                            <Wifi className="w-4 h-4" />
-                            <span>متصل بالشبكة</span>
-                          </span>
-                        ) : (
-                          <span className="flex items-center gap-1.5 text-rose-400 font-bold">
-                            <WifiOff className="w-4 h-4" />
-                            <span>وضع عدم الاتصال</span>
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-between">
-                        <span className="text-slate-400">قاعدة البيانات السحابية:</span>
-                        {firestoreConnected ? (
-                          <span className="text-teal-300 font-bold flex items-center gap-1.5">
-                            <span>متصلة</span>
-                            {firestoreLatency !== null && (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-teal-950 border border-teal-800 text-teal-400 font-mono">
-                                {firestoreLatency}ms
-                              </span>
-                            )}
-                          </span>
-                        ) : (
-                          <span className="text-amber-400 font-bold">قيد المزامنة المحلية</span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 4. Account Information, Verification & Logout */}
+                  {/* 3. Account Information, Verification & Logout */}
                   <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
                     <div className="flex items-center justify-between pb-3 border-b border-slate-800">
                       <h2 className="text-base font-bold text-white flex items-center gap-2">

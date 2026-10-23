@@ -24,7 +24,8 @@ import {
   reserveUniqueIdentifiers,
   releaseAcademicIdentifier,
   normalizeAcademicId,
-  getAcademicIdDocKey
+  getAcademicIdDocKey,
+  getLocalDeletedUids
 } from '../lib/firebase.ts';
 import { 
   StudentEnrollment, 
@@ -118,7 +119,10 @@ function getLocalEnrollments(): StudentEnrollment[] {
     const raw = localStorage.getItem(ENROLLMENTS_STORAGE_KEY);
     if (raw) {
       const deleted = getDeletedEnrollmentIds();
-      return (JSON.parse(raw) as StudentEnrollment[]).filter(e => !deleted.has(e.id));
+      const deletedUids = getLocalDeletedUids();
+      return (JSON.parse(raw) as StudentEnrollment[]).filter(
+        e => !deleted.has(e.id) && !deletedUids.has(e.uid)
+      );
     }
   } catch (e) {}
   return [];
@@ -127,7 +131,8 @@ function getLocalEnrollments(): StudentEnrollment[] {
 function saveLocalEnrollments(list: StudentEnrollment[]) {
   try {
     const deleted = getDeletedEnrollmentIds();
-    const clean = list.filter(e => !deleted.has(e.id));
+    const deletedUids = getLocalDeletedUids();
+    const clean = list.filter(e => !deleted.has(e.id) && !deletedUids.has(e.uid));
     localStorage.setItem(ENROLLMENTS_STORAGE_KEY, JSON.stringify(clean));
     localStorage.setItem(ENROLLMENTS_INIT_KEY, 'true');
   } catch (e) {}
@@ -368,8 +373,8 @@ export async function submitEnrollmentRequest(params: {
 
 export async function fetchEnrollmentsForAdmin(universityId?: string): Promise<StudentEnrollment[]> {
   const deleted = getDeletedEnrollmentIds();
+  const deletedUids = getLocalDeletedUids();
   const localList = getLocalEnrollments();
-  const isInitialized = localStorage.getItem(ENROLLMENTS_INIT_KEY) === 'true';
 
   try {
     let q = query(collection(db, 'studentEnrollments'));
@@ -379,26 +384,25 @@ export async function fetchEnrollmentsForAdmin(universityId?: string): Promise<S
     const snap = await getDocs(q);
     const firestoreList: StudentEnrollment[] = [];
     snap.forEach((d) => {
-      if (!deleted.has(d.id)) {
-        firestoreList.push({ id: d.id, ...d.data() } as StudentEnrollment);
+      const data = { id: d.id, ...d.data() } as StudentEnrollment;
+      if (!deleted.has(d.id) && !deletedUids.has(data.uid)) {
+        firestoreList.push(data);
       }
     });
 
     if (firestoreList.length > 0 || localList.length > 0) {
-      // Merge by ID using newest updatedAt timestamp so local approvals are never overwritten by stale cloud data
       const byIdMap = new Map<string, StudentEnrollment>();
       for (const item of localList) {
-        if (!deleted.has(item.id)) {
+        if (!deleted.has(item.id) && !deletedUids.has(item.uid)) {
           byIdMap.set(item.id, item);
         }
       }
       for (const remoteItem of firestoreList) {
-        if (deleted.has(remoteItem.id)) continue;
+        if (deleted.has(remoteItem.id) || deletedUids.has(remoteItem.uid)) continue;
         const existingLocal = byIdMap.get(remoteItem.id);
         if (existingLocal) {
           const winner = pickNewestEnrollment(existingLocal, remoteItem);
           byIdMap.set(remoteItem.id, winner);
-          // If local was newer than Firestore, push local update to Firestore
           if (winner === existingLocal && existingLocal.updatedAt !== remoteItem.updatedAt) {
             setDoc(doc(db, 'studentEnrollments', winner.id), cleanFirestoreData(winner), { merge: true }).catch(() => {});
           }
@@ -425,25 +429,14 @@ export async function fetchEnrollmentsForAdmin(universityId?: string): Promise<S
       saveLocalEnrollments(merged);
       return universityId ? merged.filter(e => e.universityId === universityId) : merged;
     }
+
+    saveLocalEnrollments([]);
+    return [];
   } catch (err) {
     console.warn('Firestore fetchEnrollmentsForAdmin error:', err);
   }
 
-  if (isInitialized || localList.length > 0) {
-    return universityId ? localList.filter(e => e.universityId === universityId) : localList;
-  }
-
-  // Materialize default demo enrollments if not initialized yet
-  saveLocalEnrollments(DEFAULT_DEMO_ENROLLMENTS);
-  for (const demo of DEFAULT_DEMO_ENROLLMENTS) {
-    try {
-      await setDoc(doc(db, 'studentEnrollments', demo.id), cleanFirestoreData(demo), { merge: true });
-    } catch (e) {}
-  }
-
-  return universityId
-    ? DEFAULT_DEMO_ENROLLMENTS.filter(e => e.universityId === universityId)
-    : DEFAULT_DEMO_ENROLLMENTS;
+  return universityId ? localList.filter(e => e.universityId === universityId) : localList;
 }
 
 export async function updateEnrollmentStatus(
@@ -647,8 +640,8 @@ export const rejectEnrollment = (id: string, reviewer: string, reason?: string) 
 // ---------------------------------------------------------------------------
 
 export async function fetchAcademicChangeRequestsForAdmin(universityId?: string): Promise<AcademicChangeRequest[]> {
-  const localReqs = getLocalChangeRequests();
-  const isInitialized = localStorage.getItem(CHANGE_REQUESTS_INIT_KEY) === 'true';
+  const deletedUids = getLocalDeletedUids();
+  const localReqs = getLocalChangeRequests().filter(r => !deletedUids.has(r.uid));
 
   try {
     let q = query(collection(db, 'academicChangeRequests'));
@@ -657,41 +650,35 @@ export async function fetchAcademicChangeRequestsForAdmin(universityId?: string)
     }
     const snap = await getDocs(q);
     const list: AcademicChangeRequest[] = [];
-    snap.forEach(d => list.push({ id: d.id, ...d.data() } as AcademicChangeRequest));
+    snap.forEach(d => {
+      const data = { id: d.id, ...d.data() } as AcademicChangeRequest;
+      if (!deletedUids.has(data.uid)) {
+        list.push(data);
+      }
+    });
     if (list.length > 0 || localReqs.length > 0) {
       const mergedMap: Record<string, AcademicChangeRequest> = {};
       localReqs.forEach(r => { mergedMap[r.id] = r; });
       list.forEach(r => {
         const local = mergedMap[r.id];
         if (local && local.status !== 'pending' && r.status === 'pending') {
-          // Keep reviewed local state and sync to Firestore
           setDoc(doc(db, 'academicChangeRequests', local.id), cleanFirestoreData(local), { merge: true }).catch(() => {});
         } else {
           mergedMap[r.id] = r;
         }
       });
-      const merged = Object.values(mergedMap);
+      const merged = Object.values(mergedMap).filter(r => !deletedUids.has(r.uid));
       saveLocalChangeRequests(merged);
       return universityId ? merged.filter(r => r.universityId === universityId) : merged;
     }
+
+    saveLocalChangeRequests([]);
+    return [];
   } catch (err) {
     console.warn('Firestore fetchAcademicChangeRequestsForAdmin fallback:', err);
   }
 
-  if (isInitialized || localReqs.length > 0) {
-    return universityId ? localReqs.filter(r => r.universityId === universityId) : localReqs;
-  }
-
-  saveLocalChangeRequests(DEFAULT_DEMO_CHANGE_REQUESTS);
-  for (const demo of DEFAULT_DEMO_CHANGE_REQUESTS) {
-    try {
-      await setDoc(doc(db, 'academicChangeRequests', demo.id), cleanFirestoreData(demo), { merge: true });
-    } catch (e) {}
-  }
-
-  return universityId
-    ? DEFAULT_DEMO_CHANGE_REQUESTS.filter(r => r.universityId === universityId)
-    : DEFAULT_DEMO_CHANGE_REQUESTS;
+  return universityId ? localReqs.filter(r => r.universityId === universityId) : localReqs;
 }
 
 export async function submitAcademicChangeRequest(params: {
@@ -864,18 +851,19 @@ export function subscribeToAdminEnrollments(
     q,
     (snap) => {
       const deleted = getDeletedEnrollmentIds();
+      const deletedUids = getLocalDeletedUids();
       const localList = getLocalEnrollments();
       const byIdMap = new Map<string, StudentEnrollment>();
 
       for (const item of localList) {
-        if (!deleted.has(item.id)) {
+        if (!deleted.has(item.id) && !deletedUids.has(item.uid)) {
           byIdMap.set(item.id, item);
         }
       }
 
       snap.forEach((d) => {
-        if (!deleted.has(d.id)) {
-          const remoteItem = { id: d.id, ...d.data() } as StudentEnrollment;
+        const remoteItem = { id: d.id, ...d.data() } as StudentEnrollment;
+        if (!deleted.has(d.id) && !deletedUids.has(remoteItem.uid)) {
           const existingLocal = byIdMap.get(remoteItem.id);
           if (existingLocal) {
             byIdMap.set(remoteItem.id, pickNewestEnrollment(existingLocal, remoteItem));
@@ -895,10 +883,8 @@ export function subscribeToAdminEnrollments(
       const merged = Array.from(byUidMap.values()).sort(
         (a, b) => new Date(b.updatedAt || b.enrolledAt || 0).getTime() - new Date(a.updatedAt || a.enrolledAt || 0).getTime()
       );
-      if (merged.length > 0) {
-        saveLocalEnrollments(merged);
-        onUpdate(universityId ? merged.filter(e => e.universityId === universityId) : merged);
-      }
+      saveLocalEnrollments(merged);
+      onUpdate(universityId ? merged.filter(e => e.universityId === universityId) : merged);
     },
     () => {}
   );
