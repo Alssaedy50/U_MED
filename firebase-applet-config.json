@@ -1,12 +1,12 @@
 {
-  "projectId": "active-branch-w83d0",
-  "appId": "1:1072983768253:web:834d852dcda998d9f94bd4",
-  "apiKey": "AIzaSyBuHctDTJtSvuBR1mFggEm9G-eONb8yPtQ",
-  "authDomain": "active-branch-w83d0.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-07cbf69f-5705-493e-ab2e-69c98bf7985d",
-  "storageBucket": "active-branch-w83d0.firebasestorage.app",
-  "messagingSenderId": "1072983768253",
-  "measurementId": "",
-  "oAuthClientId": "1072983768253-20ce000qvqf56k376aqieia4oluc0opm.apps.googleusercontent.com",
+  "projectId": "umed-yemen",
+  "appId": "1:471786641119:web:07dd516810d7d147ad7b6a",
+  "apiKey": "AIzaSyAAjo3PyRS5SzNL-PCE78T_wJkVaAANcSE",
+  "authDomain": "umed-yemen.firebaseapp.com",
+  "firestoreDatabaseId": "(default)",
+  "storageBucket": "umed-yemen.firebasestorage.app",
+  "messagingSenderId": "471786641119",
+  "measurementId": "G-L0R22NXQKJ",
+  "oAuthClientId": "",
   "recaptchaSiteKey": ""
 }

@@ -65,13 +65,17 @@ const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 // 2. Export Auth & Firestore instances (forced long-polling prevents 10s WebChannel timeout in iFrames)
 export const auth = getAuth(app);
 
+const dbId = (firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)') 
+  ? firebaseConfig.firestoreDatabaseId 
+  : undefined;
+
 let firestoreInstance;
 try {
-  firestoreInstance = initializeFirestore(app, {
-    experimentalForceLongPolling: true
-  }, firebaseConfig.firestoreDatabaseId);
+  firestoreInstance = dbId
+    ? initializeFirestore(app, { experimentalForceLongPolling: true }, dbId)
+    : initializeFirestore(app, { experimentalForceLongPolling: true });
 } catch {
-  firestoreInstance = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+  firestoreInstance = dbId ? getFirestore(app, dbId) : getFirestore(app);
 }
 export const db = firestoreInstance;
 
