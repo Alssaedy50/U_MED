@@ -32,7 +32,8 @@ import {
   University, 
   StudyLevel, 
   StudyPeriod, 
-  CourseOffering 
+  CourseOffering,
+  UserRole
 } from '../../types/umed.ts';
 import { 
   fetchEducationalResources, 
@@ -51,12 +52,16 @@ import ResourcePreviewModal from '../library/ResourcePreviewModal.tsx';
 
 interface EducationalContentManagerProps {
   adminUid: string;
+  userRole?: UserRole;
   assignedUniversityId?: string;
+  assignedStudyLevelId?: string;
 }
 
 export default function EducationalContentManager({
   adminUid,
-  assignedUniversityId = 'univ-dar-al-salam'
+  userRole = 'platform_owner',
+  assignedUniversityId = 'univ-dar-al-salam',
+  assignedStudyLevelId
 }: EducationalContentManagerProps) {
   const [resources, setResources] = useState<EducationalResource[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -110,16 +115,37 @@ export default function EducationalContentManager({
   const recordedChunksRef = useRef<BlobPart[]>([]);
   const recordingTimerRef = useRef<number | null>(null);
 
+  const isBatchScoped = userRole === 'batch_rep' || userRole === 'department_head';
+  const isUnivScoped = userRole !== 'platform_owner';
+
   const loadAcademicHierarchy = async () => {
     try {
-      const [univs, lvls] = await Promise.all([
+      const [allUnivs, allLvls] = await Promise.all([
         fetchUniversities(),
         fetchStudyLevels()
       ]);
-      setUniversities(univs);
-      setStudyLevels(lvls);
 
-      const defaultLvlId = lvls.find(l => l.id === form.studyLevelId)?.id || lvls[0]?.id || 'lvl-4';
+      const scopedUnivs = isUnivScoped
+        ? allUnivs.filter(u => u.id === assignedUniversityId)
+        : allUnivs;
+      const finalUnivs = scopedUnivs.length > 0 ? scopedUnivs : allUnivs;
+      setUniversities(finalUnivs);
+
+      const univIdToUse = isUnivScoped
+        ? assignedUniversityId
+        : form.universityId || finalUnivs[0]?.id || assignedUniversityId;
+
+      const univLvls = allLvls.filter(l => !l.universityId || l.universityId === univIdToUse);
+      const scopedLvls = isBatchScoped && assignedStudyLevelId
+        ? univLvls.filter(l => l.id === assignedStudyLevelId)
+        : univLvls;
+      const finalLvls = scopedLvls.length > 0 ? scopedLvls : allLvls;
+      setStudyLevels(finalLvls);
+
+      const defaultLvlId = isBatchScoped && assignedStudyLevelId
+        ? assignedStudyLevelId
+        : finalLvls.find(l => l.id === form.studyLevelId)?.id || finalLvls[0]?.id || 'lvl-4';
+
       const periods = await fetchStudyPeriods(defaultLvlId);
       setStudyPeriods(periods);
 
@@ -129,7 +155,7 @@ export default function EducationalContentManager({
 
       setForm(prev => ({
         ...prev,
-        universityId: prev.universityId || univs[0]?.id || assignedUniversityId,
+        universityId: univIdToUse,
         studyLevelId: defaultLvlId,
         studyPeriodId: defaultPeriodId,
         courseOfferingId: crs[0]?.id || ''
@@ -143,7 +169,8 @@ export default function EducationalContentManager({
     setLoading(true);
     try {
       const list = await fetchEducationalResources({
-        universityId: assignedUniversityId
+        universityId: isUnivScoped ? assignedUniversityId : undefined,
+        studyLevelId: isBatchScoped && assignedStudyLevelId ? assignedStudyLevelId : undefined
       });
       setResources(list);
     } catch (err: any) {
@@ -156,7 +183,7 @@ export default function EducationalContentManager({
   useEffect(() => {
     loadAcademicHierarchy();
     loadResources();
-  }, [assignedUniversityId]);
+  }, [assignedUniversityId, assignedStudyLevelId, userRole]);
 
   // Cascade Periods when Add Form StudyLevel changes
   useEffect(() => {
@@ -222,6 +249,8 @@ export default function EducationalContentManager({
     const lowerName = file.name.toLowerCase();
     if (file.type.startsWith('image/') || /\.(jpg|jpeg|png|webp|gif|svg)$/.test(lowerName)) {
       detectedType = 'image';
+    } else if (file.type.startsWith('video/') || /\.(mp4|webm|mov|mkv)$/.test(lowerName)) {
+      detectedType = 'video';
     } else if (file.type.startsWith('audio/') || /\.(mp3|wav|m4a|ogg|aac|webm)$/.test(lowerName)) {
       detectedType = 'audio';
     } else if (file.type === 'application/pdf' || lowerName.endsWith('.pdf')) {
@@ -549,6 +578,7 @@ export default function EducationalContentManager({
             <option value="all">جميع الأنواع</option>
             <option value="pdf">ملفات PDF</option>
             <option value="image">شرائح وصور طبية</option>
+            <option value="video">ملفات فيديو مباشرة</option>
             <option value="audio">تسجيلات ومحاضرات صوتية</option>
             <option value="link">روابط خارجية</option>
             <option value="video_link">روابط فيديو</option>
@@ -764,7 +794,7 @@ export default function EducationalContentManager({
                     }`}
                   >
                     <Upload className="w-3.5 h-3.5 shrink-0" />
-                    <span>رفع ملف (PDF / صورة / صوت)</span>
+                    <span>رفع ملف (PDF / صورة / فيديو / صوت)</span>
                   </button>
 
                   <button
@@ -790,7 +820,7 @@ export default function EducationalContentManager({
                     }`}
                   >
                     <ExternalLink className="w-3.5 h-3.5 shrink-0" />
-                    <span>رابط خارجي (Drive)</span>
+                    <span>رابط خارجي (Drive / فيديو)</span>
                   </button>
                 </div>
 
@@ -807,7 +837,7 @@ export default function EducationalContentManager({
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept=".pdf,image/*,audio/*,.mp3,.wav,.m4a,.ogg"
+                      accept=".pdf,image/*,video/*,audio/*,.mp3,.wav,.m4a,.ogg,.mp4,.webm"
                       onChange={(e) => handleFileSelected(e, false)}
                       className="hidden"
                       id="umed-direct-file-upload"
@@ -818,7 +848,7 @@ export default function EducationalContentManager({
                     >
                       <Upload className="w-6 h-6 text-teal-400" />
                       <span className="font-bold text-white text-xs">
-                        اضغط هنا لاختيار ملف من جهازك (PDF، صورة طبية، أو تسجيل صوتي)
+                        اضغط هنا لاختيار ملف من جهازك (PDF، صورة، فيديو، أو تسجيل صوتي)
                       </span>
                       <span className="text-[10px] text-slate-400">
                         يتم حفظ الملف مباشرة في قاعدة بيانات السحابة (Cloud Firestore) ومزامنته لجميع الطلاب

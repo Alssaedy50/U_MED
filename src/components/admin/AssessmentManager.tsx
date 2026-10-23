@@ -31,6 +31,8 @@ import {
   ResultReleasePolicy, 
   AssessmentResult,
   StudyLevel,
+  University,
+  UserRole,
   DAR_AL_SALAM_SEED
 } from '../../types/umed.ts';
 import { 
@@ -50,13 +52,25 @@ import {
   getAssessmentResultsForAdmin, 
   releaseAssessmentResults 
 } from '../../services/assessmentService.ts';
-import { fetchStudyLevels, fetchPrograms, fetchColleges } from '../../services/academicService.ts';
+import { fetchStudyLevels, fetchPrograms, fetchColleges, fetchUniversities } from '../../services/academicService.ts';
+import { getRoleLabelArabic } from '../../services/batchGovernanceService.ts';
 
 interface AssessmentManagerProps {
   universityId: string;
+  userRole?: UserRole;
+  assignedStudyLevelId?: string;
 }
 
-export default function AssessmentManager({ universityId }: AssessmentManagerProps) {
+export default function AssessmentManager({
+  universityId: initialUniversityId,
+  userRole = 'university_admin',
+  assignedStudyLevelId
+}: AssessmentManagerProps) {
+  const isOwner = userRole === 'platform_owner';
+  const isBatchScoped = (userRole === 'batch_rep' || userRole === 'department_head') && Boolean(assignedStudyLevelId);
+
+  const [universities, setUniversities] = useState<University[]>([DAR_AL_SALAM_SEED.university]);
+  const [universityId, setUniversityId] = useState<string>(initialUniversityId || 'univ-dar-al-salam');
   const [activeTab, setActiveTab] = useState<'banks' | 'assessments' | 'results'>('banks');
 
   // Dynamic Study Levels
@@ -101,7 +115,7 @@ export default function AssessmentManager({ universityId }: AssessmentManagerPro
   const [assessmentType, setAssessmentType] = useState<AssessmentType>('exam');
   const [titleArabic, setTitleArabic] = useState<string>('');
   const [descArabic, setDescArabic] = useState<string>('');
-  const [studyLevelId, setStudyLevelId] = useState<string>('lvl-4');
+  const [studyLevelId, setStudyLevelId] = useState<string>(assignedStudyLevelId || 'lvl-4');
   const [selectedBankForAssessment, setSelectedBankForAssessment] = useState<string>('');
   const [durationMinutes, setDurationMinutes] = useState<number>(45);
   const [maxAttempts, setMaxAttempts] = useState<number>(1);
@@ -122,9 +136,18 @@ export default function AssessmentManager({ universityId }: AssessmentManagerPro
   const [loading, setLoading] = useState<boolean>(false);
   const [statusMsg, setStatusMsg] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
 
+  useEffect(() => {
+    if (!isOwner && initialUniversityId) {
+      setUniversityId(initialUniversityId);
+    }
+  }, [initialUniversityId, isOwner]);
+
   const loadData = async () => {
     setLoading(true);
     try {
+      const univList = await fetchUniversities('YE');
+      if (univList.length > 0) setUniversities(univList);
+
       // Load dynamic study levels for this university
       let programId = 'prog-mbbs';
       try {
@@ -140,16 +163,30 @@ export default function AssessmentManager({ universityId }: AssessmentManagerPro
         getAssessments(universityId),
         fetchStudyLevels(programId)
       ]);
-      setBanks(bankList);
-      setAssessments(asmntList);
-      if (lvlList && lvlList.length > 0) {
-        setStudyLevels(lvlList);
+      const scopedLevels = isBatchScoped && assignedStudyLevelId
+        ? lvlList.filter(l => l.id === assignedStudyLevelId)
+        : lvlList;
+      if (scopedLevels && scopedLevels.length > 0) {
+        setStudyLevels(scopedLevels);
+        if (isBatchScoped && assignedStudyLevelId) {
+          setStudyLevelId(assignedStudyLevelId);
+        }
       }
 
-      if (bankList.length > 0) {
+      const scopedAssessments = isBatchScoped && assignedStudyLevelId
+        ? asmntList.filter(a => a.studyLevelId === assignedStudyLevelId)
+        : asmntList;
+      const scopedBanks = isBatchScoped && assignedStudyLevelId
+        ? bankList.filter(b => !b.studyLevelId || b.studyLevelId === assignedStudyLevelId)
+        : bankList;
+
+      setBanks(scopedBanks);
+      setAssessments(scopedAssessments);
+
+      if (scopedBanks.length > 0) {
         const activeBank = selectedBank
-          ? bankList.find(b => b.id === selectedBank.id) || bankList[0]
-          : bankList[0];
+          ? scopedBanks.find(b => b.id === selectedBank.id) || scopedBanks[0]
+          : scopedBanks[0];
         setSelectedBank(activeBank);
         if (!selectedBankForAssessment) setSelectedBankForAssessment(activeBank.id);
         const qList = await getBankQuestions(activeBank.id);
@@ -167,7 +204,7 @@ export default function AssessmentManager({ universityId }: AssessmentManagerPro
 
   useEffect(() => {
     loadData();
-  }, [universityId]);
+  }, [universityId, assignedStudyLevelId]);
 
   const handleSelectBank = async (bank: QuestionBank) => {
     setSelectedBank(bank);
@@ -192,7 +229,8 @@ export default function AssessmentManager({ universityId }: AssessmentManagerPro
         titleArabic: newBankTitle.trim(),
         descriptionArabic: newBankDesc.trim(),
         universityId,
-        createdBy: 'ADMIN'
+        studyLevelId: isBatchScoped ? assignedStudyLevelId : undefined,
+        createdBy: userRole
       });
       setBanks(prev => [...prev, created]);
       setSelectedBank(created);
@@ -523,10 +561,15 @@ export default function AssessmentManager({ universityId }: AssessmentManagerPro
       {/* Top Banner */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-wrap items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex flex-wrap items-center gap-2 mb-1">
             <span className="text-xs px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-semibold">
-              إدارة بنوك الأسئلة والاختبارات
+              إدارة بنوك الأسئلة والاختبارات ({getRoleLabelArabic(userRole)})
             </span>
+            {isBatchScoped && assignedStudyLevelId && (
+              <span className="text-xs px-2.5 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30 font-semibold">
+                مخصص للدفعة: {getLevelLabel(assignedStudyLevelId)}
+              </span>
+            )}
           </div>
           <h2 className="text-xl font-bold text-white">منصة إدارة الامتحانات والمسابقات الطبية</h2>
           <p className="text-xs text-slate-400 mt-1">
@@ -534,6 +577,18 @@ export default function AssessmentManager({ universityId }: AssessmentManagerPro
           </p>
         </div>
 
+        <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
+          {isOwner && (
+            <select
+              value={universityId}
+              onChange={(e) => setUniversityId(e.target.value)}
+              className="px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-teal-300 font-bold"
+            >
+              {universities.map(u => (
+                <option key={u.id} value={u.id}>{u.nameArabic}</option>
+              ))}
+            </select>
+          )}
         <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-950 rounded-xl border border-slate-800 w-full lg:w-auto">
           <button
             onClick={() => setActiveTab('banks')}
@@ -562,6 +617,7 @@ export default function AssessmentManager({ universityId }: AssessmentManagerPro
             <FileSpreadsheet className="w-4 h-4 shrink-0" />
             <span>النتائج والتصدير</span>
           </button>
+        </div>
         </div>
       </div>
 

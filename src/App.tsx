@@ -40,9 +40,10 @@ import {
   Send
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext.tsx';
-import { UserRole, UserRoleDoc, AuditLog, StudentEnrollment } from './types/umed.ts';
-import { fetchMergedAuditLogs, fetchAllUserRoles, assignUserRole, formatUserIdentifier, checkIdentifierUniqueness } from './lib/firebase.ts';
+import { UserRole, AuditLog, StudentEnrollment } from './types/umed.ts';
+import { fetchMergedAuditLogs, formatUserIdentifier, checkIdentifierUniqueness } from './lib/firebase.ts';
 import { fetchStudentEnrollment, subscribeToStudentEnrollment } from './services/enrollmentService.ts';
+import { getRoleLabelArabic } from './services/batchGovernanceService.ts';
 import StudentDashboard from './components/student/StudentDashboard.tsx';
 import StudentProfile from './components/student/StudentProfile.tsx';
 
@@ -52,6 +53,7 @@ const EnrollmentApprovalManager = React.lazy(() => import('./components/admin/En
 const EducationalContentManager = React.lazy(() => import('./components/admin/EducationalContentManager.tsx'));
 const AssessmentManager = React.lazy(() => import('./components/admin/AssessmentManager.tsx'));
 const BackupRestoreConsole = React.lazy(() => import('./components/admin/BackupRestoreConsole.tsx'));
+const HierarchyGovernanceConsole = React.lazy(() => import('./components/admin/HierarchyGovernanceConsole.tsx'));
 
 type ActiveTabType =
   | 'student_dashboard'
@@ -136,7 +138,6 @@ export default function App() {
   const [bootstrapLoading, setBootstrapLoading] = useState<boolean>(false);
   const [bootstrapMessage, setBootstrapMessage] = useState<string | null>(null);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
-  const [assignedRolesList, setAssignedRolesList] = useState<UserRoleDoc[]>([]);
   const [studentEnrollment, setStudentEnrollment] = useState<StudentEnrollment | null>(null);
   const [activeTab, setActiveTabState] = useState<ActiveTabType>(() => {
     try {
@@ -154,28 +155,20 @@ export default function App() {
     } catch (e) {}
   };
 
-  // True when an authorized admin is in Admin or Owner mode (NOT previewing as a student)
+  // True when an authorized leader (Platform Owner, University Owner, Batch Rep, or Dept Head) is in Leadership mode
   const isAdminMode = Boolean(
-    isAuthorizedAdmin && (activeRole === 'platform_owner' || activeRole === 'university_admin')
+    isAuthorizedAdmin && activeRole !== 'student'
   );
   const isOwnerMode = Boolean(isAuthorizedAdmin && activeRole === 'platform_owner');
-
-  // Role assignment form state (Platform Owner only)
-  const [targetUidInput, setTargetUidInput] = useState<string>('');
-  const [targetEmailInput, setTargetEmailInput] = useState<string>('');
-  const [targetRoleInput, setTargetRoleInput] = useState<UserRole>('university_admin');
-  const [targetUnivInput, setTargetUnivInput] = useState<string>('univ-dar-al-salam');
-  const [roleAssignMsg, setRoleAssignMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const isUniversityAdminOrOwner = Boolean(
+    isAuthorizedAdmin && (activeRole === 'platform_owner' || activeRole === 'university_admin')
+  );
 
   const refreshAdminData = async () => {
     if (!isAuthorizedAdmin) return;
     try {
-      const [logs, roles] = await Promise.all([
-        fetchMergedAuditLogs(),
-        fetchAllUserRoles()
-      ]);
+      const logs = await fetchMergedAuditLogs();
       setAuditLogs(logs);
-      setAssignedRolesList(roles);
     } catch (e) {
       console.warn('Failed to refresh admin data:', e);
     }
@@ -207,7 +200,7 @@ export default function App() {
   // Strict Workspace Isolation:
   // 1) When in Student Mode (!isAdminMode), block access to all admin tabs
   // 2) Gate approved-only student tabs until enrollment is approved
-  // 3) When in Admin Mode (isAdminMode), default to 'enrollment_queue' if currently on a student tab
+  // 3) When in Leadership Mode (isAdminMode), default to 'roles' or 'enrollment_queue' if currently on a student tab
   useEffect(() => {
     const studentTabs: ActiveTabType[] = [
       'student_dashboard',
@@ -226,11 +219,13 @@ export default function App() {
         setActiveTab('student_dashboard');
       }
     } else if (studentTabs.includes(activeTab)) {
-      setActiveTab('enrollment_queue');
-    } else if (!isOwnerMode && (activeTab === 'roles' || activeTab === 'backup_restore')) {
-      setActiveTab('enrollment_queue');
+      setActiveTab(isUniversityAdminOrOwner ? 'enrollment_queue' : 'roles');
+    } else if (!isOwnerMode && activeTab === 'backup_restore') {
+      setActiveTab(isUniversityAdminOrOwner ? 'enrollment_queue' : 'roles');
+    } else if (!isUniversityAdminOrOwner && activeTab === 'enrollment_queue') {
+      setActiveTab('roles');
     }
-  }, [isAdminMode, isOwnerMode, activeTab, studentEnrollment?.status]);
+  }, [isAdminMode, isOwnerMode, isUniversityAdminOrOwner, activeTab, studentEnrollment?.status]);
 
   // Live debounced uniqueness check during registration for Email, Phone, and Academic ID
   useEffect(() => {
@@ -426,35 +421,13 @@ export default function App() {
     }
   };
 
-  const handleAssignRoleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!user || !targetUidInput.trim() || !targetEmailInput.trim()) return;
-    setRoleAssignMsg(null);
-    try {
-      await assignUserRole({
-        callerUid: user.uid,
-        callerEmail: user.email || '',
-        targetUid: targetUidInput,
-        email: targetEmailInput,
-        role: targetRoleInput,
-        assignedUniversityId: targetUnivInput
-      });
-      setRoleAssignMsg({ type: 'success', text: 'تم تعيين الصلاحية وحفظها في السحابة وسجل التدقيق بنجاح.' });
-      setTargetUidInput('');
-      setTargetEmailInput('');
-      await refreshAdminData();
-    } catch (err: any) {
-      setRoleAssignMsg({ type: 'error', text: err.message || 'فشل تعيين الدور' });
-    }
-  };
-
   // Active Page Title Lookup for Contextual Top Header
   const getPageTitleInfo = (): { title: string; subtitle: string } => {
     switch (activeTab) {
       case 'student_dashboard':
-        return { title: 'المقررات والبلوكات الدراسية', subtitle: 'استعراض البلوكات والمقررات المخصصة لمستواك الأكاديمي' };
+        return { title: 'المقررات والبلوكات الدراسية', subtitle: 'استعراض البلوكات والمقررات والإشعارات المخصصة لجامعتك ودفعتك' };
       case 'student_library':
-        return { title: 'المكتبة الطبية والشرائح', subtitle: 'المحاضرات، المراجع، والشرائح السريرية منخفضة الاستهلاك' };
+        return { title: 'المكتبة الطبية والشرائح والفيديو', subtitle: 'المحاضرات، الفيديوهات، الشرائح، والمراجع الطبية لدفعتك' };
       case 'student_assessments':
         return { title: 'الاختبارات والمسابقات السريرية', subtitle: 'الاختبارات الدورية والمسابقات التفاعلية مع التصحيح الفوري' };
       case 'student_profile':
@@ -462,19 +435,22 @@ export default function App() {
       case 'enrollment_queue':
         return { title: 'اعتماد طلبات القيد الأكاديمي', subtitle: 'مراجعة واعتماد قيد الطلاب الجدد وطلبات تعديل البيانات' };
       case 'academic':
-        return { title: 'الهيكل الأكاديمي والجامعات', subtitle: 'إدارة الكليات، المستويات، البلوكات، والمقررات الدراسية' };
+        return { title: 'الهيكل الأكاديمي، البلوكات، والمواد', subtitle: 'إدارة الكليات، المستويات، البلوكات، والمقررات الدراسية' };
       case 'content_manager':
-        return { title: 'إدارة المحتوى والمكتبة الرقمية', subtitle: 'رفع وتنظيم المحاضرات والمراجع الطبية حسب البلوك والمقرر' };
+        return { title: 'إدارة الداتا والمكتبة الرقمية', subtitle: 'رفع ومشاركة ملفات PDF، الفيديوهات، الصور، التسجيلات، والروابط للدفعة' };
       case 'assessments_manager':
-        return { title: 'إدارة الاختبارات والمسابقات', subtitle: 'إنشاء بنوك الأسئلة، جدولة الاختبارات، وإعلان النتائج' };
+        return { title: 'إدارة الاختبارات والمسابقات', subtitle: 'إنشاء وتعديل وحذف بنوك الأسئلة، الامتحانات، والمسابقات' };
       case 'backup_restore':
         return { title: 'النسخ الاحتياطي والاستعادة', subtitle: 'تصدير واستيراد قواعد البيانات الأكاديمية المعتمدة' };
       case 'roles':
-        return { title: 'إدارة المشرفين والصلاحيات', subtitle: 'تعيين مشرفي الجامعات وضبط صلاحيات الوصول (RBAC)' };
+        return {
+          title: 'الترقيات، دكاترة المواد، وإشعارات الدفعة',
+          subtitle: 'ترقية مالكي الجامعات ومناديب الدفعات ورؤساء الأقسام، إضافة الدكاترة، وبث الإشعارات والداتا'
+        };
       case 'audit':
         return { title: 'سجل التدقيق السحابي', subtitle: 'توثيق العمليات الإدارية والأكاديمية غير القابل للتعديل' };
       case 'auth':
-        return { title: 'الإعدادات والحساب', subtitle: 'إعدادات المظهر (الوضع الليلي/النهاري)، حالة السحابة، وبيانات الجلسة' };
+        return { title: 'الإعدادات والحساب', subtitle: 'إعدادات المظهر (الوضع الليلي/النهاري)، تبديل البوابة، وحالة السحابة' };
       default:
         return { title: 'منصة UMED الطبية', subtitle: 'التعليم الطبي الموحد لكليات الطب البشري' };
     }
@@ -988,10 +964,14 @@ export default function App() {
                 <div>
                   <div className="font-bold text-sm text-white leading-tight">منصة UMED الطبية</div>
                   <div className="text-[11px] text-teal-400 font-semibold mt-0.5">
-                    {isOwnerMode
+                    {activeRole === 'platform_owner'
                       ? 'بوابة مالك المنصة'
-                      : isAdminMode
-                      ? 'بوابة مشرف الجامعة'
+                      : activeRole === 'university_admin'
+                      ? 'بوابة مالك الجامعة'
+                      : activeRole === 'batch_rep'
+                      ? 'بوابة مندوب الدفعة / المستوى'
+                      : activeRole === 'department_head'
+                      ? 'بوابة رئيس القسم / المادة'
                       : 'بوابة طالب الطب البشري'}
                   </div>
                 </div>
@@ -1069,24 +1049,38 @@ export default function App() {
                 </div>
               )}
 
-              {/* ADMIN & OWNER NAVIGATION ITEMS */}
+              {/* LEADERSHIP NAVIGATION ITEMS (Platform Owner, University Owner, Batch Rep, Dept Head) */}
               {isAdminMode && (
                 <div className="space-y-1">
                   <div className="px-3 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                    إدارة الكلية والمنصة
+                    إدارة الجامعة والدفعة ({getRoleLabelArabic(activeRole)})
                   </div>
 
                   <button
-                    onClick={() => setActiveTab('enrollment_queue')}
+                    onClick={() => setActiveTab('roles')}
                     className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
-                      activeTab === 'enrollment_queue'
+                      activeTab === 'roles'
                         ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
                         : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
                     }`}
                   >
-                    <Users className="w-4 h-4 shrink-0" />
-                    <span>اعتماد طلبات القيد</span>
+                    <ShieldCheck className="w-4 h-4 shrink-0" />
+                    <span>الترقيات، الدكاترة، والإشعارات</span>
                   </button>
+
+                  {isUniversityAdminOrOwner && (
+                    <button
+                      onClick={() => setActiveTab('enrollment_queue')}
+                      className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                        activeTab === 'enrollment_queue'
+                          ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
+                          : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                      }`}
+                    >
+                      <Users className="w-4 h-4 shrink-0" />
+                      <span>اعتماد طلبات القيد</span>
+                    </button>
+                  )}
 
                   <button
                     onClick={() => setActiveTab('academic')}
@@ -1097,7 +1091,7 @@ export default function App() {
                     }`}
                   >
                     <Building2 className="w-4 h-4 shrink-0" />
-                    <span>الهيكل الأكاديمي والجامعات</span>
+                    <span>البلوكات، المواد، والهيكل</span>
                   </button>
 
                   <button
@@ -1109,7 +1103,7 @@ export default function App() {
                     }`}
                   >
                     <BookOpen className="w-4 h-4 shrink-0" />
-                    <span>إدارة المحتوى والمكتبة</span>
+                    <span>إدارة الداتا والمكتبة</span>
                   </button>
 
                   <button
@@ -1125,35 +1119,17 @@ export default function App() {
                   </button>
 
                   {isOwnerMode && (
-                    <>
-                      <div className="pt-3 px-3 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                        صلاحيات مالك المنصة
-                      </div>
-
-                      <button
-                        onClick={() => setActiveTab('roles')}
-                        className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
-                          activeTab === 'roles'
-                            ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
-                            : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
-                        }`}
-                      >
-                        <ShieldCheck className="w-4 h-4 shrink-0" />
-                        <span>إدارة المشرفين والصلاحيات</span>
-                      </button>
-
-                      <button
-                        onClick={() => setActiveTab('backup_restore')}
-                        className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
-                          activeTab === 'backup_restore'
-                            ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
-                            : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
-                        }`}
-                      >
-                        <HardDrive className="w-4 h-4 shrink-0" />
-                        <span>النسخ الاحتياطي والاستعادة</span>
-                      </button>
-                    </>
+                    <button
+                      onClick={() => setActiveTab('backup_restore')}
+                      className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                        activeTab === 'backup_restore'
+                          ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
+                          : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                      }`}
+                    >
+                      <HardDrive className="w-4 h-4 shrink-0" />
+                      <span>النسخ الاحتياطي والاستعادة</span>
+                    </button>
                   )}
 
                   <button
@@ -1209,7 +1185,7 @@ export default function App() {
                       : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
                   }`}
                 >
-                  {isOwnerMode ? 'المالك' : isAdminMode ? 'مشرف' : 'طالب'}
+                  {getRoleLabelArabic(activeRole)}
                 </span>
               </div>
             </div>
@@ -1288,7 +1264,7 @@ export default function App() {
                 />
               )}
 
-              {/* ADMIN & OWNER WORKSPACE VIEWS */}
+              {/* ADMIN, UNIVERSITY OWNER, BATCH REP & DEPT HEAD WORKSPACE VIEWS */}
               <React.Suspense
                 fallback={
                   <div className="flex flex-col items-center justify-center p-12 text-slate-400 space-y-3">
@@ -1297,27 +1273,47 @@ export default function App() {
                   </div>
                 }
               >
+                {isAdminMode && activeTab === 'roles' && (
+                  <HierarchyGovernanceConsole
+                    callerUid={user.uid}
+                    callerEmail={user.email || ''}
+                    callerNameArabic={userProfile?.displayNameArabic || user.displayName || 'مسؤول المنصة'}
+                    callerRole={activeRole}
+                    callerUniversityId={roleDoc?.assignedUniversityId}
+                    callerStudyLevelId={roleDoc?.assignedStudyLevelId}
+                    onRolesUpdated={refreshAdminData}
+                  />
+                )}
+
                 {isAdminMode && activeTab === 'academic' && (
-                  <AcademicStructureManager />
+                  <AcademicStructureManager
+                    userRole={activeRole}
+                    assignedUniversityId={roleDoc?.assignedUniversityId}
+                    assignedStudyLevelId={roleDoc?.assignedStudyLevelId}
+                  />
                 )}
 
                 {isAdminMode && activeTab === 'content_manager' && (
                   <EducationalContentManager
                     adminUid={user.uid}
+                    userRole={activeRole}
                     assignedUniversityId={roleDoc?.assignedUniversityId || 'univ-dar-al-salam'}
+                    assignedStudyLevelId={roleDoc?.assignedStudyLevelId}
                   />
                 )}
 
                 {isAdminMode && activeTab === 'assessments_manager' && (
                   <AssessmentManager
                     universityId={roleDoc?.assignedUniversityId || 'univ-dar-al-salam'}
+                    userRole={activeRole}
+                    assignedStudyLevelId={roleDoc?.assignedStudyLevelId}
                   />
                 )}
 
-                {isAdminMode && activeTab === 'enrollment_queue' && (
+                {isUniversityAdminOrOwner && activeTab === 'enrollment_queue' && (
                   <EnrollmentApprovalManager
                     adminUid={user.uid}
-                    assignedUniversityId={roleDoc?.assignedUniversityId}
+                    assignedUniversityId={isOwnerMode ? undefined : roleDoc?.assignedUniversityId}
                   />
                 )}
 
@@ -1328,117 +1324,6 @@ export default function App() {
                   />
                 )}
               </React.Suspense>
-
-              {/* ADMIN TAB: ROLES & UNIVERSITY ADMIN ASSIGNMENT (Owner Only) */}
-              {isOwnerMode && activeTab === 'roles' && (
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
-                    <h2 className="text-base font-bold text-white flex items-center gap-2">
-                      <ShieldCheck className="w-5 h-5 text-teal-400" />
-                      <span>تعيين مشرفي الجامعات والصلاحيات (RBAC)</span>
-                    </h2>
-                    <p className="text-xs text-slate-400">
-                      يمكن لمالك المنصة منح صلاحية مشرف جامعة (<code className="text-teal-300 font-mono">university_admin</code>) لأي عضو هيئة تدريس أو مسؤول تسجيل عبر معرف حسابه (UID).
-                    </p>
-
-                    {roleAssignMsg && (
-                      <div className={`p-3 rounded-xl border text-xs ${
-                        roleAssignMsg.type === 'success'
-                          ? 'bg-emerald-950/50 border-emerald-800 text-emerald-300'
-                          : 'bg-rose-950/50 border-rose-800 text-rose-300'
-                      }`}>
-                        {roleAssignMsg.text}
-                      </div>
-                    )}
-
-                    <form onSubmit={handleAssignRoleSubmit} className="space-y-3 text-xs">
-                      <div>
-                        <label className="block text-slate-300 mb-1 font-semibold">معرف المستخدم في Firebase (UID):</label>
-                        <input
-                          type="text"
-                          required
-                          value={targetUidInput}
-                          onChange={(e) => setTargetUidInput(e.target.value)}
-                          placeholder="انسخ الـ UID من صفحة حساب المشرف"
-                          className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
-                          dir="ltr"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-slate-300 mb-1 font-semibold">البريد الإلكتروني للمشرف:</label>
-                        <input
-                          type="email"
-                          required
-                          value={targetEmailInput}
-                          onChange={(e) => setTargetEmailInput(e.target.value)}
-                          placeholder="admin@daralsalam.edu.ye"
-                          className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
-                          dir="ltr"
-                        />
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-slate-300 mb-1 font-semibold">الرتبة المطلوبة:</label>
-                          <select
-                            value={targetRoleInput}
-                            onChange={(e) => setTargetRoleInput(e.target.value as UserRole)}
-                            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
-                          >
-                            <option value="university_admin">مشرف جامعة (University Admin)</option>
-                            <option value="platform_owner">مالك منصة (Platform Owner)</option>
-                            <option value="student">طالب (إلغاء الإشراف)</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="block text-slate-300 mb-1 font-semibold">الجامعة المخصصة:</label>
-                          <input
-                            type="text"
-                            value={targetUnivInput}
-                            onChange={(e) => setTargetUnivInput(e.target.value)}
-                            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
-                            dir="ltr"
-                          />
-                        </div>
-                      </div>
-                      <button
-                        type="submit"
-                        className="w-full py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold flex items-center justify-center gap-2 transition-colors"
-                      >
-                        <Plus className="w-4 h-4" />
-                        <span>حفظ وتعيين الصلاحية سحابياً</span>
-                      </button>
-                    </form>
-                  </div>
-
-                  <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
-                    <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                      <h3 className="text-sm font-bold text-white">قائمة الحسابات الإدارية المعتمدة ({assignedRolesList.length})</h3>
-                      <button
-                        onClick={refreshAdminData}
-                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300"
-                        title="تحديث القائمة"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                    <div className="space-y-2 max-h-96 overflow-y-auto text-xs">
-                      {assignedRolesList.map((r) => (
-                        <div key={r.uid} className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-between">
-                          <div>
-                            <div className="font-bold text-white font-mono" dir="ltr">{r.email || r.uid}</div>
-                            <div className="text-[10px] text-slate-500 font-mono" dir="ltr">UID: {r.uid}</div>
-                          </div>
-                          <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
-                            r.role === 'platform_owner' ? 'bg-amber-500/20 text-amber-300' : 'bg-teal-500/20 text-teal-300'
-                          }`}>
-                            {r.role === 'platform_owner' ? 'مالك المنصة' : 'مشرف جامعة'}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
 
               {/* ADMIN TAB: AUDIT LOGS */}
               {isAdminMode && activeTab === 'audit' && (
@@ -1552,49 +1437,87 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* 2. Workspace Mode Switcher (Strictly for Authorized Admins/Owner Only) */}
+                  {/* 2. Workspace Mode Switcher (Strictly for Authorized Leaders Only) */}
                   {isAuthorizedAdmin && (
                     <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
                       <div className="pb-3 border-b border-slate-800">
                         <h2 className="text-base font-bold text-white flex items-center gap-2">
                           <Crown className="w-5 h-5 text-amber-400" />
-                          <span>تبديل بوابة العمل (خاص بالمالك والمشرفين المعتمدين)</span>
+                          <span>تبديل بوابة العمل (خاص بالمالك، مالك الجامعة، ومناديب الدفعات)</span>
                         </h2>
                         <p className="text-xs text-slate-400 mt-0.5">
-                          يمكنك التبديل بين بوابة الإدارة الكاملة أو معاينة المنصة كما تظهر للطالب
+                          يمكنك التبديل بين بوابة القيادة الأكاديمية الخاصة برتبتك أو معاينة المنصة كما تظهر للطالب
                         </p>
                       </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-                        <button
-                          onClick={() => {
-                            setActiveRole('platform_owner');
-                            setActiveTab('enrollment_queue');
-                          }}
-                          className={`p-3.5 rounded-xl border font-bold text-right transition-all flex items-center justify-between ${
-                            activeRole === 'platform_owner'
-                              ? 'bg-amber-500/20 border-amber-500 text-amber-300'
-                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
-                          }`}
-                        >
-                          <span>👑 مالك المنصة</span>
-                          {activeRole === 'platform_owner' && <CheckCircle2 className="w-4 h-4 text-amber-400" />}
-                        </button>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                        {roleDoc?.role === 'platform_owner' && (
+                          <button
+                            onClick={() => {
+                              setActiveRole('platform_owner');
+                              setActiveTab('roles');
+                            }}
+                            className={`p-3.5 rounded-xl border font-bold text-right transition-all flex items-center justify-between ${
+                              activeRole === 'platform_owner'
+                                ? 'bg-amber-500/20 border-amber-500 text-amber-300'
+                                : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            <span>👑 مالك المنصة</span>
+                            {activeRole === 'platform_owner' && <CheckCircle2 className="w-4 h-4 text-amber-400" />}
+                          </button>
+                        )}
 
-                        <button
-                          onClick={() => {
-                            setActiveRole('university_admin');
-                            setActiveTab('enrollment_queue');
-                          }}
-                          className={`p-3.5 rounded-xl border font-bold text-right transition-all flex items-center justify-between ${
-                            activeRole === 'university_admin'
-                              ? 'bg-teal-500/20 border-teal-500 text-teal-300'
-                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
-                          }`}
-                        >
-                          <span>🏛️ مشرف جامعة</span>
-                          {activeRole === 'university_admin' && <CheckCircle2 className="w-4 h-4 text-teal-400" />}
-                        </button>
+                        {(roleDoc?.role === 'platform_owner' || roleDoc?.role === 'university_admin') && (
+                          <button
+                            onClick={() => {
+                              setActiveRole('university_admin');
+                              setActiveTab('roles');
+                            }}
+                            className={`p-3.5 rounded-xl border font-bold text-right transition-all flex items-center justify-between ${
+                              activeRole === 'university_admin'
+                                ? 'bg-teal-500/20 border-teal-500 text-teal-300'
+                                : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            <span>🏛️ مالك الجامعة</span>
+                            {activeRole === 'university_admin' && <CheckCircle2 className="w-4 h-4 text-teal-400" />}
+                          </button>
+                        )}
+
+                        {(roleDoc?.role === 'platform_owner' || roleDoc?.role === 'university_admin' || roleDoc?.role === 'batch_rep') && (
+                          <button
+                            onClick={() => {
+                              setActiveRole('batch_rep');
+                              setActiveTab('roles');
+                            }}
+                            className={`p-3.5 rounded-xl border font-bold text-right transition-all flex items-center justify-between ${
+                              activeRole === 'batch_rep'
+                                ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300'
+                                : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            <span>📋 مندوب الدفعة</span>
+                            {activeRole === 'batch_rep' && <CheckCircle2 className="w-4 h-4 text-cyan-400" />}
+                          </button>
+                        )}
+
+                        {roleDoc?.role === 'department_head' && (
+                          <button
+                            onClick={() => {
+                              setActiveRole('department_head');
+                              setActiveTab('content_manager');
+                            }}
+                            className={`p-3.5 rounded-xl border font-bold text-right transition-all flex items-center justify-between ${
+                              activeRole === 'department_head'
+                                ? 'bg-indigo-500/20 border-indigo-500 text-indigo-300'
+                                : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            <span>🩺 رئيس قسم / مادة</span>
+                            {activeRole === 'department_head' && <CheckCircle2 className="w-4 h-4 text-indigo-400" />}
+                          </button>
+                        )}
 
                         <button
                           onClick={() => {
@@ -1750,9 +1673,9 @@ export default function App() {
                       <div className="flex flex-wrap justify-between items-center gap-2">
                         <span className="text-slate-400">الوضع والصلاحية النشطة:</span>
                         <span className="font-bold text-amber-400">
-                          {activeRole === 'platform_owner' ? '👑 مالك المنصة (Platform Owner)' :
-                           activeRole === 'university_admin' ? '🏛️ مشرف جامعة (University Admin)' :
-                           '🎓 طالب طب بشري'}
+                          {getRoleLabelArabic(activeRole)}
+                          {roleDoc?.assignedUniversityId && activeRole !== 'platform_owner' ? ` • (${roleDoc.assignedUniversityId})` : ''}
+                          {roleDoc?.assignedStudyLevelId ? ` • (${roleDoc.assignedStudyLevelId})` : ''}
                         </span>
                       </div>
                     </div>

@@ -31,7 +31,8 @@ import {
   StudyLevel, 
   StudyPeriod, 
   CourseOffering,
-  StageType
+  StageType,
+  UserRole
 } from '../../types/umed.ts';
 import { 
   fetchUniversities, 
@@ -73,7 +74,20 @@ interface DeleteConfirmTarget {
   reason: string;
 }
 
-export default function AcademicStructureManager() {
+interface AcademicStructureManagerProps {
+  userRole?: UserRole;
+  assignedUniversityId?: string;
+  assignedStudyLevelId?: string;
+}
+
+export default function AcademicStructureManager({
+  userRole = 'platform_owner',
+  assignedUniversityId,
+  assignedStudyLevelId
+}: AcademicStructureManagerProps = {}) {
+  const isUnivScoped = userRole !== 'platform_owner';
+  const isBatchScoped = userRole === 'batch_rep' || userRole === 'department_head';
+
   // Navigation Selection State
   const [universities, setUniversities] = useState<University[]>([]);
   const [selectedUniversity, setSelectedUniversity] = useState<University | null>(null);
@@ -164,14 +178,19 @@ export default function AcademicStructureManager() {
     creditHours: 3
   });
 
-  // Load universities on mount
+  // Load universities on mount (Strictly scoped for University Owner & Batch Rep)
   const loadUniversities = async () => {
     setLoading(true);
     try {
-      const univs = await fetchUniversities();
-      setUniversities(univs);
-      if (univs.length > 0) {
-        setSelectedUniversity(prev => (prev && univs.find(u => u.id === prev.id)) || univs[0]);
+      const allUnivs = await fetchUniversities();
+      const univs =
+        isUnivScoped && assignedUniversityId
+          ? allUnivs.filter(u => u.id === assignedUniversityId)
+          : allUnivs;
+      const finalUnivs = univs.length > 0 ? univs : allUnivs;
+      setUniversities(finalUnivs);
+      if (finalUnivs.length > 0) {
+        setSelectedUniversity(prev => (prev && finalUnivs.find(u => u.id === prev.id)) || finalUnivs[0]);
       } else {
         setSelectedUniversity(null);
       }
@@ -184,7 +203,7 @@ export default function AcademicStructureManager() {
 
   useEffect(() => {
     loadUniversities();
-  }, []);
+  }, [userRole, assignedUniversityId]);
 
   // Cascading Load: Colleges when University changes
   useEffect(() => {
@@ -212,18 +231,23 @@ export default function AcademicStructureManager() {
     }
   }, [selectedCollege]);
 
-  // Cascading Load: Study Levels when Program changes
+  // Cascading Load: Study Levels when Program changes (Strictly locked to batch level for Batch Rep)
   useEffect(() => {
     if (selectedProgram) {
       fetchStudyLevels(selectedProgram.id).then((lvls) => {
-        setStudyLevels(lvls);
-        setSelectedLevel(prev => (prev && lvls.find(l => l.id === prev.id)) || (lvls.length > 0 ? lvls[0] : null));
+        const scopedLvls =
+          isBatchScoped && assignedStudyLevelId
+            ? lvls.filter(l => l.id === assignedStudyLevelId)
+            : lvls;
+        const finalLvls = scopedLvls.length > 0 ? scopedLvls : lvls;
+        setStudyLevels(finalLvls);
+        setSelectedLevel(prev => (prev && finalLvls.find(l => l.id === prev.id)) || (finalLvls.length > 0 ? finalLvls[0] : null));
       });
     } else {
       setStudyLevels([]);
       setSelectedLevel(null);
     }
-  }, [selectedProgram]);
+  }, [selectedProgram, isBatchScoped, assignedStudyLevelId]);
 
   // Cascading Load: Study Periods / Blocks when Level changes
   useEffect(() => {

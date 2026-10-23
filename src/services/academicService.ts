@@ -303,6 +303,38 @@ export async function saveUniversity(university: University): Promise<void> {
     updatedAt: new Date().toISOString()
   };
   await upsertHybridItem<University>('universities', 'universities', updated);
+
+  // Ensure every university has at least a default College of Medicine & MBBS Program so students & admins can use it immediately
+  try {
+    const existingCols = await fetchColleges(university.id);
+    if (existingCols.length === 0) {
+      const now = new Date().toISOString();
+      const defaultColId = university.id === 'univ-dar-al-salam' ? 'col-med-dar' : `col-med-${university.id}`;
+      await saveCollege({
+        id: defaultColId,
+        universityId: university.id,
+        nameArabic: 'كلية الطب البشري والعلوم الصحية',
+        nameEnglish: 'Faculty of Medicine & Health Sciences',
+        code: 'MED',
+        isActive: true,
+        createdAt: now
+      });
+      await saveProgram({
+        id: university.id === 'univ-dar-al-salam' ? 'prog-mbbs' : `prog-mbbs-${university.id}`,
+        collegeId: defaultColId,
+        universityId: university.id,
+        nameArabic: 'بكالوريوس الطب العام والجراحة (MBBS)',
+        nameEnglish: 'Bachelor of Medicine, Bachelor of Surgery (MBBS)',
+        degree: 'bachelor',
+        studySystem: 'block',
+        totalRegularLevels: 7,
+        hasInternship: true,
+        internshipDurationMonths: 12,
+        isActive: true,
+        createdAt: now
+      });
+    }
+  } catch (e) {}
 }
 
 export async function toggleUniversityActive(universityId: string, currentStatus: boolean): Promise<void> {
@@ -447,7 +479,7 @@ export async function fetchStudyLevels(programId?: string): Promise<StudyLevel[]
   const list = await fetchHybridCollection<StudyLevel>(
     'studyLevels',
     'studyLevels',
-    (l) => !programId || l.programId === programId
+    (l) => !programId || l.programId === programId || programId.startsWith('prog-mbbs')
   );
   return [...list].sort((a, b) => (a.order || 0) - (b.order || 0));
 }
@@ -487,11 +519,13 @@ export async function deleteStudyLevel(levelId: string, forceCascade: boolean = 
 // 7. Study Periods / Blocks
 // ---------------------------------------------------------------------------
 
-export async function fetchStudyPeriods(studyLevelId?: string): Promise<StudyPeriod[]> {
+export async function fetchStudyPeriods(studyLevelId?: string, universityId?: string): Promise<StudyPeriod[]> {
   const list = await fetchHybridCollection<StudyPeriod>(
     'studyPeriods',
     'studyPeriods',
-    (p) => !studyLevelId || p.studyLevelId === studyLevelId
+    (p) =>
+      (!studyLevelId || p.studyLevelId === studyLevelId) &&
+      (!universityId || !p.universityId || p.universityId === universityId)
   );
   return [...list].sort((a, b) => (a.order || 0) - (b.order || 0));
 }
@@ -531,11 +565,13 @@ export async function deleteStudyPeriod(periodId: string, forceCascade: boolean 
 // 8. Course Offerings & Sections
 // ---------------------------------------------------------------------------
 
-export async function fetchCourseOfferings(studyPeriodId?: string): Promise<CourseOffering[]> {
+export async function fetchCourseOfferings(studyPeriodId?: string, universityId?: string): Promise<CourseOffering[]> {
   return fetchHybridCollection<CourseOffering>(
     'courseOfferings',
     'courseOfferings',
-    (c) => !studyPeriodId || c.studyPeriodId === studyPeriodId
+    (c) =>
+      (!studyPeriodId || c.studyPeriodId === studyPeriodId) &&
+      (!universityId || !c.universityId || c.universityId === universityId)
   );
 }
 

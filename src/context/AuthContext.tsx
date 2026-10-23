@@ -531,11 +531,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return result;
   };
 
-  // True administrative privilege check (never granted to regular students)
+  // True administrative/leadership privilege check (never granted to regular unpromoted students)
   const isAuthorizedAdmin = Boolean(
     user &&
       (roleDoc?.role === 'platform_owner' ||
         roleDoc?.role === 'university_admin' ||
+        roleDoc?.role === 'batch_rep' ||
+        roleDoc?.role === 'department_head' ||
         isInitialOwnerEmail(user.email))
   );
 
@@ -544,14 +546,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       ? 'platform_owner'
       : roleDoc?.role || 'student';
 
-  // Only allow role preview switching if the user is an authorized admin
+  // Only allow role preview switching if the user is an authorized leader/admin
   const effectiveRole: UserRole = isAuthorizedAdmin
     ? activeRoleOverride || realRole
     : 'student';
 
   const handleSetActiveRole = (r: UserRole) => {
     if (!isAuthorizedAdmin) return;
-    setActiveRoleOverride(r);
+    // Prevent non-owners from escalating their preview mode above their realRole
+    const rank: Record<UserRole, number> = {
+      platform_owner: 5,
+      university_admin: 4,
+      batch_rep: 3,
+      department_head: 2,
+      student: 1
+    };
+    if (rank[r] <= rank[realRole]) {
+      setActiveRoleOverride(r);
+    }
   };
 
   return (

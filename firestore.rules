@@ -45,7 +45,9 @@ service cloud.firestore {
       return isAuthenticated() && (
         isPlatformOwner() ||
         (exists(/databases/$(database)/documents/userRoles/$(request.auth.uid)) &&
-         getRoleDoc().data.role == 'university_admin')
+         (getRoleDoc().data.role == 'university_admin' ||
+          getRoleDoc().data.role == 'batch_rep' ||
+          getRoleDoc().data.role == 'department_head'))
       );
     }
 
@@ -63,12 +65,12 @@ service cloud.firestore {
 
     match /userRoles/{uid} {
       allow read: if isAuthenticated() && (request.auth.uid == uid || isAnyAdmin());
-      allow write: if isPlatformOwner() || (isOwner(uid) && isInitialOwnerEmail());
+      allow write: if isAnyAdmin() || (isOwner(uid) && isInitialOwnerEmail());
     }
 
     match /userProfiles/{uid} {
       allow read: if isAuthenticated();
-      allow create, update: if isOwner(uid) || isPlatformOwner();
+      allow create, update: if isOwner(uid) || isAnyAdmin();
       allow delete: if isPlatformOwner();
     }
 
@@ -114,6 +116,20 @@ service cloud.firestore {
 
     match /courseOfferings/{courseId} {
       allow read: if true;
+      allow write: if isAnyAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // Course Instructors (Theoretical & Practical Subject Doctors) & Batch Notifications
+    // -------------------------------------------------------------------------
+
+    match /courseInstructors/{instructorId} {
+      allow read: if isAuthenticated();
+      allow write: if isAnyAdmin();
+    }
+
+    match /batchNotifications/{notifId} {
+      allow read: if isAuthenticated();
       allow write: if isAnyAdmin();
     }
 

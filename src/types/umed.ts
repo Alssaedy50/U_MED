@@ -10,15 +10,27 @@
 // 1. Roles & Permissions
 // ---------------------------------------------------------------------------
 
-export type UserRole = 'platform_owner' | 'university_admin' | 'student';
+export type UserRole =
+  | 'platform_owner'
+  | 'university_admin'
+  | 'batch_rep'
+  | 'department_head'
+  | 'student';
 
 export interface UserRoleDoc {
   uid: string;
   role: UserRole;
   email: string;
-  assignedUniversityId?: string; // Present when role === 'university_admin'
+  displayNameArabic?: string;
+  phone?: string;
+  academicStudentNumber?: string;
+  assignedUniversityId?: string; // Present for university_admin, batch_rep, department_head
+  assignedStudyLevelId?: string; // Present for batch_rep, department_head (isolates to specific batch/level)
+  assignedCourseId?: string; // Optional specific course for department_head
+  departmentTitle?: string; // e.g., 'قسم الباطنة العامة' or 'رئيس مادة التشريح'
   assignedAt: string; // ISO 8601
-  assignedBy: string; // uid or 'SYSTEM_BOOTSTRAP'
+  assignedBy: string; // uid, email, or 'SYSTEM_BOOTSTRAP'
+  assignedByRole?: UserRole;
 }
 
 export interface UserProfile {
@@ -236,10 +248,10 @@ export interface AcademicChangeRequest {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Educational Content Library
+// 4. Educational Content Library & Course Instructors & Batch Notifications
 // ---------------------------------------------------------------------------
 
-export type ResourceType = 'pdf' | 'image' | 'audio' | 'link' | 'video_link';
+export type ResourceType = 'pdf' | 'image' | 'video' | 'audio' | 'link' | 'video_link';
 
 export interface EducationalResource {
   id: string;
@@ -263,6 +275,52 @@ export interface EducationalResource {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export type TeachingType = 'theoretical' | 'practical' | 'both';
+
+export interface CourseInstructor {
+  id: string;
+  universityId: string;
+  studyLevelId: string;
+  studyPeriodId?: string;
+  courseOfferingId: string;
+  courseTitleArabic?: string;
+  instructorNameArabic: string;
+  academicTitle: string; // e.g. 'أ.د.', 'أ.م.د.', 'د.', 'معيد / مشرف عملي'
+  teachingType: TeachingType;
+  specialization?: string;
+  contactInfo?: string;
+  officeHours?: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type NotificationCategory =
+  | 'lecture'
+  | 'exam'
+  | 'practical'
+  | 'urgent'
+  | 'data_shared'
+  | 'general';
+
+export interface BatchNotification {
+  id: string;
+  universityId: string;
+  studyLevelId: string; // Specific batch/level (e.g. 'lvl-4') or 'ALL' for university-wide
+  courseOfferingId?: string;
+  title: string;
+  message: string;
+  category: NotificationCategory;
+  attachmentUrl?: string;
+  attachmentType?: ResourceType;
+  attachmentLabel?: string;
+  authorUid: string;
+  authorNameArabic: string;
+  authorRole: UserRole;
+  isPinned?: boolean;
+  createdAt: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -403,7 +461,10 @@ export type AuditAction =
   | 'ACADEMIC_STRUCTURE_UPDATED'
   | 'RESOURCE_CREATED'
   | 'RESOURCE_UPDATED'
-  | 'RESOURCE_DELETED';
+  | 'RESOURCE_DELETED'
+  | 'INSTRUCTOR_ADDED'
+  | 'INSTRUCTOR_DELETED'
+  | 'BATCH_NOTIFICATION_SENT';
 
 export interface AuditLog {
   id: string;

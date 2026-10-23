@@ -49,6 +49,7 @@ export default function ResourcePreviewModal({
   const isImage = resource.resourceType === 'image';
   const isPdf = resource.resourceType === 'pdf';
   const isAudio = resource.resourceType === 'audio';
+  const isVideo = resource.resourceType === 'video';
 
   useEffect(() => {
     if (!hasConfirmedLoad) return;
@@ -302,15 +303,27 @@ export default function ResourcePreviewModal({
                 </div>
               )}
 
+              {/* 2.5 VIDEO LECTURE PLAYER */}
+              {isVideo && (
+                <div className="w-full max-w-3xl flex flex-col items-center justify-center space-y-3">
+                  <video
+                    controls
+                    autoPlay
+                    src={resolvedViewUrl}
+                    className="w-full max-h-[68vh] rounded-xl border border-slate-800 bg-black shadow-2xl"
+                  />
+                </div>
+              )}
+
               {/* 3. PDF & EXTERNAL VIEWER IFRAME */}
-              {!isImage && !isAudio && (
+              {!isImage && !isAudio && !isVideo && (
                 <div className="w-full h-[70vh] relative rounded-xl overflow-hidden border border-slate-800 bg-slate-900">
                   {iframeError ? (
                     <div className="h-full flex flex-col items-center justify-center p-6 text-center space-y-3">
                       <AlertTriangle className="w-8 h-8 text-amber-400" />
                       <h4 className="font-bold text-white text-sm">المستند جاهز للفتح أو التنزيل المباشر</h4>
                       <p className="text-xs text-slate-400 max-w-md">
-                        اضغط الزر أدناه لفتح أو تنزيل ملف الـ PDF مباشرة على جهازك.
+                        اضغط الزر أدناه لفتح أو تنزيل الملف مباشرة على جهازك.
                       </p>
                       <a
                         href={resolvedDownloadUrl || resolvedViewUrl}
@@ -320,7 +333,7 @@ export default function ResourcePreviewModal({
                         className="py-2.5 px-5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center gap-2"
                       >
                         <Download className="w-4 h-4" />
-                        <span>تنزيل / فتح ملف PDF الآن</span>
+                        <span>تنزيل / فتح الملف الآن</span>
                       </a>
                     </div>
                   ) : (

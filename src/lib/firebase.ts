@@ -818,16 +818,52 @@ export async function logOut(): Promise<void> {
   await signOut(auth);
 }
 
+const ROLES_LOCAL_MAP_KEY = 'umed_all_roles_cache';
+
+function readLocalRolesMap(): Record<string, UserRoleDoc> {
+  try {
+    const raw = localStorage.getItem(ROLES_LOCAL_MAP_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return {};
+}
+
+function writeLocalRoleEntry(roleDoc: UserRoleDoc): void {
+  try {
+    const map = readLocalRolesMap();
+    map[roleDoc.uid] = roleDoc;
+    localStorage.setItem(ROLES_LOCAL_MAP_KEY, JSON.stringify(map));
+    localStorage.setItem(`umed_cached_role_${roleDoc.uid}`, JSON.stringify(roleDoc));
+  } catch (e) {}
+}
+
+function removeLocalRoleEntry(uid: string): void {
+  try {
+    const map = readLocalRolesMap();
+    delete map[uid];
+    localStorage.setItem(ROLES_LOCAL_MAP_KEY, JSON.stringify(map));
+    localStorage.removeItem(`umed_cached_role_${uid}`);
+  } catch (e) {}
+}
+
 // 6. User Profile & Role Helpers
 export async function fetchUserRole(uid: string, email?: string | null): Promise<UserRoleDoc | null> {
   try {
     const roleRef = doc(db, 'userRoles', uid);
     const snap = await getDoc(roleRef);
     if (snap.exists()) {
-      return snap.data() as UserRoleDoc;
+      const r = snap.data() as UserRoleDoc;
+      writeLocalRoleEntry(r);
+      return r;
     }
   } catch (err) {
     console.warn('Could not fetch user role from Firestore:', err);
+  }
+
+  // Fallback to local roles map if offline
+  const localMap = readLocalRolesMap();
+  if (localMap[uid]) {
+    return localMap[uid];
   }
 
   // Automatic Owner Recognition if email matches INITIAL_OWNER_EMAILS
@@ -837,8 +873,10 @@ export async function fetchUserRole(uid: string, email?: string | null): Promise
       role: 'platform_owner',
       email: email.trim().toLowerCase(),
       assignedAt: new Date().toISOString(),
-      assignedBy: 'SYSTEM_BOOTSTRAP'
+      assignedBy: 'SYSTEM_BOOTSTRAP',
+      assignedByRole: 'platform_owner'
     };
+    writeLocalRoleEntry(ownerDoc);
     try {
       await setDoc(doc(db, 'userRoles', uid), ownerDoc, { merge: true });
     } catch (e) {}
@@ -849,6 +887,7 @@ export async function fetchUserRole(uid: string, email?: string | null): Promise
 }
 
 export async function saveUserRoleToFirestore(roleDoc: UserRoleDoc): Promise<void> {
+  writeLocalRoleEntry(roleDoc);
   try {
     await setDoc(doc(db, 'userRoles', roleDoc.uid), cleanFirestoreData(roleDoc), { merge: true });
   } catch (err) {
@@ -857,13 +896,18 @@ export async function saveUserRoleToFirestore(roleDoc: UserRoleDoc): Promise<voi
 }
 
 export async function fetchAllUserRoles(): Promise<UserRoleDoc[]> {
-  const map: Record<string, UserRoleDoc> = {};
+  const map: Record<string, UserRoleDoc> = { ...readLocalRolesMap() };
   try {
     const snap = await getDocs(collection(db, 'userRoles'));
     snap.forEach((d) => {
       const data = d.data() as UserRoleDoc;
-      if (data && data.uid) map[data.uid] = data;
+      if (data && data.uid) {
+        map[data.uid] = data;
+      }
     });
+    try {
+      localStorage.setItem(ROLES_LOCAL_MAP_KEY, JSON.stringify(map));
+    } catch (e) {}
   } catch (e) {}
 
   try {
@@ -872,33 +916,66 @@ export async function fetchAllUserRoles(): Promise<UserRoleDoc[]> {
       const data = await res.json();
       if (data.roles) {
         Object.values(data.roles as Record<string, UserRoleDoc>).forEach((r) => {
-          if (r && r.uid) map[r.uid] = r;
+          if (r && r.uid && !map[r.uid]) map[r.uid] = r;
         });
       }
     }
   } catch (e) {}
 
-  return Object.values(map);
+  return Object.values(map).sort(
+    (a, b) => new Date(b.assignedAt || 0).getTime() - new Date(a.assignedAt || 0).getTime()
+  );
 }
 
 export async function assignUserRole(params: {
   callerUid: string;
   callerEmail: string;
+  callerRole?: UserRole;
   targetUid: string;
   email: string;
+  displayNameArabic?: string;
+  phone?: string;
+  academicStudentNumber?: string;
   role: UserRole;
   assignedUniversityId?: string;
+  assignedStudyLevelId?: string;
+  assignedCourseId?: string;
+  departmentTitle?: string;
 }): Promise<UserRoleDoc> {
-  const roleDoc: UserRoleDoc = {
+  const needsUniversity =
+    params.role === 'university_admin' ||
+    params.role === 'batch_rep' ||
+    params.role === 'department_head';
+
+  const needsLevel =
+    params.role === 'batch_rep' ||
+    params.role === 'department_head';
+
+  const roleDoc: UserRoleDoc = cleanFirestoreData({
     uid: params.targetUid.trim(),
     role: params.role,
     email: params.email.trim().toLowerCase(),
-    assignedUniversityId: params.role === 'university_admin' ? (params.assignedUniversityId || 'univ-dar-al-salam') : undefined,
+    ...(params.displayNameArabic ? { displayNameArabic: params.displayNameArabic.trim() } : {}),
+    ...(params.phone ? { phone: params.phone.trim() } : {}),
+    ...(params.academicStudentNumber ? { academicStudentNumber: params.academicStudentNumber.trim() } : {}),
+    ...(needsUniversity
+      ? { assignedUniversityId: params.assignedUniversityId || 'univ-dar-al-salam' }
+      : {}),
+    ...(needsLevel && params.assignedStudyLevelId
+      ? { assignedStudyLevelId: params.assignedStudyLevelId }
+      : {}),
+    ...(params.role === 'department_head' && params.assignedCourseId
+      ? { assignedCourseId: params.assignedCourseId }
+      : {}),
+    ...(params.role === 'department_head' && params.departmentTitle
+      ? { departmentTitle: params.departmentTitle.trim() }
+      : {}),
     assignedAt: new Date().toISOString(),
-    assignedBy: params.callerEmail || params.callerUid
-  };
+    assignedBy: params.callerEmail || params.callerUid,
+    ...(params.callerRole ? { assignedByRole: params.callerRole } : {})
+  });
 
-  // 1. Save to Firestore
+  // 1. Save to Firestore & Local Cache
   await saveUserRoleToFirestore(roleDoc);
 
   // 2. Record Audit Log in Firestore
@@ -908,7 +985,12 @@ export async function assignUserRole(params: {
     targetUid: roleDoc.uid,
     targetEmail: roleDoc.email,
     universityId: roleDoc.assignedUniversityId,
-    details: { assignedRole: roleDoc.role, assignedUniversityId: roleDoc.assignedUniversityId }
+    details: {
+      assignedRole: roleDoc.role,
+      assignedUniversityId: roleDoc.assignedUniversityId,
+      assignedStudyLevelId: roleDoc.assignedStudyLevelId,
+      departmentTitle: roleDoc.departmentTitle
+    }
   });
 
   // 3. Also sync with backend API if reachable
@@ -921,6 +1003,43 @@ export async function assignUserRole(params: {
   } catch (e) {}
 
   return roleDoc;
+}
+
+export async function revokeUserRole(params: {
+  callerUid: string;
+  callerEmail: string;
+  targetUid: string;
+  targetEmail?: string;
+  universityId?: string;
+}): Promise<void> {
+  removeLocalRoleEntry(params.targetUid);
+  try {
+    await deleteDoc(doc(db, 'userRoles', params.targetUid));
+  } catch (e) {
+    // Fallback: set role to 'student'
+    try {
+      await setDoc(
+        doc(db, 'userRoles', params.targetUid),
+        {
+          uid: params.targetUid,
+          role: 'student',
+          email: params.targetEmail || '',
+          assignedAt: new Date().toISOString(),
+          assignedBy: params.callerEmail || params.callerUid
+        },
+        { merge: true }
+      );
+    } catch {}
+  }
+
+  await writeAuditLogToCloud({
+    action: 'ROLE_REVOKED',
+    performedBy: params.callerEmail || params.callerUid,
+    targetUid: params.targetUid,
+    targetEmail: params.targetEmail,
+    universityId: params.universityId,
+    details: { reason: 'Revoked to student role' }
+  });
 }
 
 export async function fetchUserProfile(uid: string): Promise<UserProfile | null> {
