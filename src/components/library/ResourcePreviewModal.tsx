@@ -105,11 +105,11 @@ export default function ResourcePreviewModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5" dir="rtl">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
+    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-start sm:items-center justify-center p-2.5 sm:p-5 overflow-y-auto overscroll-contain" dir="rtl">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl max-h-[calc(100dvh-1.25rem)] sm:max-h-[92dvh] my-auto flex flex-col shadow-2xl overflow-hidden">
         
         {/* Header Bar */}
-        <div className="p-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3">
+        <div className="p-3.5 sm:p-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
               isPdf ? 'bg-rose-500/10 text-rose-400' :
@@ -138,7 +138,7 @@ export default function ResourcePreviewModal({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             {resolvedDownloadUrl && (
               <a
                 href={resolvedDownloadUrl}
@@ -163,11 +163,11 @@ export default function ResourcePreviewModal({
         </div>
 
         {/* Content Body */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-slate-950 flex flex-col items-center justify-center min-h-[360px]">
+        <div className="flex-1 overflow-y-auto p-3.5 sm:p-6 bg-slate-950 flex flex-col items-center justify-start sm:justify-center min-h-[300px]">
           
           {/* BANDWIDTH GUARD SCREEN (Shown before load) */}
           {!hasConfirmedLoad ? (
-            <div className="max-w-md text-center space-y-4 p-6 bg-slate-900/90 rounded-2xl border border-slate-800 shadow-xl">
+            <div className="max-w-md w-full my-auto text-center space-y-4 p-5 sm:p-6 bg-slate-900/90 rounded-2xl border border-slate-800 shadow-xl">
               <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-400 mx-auto flex items-center justify-center">
                 <ShieldCheck className="w-6 h-6" />
               </div>

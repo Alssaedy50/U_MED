@@ -1323,11 +1323,11 @@ export default function AssessmentManager({
 
       {/* MODAL: EDIT QUESTION BANK */}
       {editingBank && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4" dir="rtl">
-          <form onSubmit={handleUpdateBank} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-start sm:items-center justify-center p-2.5 sm:p-4 overflow-y-auto overscroll-contain" dir="rtl">
+          <form onSubmit={handleUpdateBank} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 max-w-md w-full max-h-[calc(100dvh-1.25rem)] sm:max-h-[90dvh] overflow-y-auto my-auto space-y-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <h3 className="text-sm font-bold text-white">تعديل بنك الأسئلة</h3>
-              <button type="button" onClick={() => setEditingBank(null)} className="text-slate-400 hover:text-white">
+              <button type="button" onClick={() => setEditingBank(null)} className="p-1.5 rounded-lg bg-slate-800/80 text-slate-300 hover:text-white">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -1375,11 +1375,11 @@ export default function AssessmentManager({
 
       {/* MODAL: EDIT QUESTION */}
       {editingQuestion && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
-          <form onSubmit={handleUpdateQuestion} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-2xl w-full space-y-4 shadow-2xl my-8">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-start sm:items-center justify-center p-2.5 sm:p-4 overflow-y-auto overscroll-contain" dir="rtl">
+          <form onSubmit={handleUpdateQuestion} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-6 max-w-2xl w-full max-h-[calc(100dvh-1.25rem)] sm:max-h-[90dvh] overflow-y-auto my-auto space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3 sticky top-0 bg-slate-900 z-10">
               <h3 className="text-sm font-bold text-white">تعديل السؤال ومفتاح الإجابة المحمي</h3>
-              <button type="button" onClick={() => setEditingQuestion(null)} className="text-slate-400 hover:text-white">
+              <button type="button" onClick={() => setEditingQuestion(null)} className="p-1.5 rounded-lg bg-slate-800/80 text-slate-300 hover:text-white">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -1485,7 +1485,7 @@ export default function AssessmentManager({
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800 sticky bottom-0 bg-slate-900 pb-1">
               <button
                 type="button"
                 onClick={() => setEditingQuestion(null)}
@@ -1506,11 +1506,11 @@ export default function AssessmentManager({
 
       {/* MODAL: EDIT ASSESSMENT */}
       {editingAssessment && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
-          <form onSubmit={handleUpdateAssessment} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-2xl w-full space-y-4 shadow-2xl my-8">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-start sm:items-center justify-center p-2.5 sm:p-4 overflow-y-auto overscroll-contain" dir="rtl">
+          <form onSubmit={handleUpdateAssessment} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-6 max-w-2xl w-full max-h-[calc(100dvh-1.25rem)] sm:max-h-[90dvh] overflow-y-auto my-auto space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3 sticky top-0 bg-slate-900 z-10">
               <h3 className="text-sm font-bold text-white">تعديل إعدادات الاختبار / المسابقة</h3>
-              <button type="button" onClick={() => setEditingAssessment(null)} className="text-slate-400 hover:text-white">
+              <button type="button" onClick={() => setEditingAssessment(null)} className="p-1.5 rounded-lg bg-slate-800/80 text-slate-300 hover:text-white">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -1627,7 +1627,7 @@ export default function AssessmentManager({
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800 sticky bottom-0 bg-slate-900 pb-1">
               <button
                 type="button"
                 onClick={() => setEditingAssessment(null)}

@@ -41,12 +41,30 @@ export interface UserProfile {
   phone?: string;
   academicStudentNumber?: string;
   avatarUrl?: string;
+  registrationMethod?: 'email' | 'phone' | 'google';
   isActive: boolean;
+  isArchived?: boolean;
+  archivedAt?: string;
+  archivedBy?: string;
+  archiveReason?: string;
+  isPrimaryOwner?: boolean;
+  ownerLinkedEmails?: string[];
   emailVerified?: boolean;
   phoneVerified?: boolean;
   isVerified?: boolean;
   verifiedAt?: string;
   createdAt: string;
+  updatedAt: string;
+}
+
+export interface PrimaryOwnerIdentityConfig {
+  primaryEmail: string;
+  secondaryEmail: string;
+  emails: string[];
+  phone: string;
+  displayNameArabic: string;
+  academicStudentNumber: string;
+  ownerUid?: string;
   updatedAt: string;
 }
 
@@ -63,6 +81,7 @@ export interface UniqueIdentifierRecord {
 
 export interface VerificationChallenge {
   uid: string;
+  verificationMethod?: 'email' | 'phone' | 'both';
   email?: string;
   phone?: string;
   emailCode?: string;
@@ -464,7 +483,13 @@ export type AuditAction =
   | 'RESOURCE_DELETED'
   | 'INSTRUCTOR_ADDED'
   | 'INSTRUCTOR_DELETED'
-  | 'BATCH_NOTIFICATION_SENT';
+  | 'BATCH_NOTIFICATION_SENT'
+  | 'USER_ACCOUNT_DELETED'
+  | 'USER_PROFILE_UPDATED'
+  | 'USER_ARCHIVED'
+  | 'USER_UNARCHIVED'
+  | 'USER_VERIFIED'
+  | 'USERS_EXPORTED';
 
 export interface AuditLog {
   id: string;

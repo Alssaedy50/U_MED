@@ -22,7 +22,8 @@ import {
   cleanFirestoreData,
   assignUserRole,
   revokeUserRole,
-  writeAuditLogToCloud
+  writeAuditLogToCloud,
+  getLocalDeletedUids
 } from '../lib/firebase.ts';
 import {
   UserRole,
@@ -302,13 +303,20 @@ export async function fetchRegisteredUsersDirectory(filterScope?: {
   studyLevelId?: string;
 }): Promise<DirectoryUserCandidate[]> {
   const map = new Map<string, DirectoryUserCandidate>();
+  const deletedUids = new Set(getLocalDeletedUids());
+
+  // 0. Check deletedAccounts from Cloud Firestore
+  try {
+    const delSnap = await getDocs(collection(db, 'deletedAccounts'));
+    delSnap.forEach(d => deletedUids.add(d.id));
+  } catch (e) {}
 
   // 1. Load from userProfiles in Firestore
   try {
     const snap = await getDocs(collection(db, 'userProfiles'));
     snap.forEach(d => {
       const p = d.data() as UserProfile;
-      if (p && p.uid) {
+      if (p && p.uid && !deletedUids.has(p.uid) && !p.isArchived) {
         map.set(p.uid, {
           uid: p.uid,
           email: p.email || '',
@@ -324,7 +332,7 @@ export async function fetchRegisteredUsersDirectory(filterScope?: {
   try {
     const enrollments = await fetchEnrollmentsForAdmin(filterScope?.universityId);
     for (const enr of enrollments) {
-      if (!enr.uid) continue;
+      if (!enr.uid || deletedUids.has(enr.uid)) continue;
       const existing = map.get(enr.uid);
       map.set(enr.uid, {
         uid: enr.uid,

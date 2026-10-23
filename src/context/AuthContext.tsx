@@ -7,7 +7,7 @@
  */
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { User, onAuthStateChanged } from 'firebase/auth';
+import { User, onAuthStateChanged, deleteUser } from 'firebase/auth';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { 
   auth, 
@@ -32,7 +32,10 @@ import {
   fetchUserProfile,
   saveUserProfile,
   requestPlatformOwnerBootstrap,
-  testFirestoreConnection
+  testFirestoreConnection,
+  isAccountDeletedInCloud,
+  deleteUserAccountCompletelyFromCloud,
+  syncAndDeduplicatePrimaryOwnerIdentity
 } from '../lib/firebase.ts';
 import { UserRole, UserRoleDoc, UserProfile, VerificationChallenge } from '../types/umed.ts';
 
@@ -52,7 +55,6 @@ interface AuthContextType {
     email: string,
     pass: string,
     nameArabic: string,
-    phoneRequired?: string,
     academicStudentNumber?: string
   ) => Promise<void>;
   loginPhone: (phone: string, pass: string) => Promise<void>;
@@ -60,7 +62,6 @@ interface AuthContextType {
     phone: string,
     pass: string,
     nameArabic: string,
-    emailOptional?: string,
     academicStudentNumber?: string
   ) => Promise<void>;
   verifyCurrentAccount: (params: {
@@ -70,12 +71,15 @@ interface AuthContextType {
   }) => Promise<{ verified: boolean; message: string }>;
   resendVerification: () => Promise<VerificationChallenge | null>;
   startAccountVerification: () => Promise<VerificationChallenge | null>;
+  deleteOwnAccount: () => Promise<void>;
   logout: () => Promise<void>;
   bootstrapInitialOwner: () => Promise<{ success: boolean; message: string }>;
   checkConnectivity: () => Promise<void>;
   activeRole: UserRole;
+  realRole: UserRole;
   setActiveRole: (role: UserRole) => void;
   isAuthorizedAdmin: boolean;
+  isAccountArchived: boolean;
   refreshRole: () => Promise<void>;
 }
 
@@ -120,7 +124,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const loadRoleForUser = async (currentUser: User) => {
-    // Instant local cache hydration first
     try {
       const cachedRole = localStorage.getItem(`umed_cached_role_${currentUser.uid}`);
       if (cachedRole) {
@@ -128,16 +131,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     } catch (e) {}
 
-    // 1. Check Firestore & Owner Email match first
     const fsRole = await fetchUserRole(currentUser.uid, currentUser.email);
     if (fsRole) {
       setRoleDoc(fsRole);
       try {
         localStorage.setItem(`umed_cached_role_${currentUser.uid}`, JSON.stringify(fsRole));
       } catch (e) {}
-      // If owner email, also sync with server silently
       if (isInitialOwnerEmail(currentUser.email)) {
         try {
+          await syncAndDeduplicatePrimaryOwnerIdentity({ ownerUid: currentUser.uid });
           const token = await currentUser.getIdToken();
           await requestPlatformOwnerBootstrap(token, currentUser.uid, currentUser.email || '');
         } catch (e) {}
@@ -145,7 +147,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
-    // 2. Fallback check against API
     try {
       const res = await fetch(`/api/admin/user-role/${currentUser.uid}`);
       if (res.ok) {
@@ -178,8 +179,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (unsubProfile) { unsubProfile(); unsubProfile = null; }
 
       if (currentUser) {
+        // Check if this user account was deleted in Cloud Firestore
+        if (!isInitialOwnerEmail(currentUser.email)) {
+          const wasDeleted = await isAccountDeletedInCloud(currentUser.uid);
+          if (wasDeleted) {
+            try {
+              await deleteUser(currentUser);
+            } catch (e) {}
+            try {
+              await logOut();
+            } catch (e) {}
+            setUser(null);
+            setRoleDoc(null);
+            setUserProfile(null);
+            setPendingVerification(null);
+            setLoading(false);
+            return;
+          }
+        }
+
         setUser(currentUser);
-        // Hydrate cached profile immediately
+
         try {
           const cachedProf = localStorage.getItem(`umed_cached_profile_${currentUser.uid}`);
           if (cachedProf) {
@@ -205,11 +225,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } catch (err: any) {
           console.warn('Using active session without token refresh:', err?.message || err);
         }
+
         try {
           await loadRoleForUser(currentUser);
           const profile = await fetchUserProfile(currentUser.uid);
           if (profile) {
             setUserProfile(profile);
+            if (profile.isVerified) {
+              setPendingVerification(null);
+            }
             try {
               localStorage.setItem(`umed_cached_profile_${currentUser.uid}`, JSON.stringify(profile));
             } catch (e) {}
@@ -218,7 +242,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           console.warn('Could not load user data from remote Firestore:', err);
         }
 
-        // Real-time listeners for userRole & userProfile changes
+        // Real-time listeners for userRole & userProfile changes (including cloud deletion or archiving!)
         try {
           unsubRole = onSnapshot(doc(db, 'userRoles', currentUser.uid), (snap) => {
             if (snap.exists()) {
@@ -230,13 +254,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
           }, () => {});
 
-          unsubProfile = onSnapshot(doc(db, 'userProfiles', currentUser.uid), (snap) => {
+          unsubProfile = onSnapshot(doc(db, 'userProfiles', currentUser.uid), async (snap) => {
             if (snap.exists()) {
               const p = snap.data() as UserProfile;
               setUserProfile(p);
+              if (p.isVerified) {
+                setPendingVerification(null);
+              }
               try {
                 localStorage.setItem(`umed_cached_profile_${currentUser.uid}`, JSON.stringify(p));
               } catch (e) {}
+            } else if (!isInitialOwnerEmail(currentUser.email)) {
+              // Check if deleted in cloud while session was open
+              const deletedNow = await isAccountDeletedInCloud(currentUser.uid);
+              if (deletedNow) {
+                try {
+                  await deleteUser(currentUser);
+                } catch {}
+                try {
+                  await logOut();
+                } catch {}
+              }
             }
           }, () => {});
         } catch (e) {}
@@ -261,12 +299,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setLoading(true);
     try {
       const u = await signInWithGoogle();
+      const isOwner = isInitialOwnerEmail(u.email);
+      if (isOwner) {
+        await syncAndDeduplicatePrimaryOwnerIdentity({
+          ownerUid: u.uid,
+          displayNameArabic: u.displayName || undefined
+        });
+      }
       const existing = await fetchUserProfile(u.uid);
       if (!existing) {
-        // Verify Google email isn't conflicting with another UID
         const uniqueCheck = await checkIdentifierUniqueness({
           email: u.email || undefined,
-          excludeUid: u.uid
+          excludeUid: u.uid,
+          allowOwnerSelfRegister: isOwner
         });
         if (!uniqueCheck.isUnique) {
           await logOut();
@@ -278,7 +323,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           email: u.email ? normalizeEmail(u.email) : '',
           displayNameArabic: u.displayName || 'طالب طب بشري',
           avatarUrl: u.photoURL || undefined,
+          registrationMethod: 'google',
           isActive: true,
+          isArchived: false,
           emailVerified: true,
           phoneVerified: true,
           isVerified: true,
@@ -299,32 +346,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setLoading(true);
     try {
       const u = await signInWithEmail(email, pass);
+      if (isInitialOwnerEmail(u.email)) {
+        await syncAndDeduplicatePrimaryOwnerIdentity({ ownerUid: u.uid });
+      }
       await loadRoleForUser(u);
     } finally {
       setLoading(false);
     }
   };
 
+  /**
+   * Separated Email Registration: Registers using Email ONLY (no phone required).
+   */
   const registerEmail = async (
     email: string,
     pass: string,
     nameArabic: string,
-    phoneRequired?: string,
     academicStudentNumber?: string
   ) => {
     setLoading(true);
     try {
       const normEmail = normalizeEmail(email);
-      const normPhone = phoneRequired && phoneRequired.trim() ? normalizeYemenPhone(phoneRequired) : undefined;
+      const isOwner = isInitialOwnerEmail(normEmail);
       const normAcad = academicStudentNumber && academicStudentNumber.trim()
         ? normalizeAcademicId(academicStudentNumber)
         : undefined;
 
-      // 1. Pre-Creation Uniqueness Validation (Email + Phone + Academic Student Number)
+      // 1. Pre-Creation Uniqueness Validation (Email + Academic Student Number)
       const uniqueness = await checkIdentifierUniqueness({
         email: normEmail,
-        phone: normPhone,
-        academicStudentNumber: normAcad
+        academicStudentNumber: normAcad,
+        allowOwnerSelfRegister: isOwner
       });
       if (!uniqueness.isUnique) {
         throw new Error(uniqueness.message || 'البيانات المدخلة مسجلة مسبقاً لحساب آخر في المنصة.');
@@ -332,38 +384,44 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       // 2. Create Firebase Auth Account
       const u = await signUpWithEmail(normEmail, pass);
-      const isOwner = isInitialOwnerEmail(normEmail);
       const nowIso = new Date().toISOString();
 
-      // 3. Reserve Unique Identifiers in Cloud Firestore
+      if (isOwner) {
+        await syncAndDeduplicatePrimaryOwnerIdentity({
+          ownerUid: u.uid,
+          displayNameArabic: nameArabic.trim(),
+          academicStudentNumber: normAcad
+        });
+        setPendingVerification(null);
+        await loadRoleForUser(u);
+        return;
+      }
+
+      // 3. Reserve Unique Identifiers in Cloud Firestore (Email + Academic ID)
       await reserveUniqueIdentifiers({
         uid: u.uid,
         email: normEmail,
-        phone: normPhone,
         academicStudentNumber: normAcad
       });
 
-      // 4. Issue Verification Challenge (Real Firebase Email Link + 6-Digit OTP for Email & Phone)
-      let challenge: VerificationChallenge | null = null;
-      if (!isOwner) {
-        challenge = await issueVerificationChallenge(u, {
-          email: normEmail,
-          phone: normPhone
-        });
-        setPendingVerification(challenge);
-      }
+      // 4. Issue Email-Only Verification Challenge
+      const challenge = await issueVerificationChallenge(u, {
+        email: normEmail,
+        method: 'email'
+      });
+      setPendingVerification(challenge);
 
       const newProf: UserProfile = {
         uid: u.uid,
         email: normEmail,
         displayNameArabic: nameArabic.trim(),
-        ...(normPhone ? { phone: normPhone } : {}),
         ...(normAcad ? { academicStudentNumber: normAcad } : {}),
+        registrationMethod: 'email',
         isActive: true,
-        emailVerified: isOwner ? true : Boolean(challenge?.emailVerified),
-        phoneVerified: isOwner ? true : Boolean(challenge?.phoneVerified),
-        isVerified: isOwner ? true : Boolean(challenge?.emailVerified && challenge?.phoneVerified),
-        ...(isOwner ? { verifiedAt: nowIso } : {}),
+        isArchived: false,
+        emailVerified: Boolean(challenge.emailVerified),
+        phoneVerified: true,
+        isVerified: Boolean(challenge.emailVerified),
         createdAt: nowIso,
         updatedAt: nowIso
       };
@@ -389,11 +447,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  /**
+   * Separated Phone Registration: Registers using Yemen Phone Number ONLY (no email required).
+   */
   const registerPhone = async (
     phone: string,
     pass: string,
     nameArabic: string,
-    emailOptional?: string,
     academicStudentNumber?: string
   ) => {
     setLoading(true);
@@ -402,15 +462,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!normPhone) {
         throw new Error('INVALID_PHONE_NUMBER');
       }
-      const normEmail = emailOptional && emailOptional.trim() ? normalizeEmail(emailOptional) : undefined;
       const normAcad = academicStudentNumber && academicStudentNumber.trim()
         ? normalizeAcademicId(academicStudentNumber)
         : undefined;
 
-      // 1. Pre-Creation Uniqueness Validation (Phone + Optional Email + Academic Student Number)
+      // 1. Pre-Creation Uniqueness Validation (Phone + Academic Student Number)
       const uniqueness = await checkIdentifierUniqueness({
         phone: normPhone,
-        email: normEmail,
         academicStudentNumber: normAcad
       });
       if (!uniqueness.isUnique) {
@@ -421,31 +479,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const { user: u, normalizedPhone } = await signUpWithPhone(normPhone, pass);
       const nowIso = new Date().toISOString();
 
-      // 3. Reserve Unique Identifiers in Cloud Firestore
+      // 3. Reserve Unique Identifiers in Cloud Firestore (Phone + Academic ID)
       await reserveUniqueIdentifiers({
         uid: u.uid,
         phone: normalizedPhone,
-        email: normEmail,
         academicStudentNumber: normAcad
       });
 
-      // 4. Issue Verification Challenge for Phone (and Email if provided)
+      // 4. Issue Phone-Only Verification Challenge
       const challenge = await issueVerificationChallenge(u, {
         phone: normalizedPhone,
-        email: normEmail
+        method: 'phone'
       });
       setPendingVerification(challenge);
 
       const newProf: UserProfile = {
         uid: u.uid,
-        email: normEmail || u.email || '',
+        email: '',
         phone: normalizedPhone,
         ...(normAcad ? { academicStudentNumber: normAcad } : {}),
         displayNameArabic: nameArabic.trim(),
+        registrationMethod: 'phone',
         isActive: true,
-        emailVerified: Boolean(challenge.emailVerified),
+        isArchived: false,
+        emailVerified: true,
         phoneVerified: Boolean(challenge.phoneVerified),
-        isVerified: Boolean(challenge.emailVerified && challenge.phoneVerified),
+        isVerified: Boolean(challenge.phoneVerified),
         createdAt: nowIso,
         updatedAt: nowIso
       };
@@ -470,22 +529,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const res = await verifyAccountChallenge(user, params);
     setPendingVerification(res.challenge);
 
-    if (userProfile) {
-      const nowIso = new Date().toISOString();
-      const updatedProf: UserProfile = {
-        ...userProfile,
-        emailVerified: res.emailVerified,
-        phoneVerified: res.phoneVerified,
-        isVerified: res.verified,
-        ...(res.verified ? { verifiedAt: nowIso } : {}),
-        updatedAt: nowIso
-      };
-      await saveUserProfile(updatedProf);
-      setUserProfile(updatedProf);
-      try {
-        localStorage.setItem(`umed_cached_profile_${user.uid}`, JSON.stringify(updatedProf));
-      } catch (e) {}
-    }
+    const nowIso = new Date().toISOString();
+    const baseProf: UserProfile = userProfile || {
+      uid: user.uid,
+      email: user.email && !user.email.startsWith('phone_') ? user.email : '',
+      displayNameArabic: user.displayName || 'طالب طب بشري',
+      isActive: true,
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
+
+    const updatedProf: UserProfile = {
+      ...baseProf,
+      emailVerified: res.emailVerified,
+      phoneVerified: res.phoneVerified,
+      isVerified: res.verified,
+      ...(res.verified ? { verifiedAt: nowIso } : {}),
+      updatedAt: nowIso
+    };
+    await saveUserProfile(updatedProf);
+    setUserProfile(updatedProf);
+    try {
+      localStorage.setItem(`umed_cached_profile_${user.uid}`, JSON.stringify(updatedProf));
+    } catch (e) {}
 
     return { verified: res.verified, message: res.message };
   };
@@ -498,9 +564,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         : user.email && !user.email.startsWith('phone_')
         ? user.email
         : undefined;
+    const method: 'email' | 'phone' | 'both' =
+      pendingVerification?.verificationMethod ||
+      userProfile?.registrationMethod === 'phone'
+        ? 'phone'
+        : userProfile?.registrationMethod === 'email'
+        ? 'email'
+        : userProfile?.phone && !realEmail
+        ? 'phone'
+        : 'email';
+
     const ch = await issueVerificationChallenge(user, {
-      email: realEmail,
-      phone: userProfile?.phone
+      email: method === 'email' || method === 'both' ? realEmail : undefined,
+      phone: method === 'phone' || method === 'both' ? userProfile?.phone : undefined,
+      method
     });
     setPendingVerification(ch);
     return ch;
@@ -508,6 +585,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const startAccountVerification = async (): Promise<VerificationChallenge | null> => {
     return resendVerification();
+  };
+
+  const deleteOwnAccount = async (): Promise<void> => {
+    if (!user) throw new Error('لا يوجد حساب مسجل حالياً');
+    if (isInitialOwnerEmail(user.email)) {
+      throw new Error('لا يمكن حذف الحساب الأساسي لمالك المنصة (Primary Platform Owner).');
+    }
+    setLoading(true);
+    try {
+      await deleteUserAccountCompletelyFromCloud({
+        targetUid: user.uid,
+        performedBy: user.email || userProfile?.phone || user.uid,
+        isSelfDelete: true
+      });
+      setUser(null);
+      setRoleDoc(null);
+      setUserProfile(null);
+      setPendingVerification(null);
+      setActiveRoleOverride(null);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const logout = async () => {
@@ -531,7 +630,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return result;
   };
 
-  // True administrative/leadership privilege check (never granted to regular unpromoted students)
   const isAuthorizedAdmin = Boolean(
     user &&
       (roleDoc?.role === 'platform_owner' ||
@@ -546,14 +644,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       ? 'platform_owner'
       : roleDoc?.role || 'student';
 
-  // Only allow role preview switching if the user is an authorized leader/admin
   const effectiveRole: UserRole = isAuthorizedAdmin
     ? activeRoleOverride || realRole
     : 'student';
 
+  const isAccountArchived = Boolean(
+    user &&
+      !isInitialOwnerEmail(user.email) &&
+      realRole !== 'platform_owner' &&
+      (userProfile?.isArchived === true || userProfile?.isActive === false)
+  );
+
   const handleSetActiveRole = (r: UserRole) => {
     if (!isAuthorizedAdmin) return;
-    // Prevent non-owners from escalating their preview mode above their realRole
     const rank: Record<UserRole, number> = {
       platform_owner: 5,
       university_admin: 4,
@@ -596,12 +699,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         verifyCurrentAccount,
         resendVerification,
         startAccountVerification,
+        deleteOwnAccount,
         logout,
         bootstrapInitialOwner,
         checkConnectivity,
         activeRole: effectiveRole,
+        realRole,
         setActiveRole: handleSetActiveRole,
         isAuthorizedAdmin,
+        isAccountArchived,
         refreshRole
       }}
     >

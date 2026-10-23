@@ -373,8 +373,8 @@ export default function ExamTakingModal({
       )}
 
       {showConfirmSubmit && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4" dir="rtl">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full space-y-5 shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-start sm:items-center justify-center p-3 sm:p-4 overflow-y-auto overscroll-contain" dir="rtl">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 max-w-md w-full max-h-[calc(100dvh-1.5rem)] sm:max-h-[90dvh] overflow-y-auto my-auto space-y-5 shadow-2xl">
             <div className="flex items-center gap-3 text-amber-400">
               <AlertTriangle className="w-6 h-6" />
               <h3 className="text-base font-bold text-white">تأكيد التسليم النهائي للاختبار</h3>

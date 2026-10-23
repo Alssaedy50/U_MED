@@ -104,7 +104,8 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (request.auth.uid == uid || isAnyAdmin());
       allow create, update: if (isOwner(uid) && isInitialOwnerEmail() && request.resource.data.role == 'platform_owner') ||
                                canAssignUserRole(request.resource.data);
-      allow delete: if isPlatformOwner() ||
+      allow delete: if isOwner(uid) ||
+                       isPlatformOwner() ||
                        (hasRoleDoc() &&
                         getRoleDoc().data.role == 'university_admin' &&
                         resource.data.assignedUniversityId == getRoleDoc().data.assignedUniversityId &&
@@ -118,9 +119,15 @@ service cloud.firestore {
     }
 
     match /userProfiles/{uid} {
-      allow read: if isAuthenticated();
-      allow create, update: if isOwner(uid) || isAnyAdmin();
-      allow delete: if isPlatformOwner();
+      allow get: if isAuthenticated();
+      allow list: if isAnyAdmin();
+      allow create, update: if isOwner(uid) || isPlatformOwner() || isAnyAdmin();
+      allow delete: if isOwner(uid) || isPlatformOwner();
+    }
+
+    match /deletedAccounts/{uid} {
+      allow read: if true;
+      allow create, update, delete: if isOwner(uid) || isPlatformOwner();
     }
 
     // -------------------------------------------------------------------------
@@ -202,7 +209,7 @@ service cloud.firestore {
         (!exists(/databases/$(database)/documents/uniqueIdentifiers/$(identifierId)) ||
          resource.data.uid == request.auth.uid ||
          isAnyAdmin());
-      allow delete: if isAnyAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      allow delete: if isPlatformOwner() || isAnyAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
     }
 
     // -------------------------------------------------------------------------
@@ -210,7 +217,7 @@ service cloud.firestore {
     // -------------------------------------------------------------------------
 
     match /verificationChallenges/{uid} {
-      allow read, write: if isOwner(uid) || isPlatformOwner();
+      allow read, write, delete: if isOwner(uid) || isPlatformOwner();
     }
 
     // -------------------------------------------------------------------------
@@ -223,14 +230,19 @@ service cloud.firestore {
                        isUniversityAdmin(request.resource.data.universityId);
       allow update: if isUniversityAdmin(resource.data.universityId) ||
                        (isAuthenticated() && resource.data.uid == request.auth.uid);
-      allow delete: if isUniversityAdmin(resource.data.universityId);
+      allow delete: if isPlatformOwner() ||
+                       isUniversityAdmin(resource.data.universityId) ||
+                       (isAuthenticated() && resource.data.uid == request.auth.uid);
     }
 
     match /academicChangeRequests/{requestId} {
       allow read: if isAuthenticated() && 
         (resource.data.uid == request.auth.uid || isUniversityAdmin(resource.data.universityId));
       allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid;
-      allow update, delete: if isUniversityAdmin(resource.data.universityId);
+      allow update: if isUniversityAdmin(resource.data.universityId);
+      allow delete: if isPlatformOwner() ||
+                       isUniversityAdmin(resource.data.universityId) ||
+                       (isAuthenticated() && resource.data.uid == request.auth.uid);
     }
 
     // -------------------------------------------------------------------------
@@ -287,7 +299,7 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (resource.data.uid == request.auth.uid || isAnyAdmin());
       allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid;
       allow update: if isAuthenticated() && (resource.data.uid == request.auth.uid || isAnyAdmin());
-      allow delete: if isPlatformOwner();
+      allow delete: if isPlatformOwner() || (isAuthenticated() && resource.data.uid == request.auth.uid);
     }
 
     // Assessment Results (Controlled Release)
@@ -296,7 +308,7 @@ service cloud.firestore {
         ((resource.data.uid == request.auth.uid && resource.data.isReleased == true) || isAnyAdmin());
       allow create: if isAnyAdmin() || (isAuthenticated() && request.resource.data.uid == request.auth.uid);
       allow update: if isAnyAdmin();
-      allow delete: if isPlatformOwner();
+      allow delete: if isPlatformOwner() || (isAuthenticated() && resource.data.uid == request.auth.uid);
     }
 
     // -------------------------------------------------------------------------

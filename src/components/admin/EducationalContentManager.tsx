@@ -696,16 +696,21 @@ export default function EducationalContentManager({
 
       {/* Modal: Add Educational Resource */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl my-8">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-start sm:items-center justify-center p-2.5 sm:p-4 overflow-y-auto overscroll-contain">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full max-h-[calc(100dvh-1.25rem)] sm:max-h-[90dvh] flex flex-col shadow-2xl my-auto overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3.5 sm:px-6 sm:py-4 border-b border-slate-800 bg-slate-900 shrink-0">
               <h3 className="font-bold text-white text-sm">إضافة ونشر مورد تعليمي طبي جديد</h3>
-              <button onClick={() => setShowAddModal(false)} className="text-slate-400 hover:text-white">
+              <button
+                type="button"
+                onClick={() => setShowAddModal(false)}
+                className="p-1.5 rounded-lg bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700 transition-colors"
+                title="إغلاق النافذة"
+              >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateResource} className="space-y-3 text-xs">
+            <form onSubmit={handleCreateResource} className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3.5 text-xs overscroll-contain">
               <div>
                 <label className="block text-slate-300 mb-1 font-semibold">عنوان المحاضرة / المورد بالعربية:</label>
                 <input
@@ -1013,17 +1018,17 @@ export default function EducationalContentManager({
                 </div>
               </div>
 
-              <div className="pt-3 flex justify-end gap-2">
+              <div className="pt-3 border-t border-slate-800 flex justify-end gap-2 sticky bottom-0 bg-slate-900 pb-1">
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300"
+                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold"
                 >
                   إلغاء
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-teal-600 text-white font-bold hover:bg-teal-500"
+                  className="px-5 py-2.5 rounded-xl bg-teal-600 text-white font-bold hover:bg-teal-500 shadow-lg shadow-teal-600/20"
                 >
                   حفظ وتأكيد النشر
                 </button>
@@ -1035,16 +1040,21 @@ export default function EducationalContentManager({
 
       {/* Modal: Edit Educational Resource */}
       {editingResource && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl my-8">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-start sm:items-center justify-center p-2.5 sm:p-4 overflow-y-auto overscroll-contain">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full max-h-[calc(100dvh-1.25rem)] sm:max-h-[90dvh] flex flex-col shadow-2xl my-auto overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3.5 sm:px-6 sm:py-4 border-b border-slate-800 bg-slate-900 shrink-0">
               <h3 className="font-bold text-white text-sm">تعديل بيانات المورد التعليمي</h3>
-              <button onClick={() => setEditingResource(null)} className="text-slate-400 hover:text-white">
+              <button
+                type="button"
+                onClick={() => setEditingResource(null)}
+                className="p-1.5 rounded-lg bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700 transition-colors"
+                title="إغلاق النافذة"
+              >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleUpdateResource} className="space-y-3 text-xs">
+            <form onSubmit={handleUpdateResource} className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3.5 text-xs overscroll-contain">
               <div>
                 <label className="block text-slate-300 mb-1 font-semibold">عنوان المحاضرة / المورد بالعربية:</label>
                 <input
@@ -1205,17 +1215,17 @@ export default function EducationalContentManager({
                 </div>
               </div>
 
-              <div className="pt-3 flex justify-end gap-2">
+              <div className="pt-3 border-t border-slate-800 flex justify-end gap-2 sticky bottom-0 bg-slate-900 pb-1">
                 <button
                   type="button"
                   onClick={() => setEditingResource(null)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300"
+                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold"
                 >
                   إلغاء
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-teal-600 text-white font-bold hover:bg-teal-500"
+                  className="px-5 py-2.5 rounded-xl bg-teal-600 text-white font-bold hover:bg-teal-500 shadow-lg shadow-teal-600/20"
                 >
                   حفظ التعديلات
                 </button>

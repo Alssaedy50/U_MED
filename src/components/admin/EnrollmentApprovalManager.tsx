@@ -674,11 +674,11 @@ export default function EnrollmentApprovalManager({
 
       {/* MODAL: DIRECT EDIT ENROLLMENT */}
       {editingEnrollment && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4" dir="rtl">
-          <form onSubmit={handleSaveEnrollmentEdit} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-start sm:items-center justify-center p-3 sm:p-4 overflow-y-auto overscroll-contain" dir="rtl">
+          <form onSubmit={handleSaveEnrollmentEdit} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 max-w-md w-full max-h-[calc(100dvh-1.5rem)] sm:max-h-[90dvh] overflow-y-auto my-auto space-y-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <h3 className="text-sm font-bold text-white">تعديل قيد الطالب مباشرة</h3>
-              <button type="button" onClick={() => setEditingEnrollment(null)} className="text-slate-400 hover:text-white">
+              <button type="button" onClick={() => setEditingEnrollment(null)} className="p-1.5 rounded-lg bg-slate-800/80 text-slate-300 hover:text-white">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -756,14 +756,14 @@ export default function EnrollmentApprovalManager({
 
       {/* MODAL: ADD & APPROVE NEW STUDENT DIRECTLY */}
       {showAddStudentModal && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4" dir="rtl">
-          <form onSubmit={handleAddAndApproveStudent} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-start sm:items-center justify-center p-3 sm:p-4 overflow-y-auto overscroll-contain" dir="rtl">
+          <form onSubmit={handleAddAndApproveStudent} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 max-w-md w-full max-h-[calc(100dvh-1.5rem)] sm:max-h-[90dvh] overflow-y-auto my-auto space-y-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <h3 className="text-sm font-bold text-white flex items-center gap-2">
                 <UserPlus className="w-4 h-4 text-teal-400" />
                 <span>تسجيل واعتماد قيد طالب جديد مباشرة</span>
               </h3>
-              <button type="button" onClick={() => setShowAddStudentModal(false)} className="text-slate-400 hover:text-white">
+              <button type="button" onClick={() => setShowAddStudentModal(false)} className="p-1.5 rounded-lg bg-slate-800/80 text-slate-300 hover:text-white">
                 <X className="w-4 h-4" />
               </button>
             </div>

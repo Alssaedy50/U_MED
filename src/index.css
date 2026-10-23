@@ -6,6 +6,49 @@
     font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
     overflow-x: hidden;
     max-width: 100vw;
+    min-height: 100dvh;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  select,
+  input,
+  textarea {
+    max-width: 100%;
+  }
+}
+
+/* Safe modal scroll container utility: prevents flex items-center from clipping top content on mobile viewports */
+.umed-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 0.75rem;
+}
+
+@media (min-width: 640px) {
+  .umed-modal-overlay {
+    align-items: center;
+    padding: 1.25rem;
+  }
+}
+
+.umed-modal-panel {
+  margin-top: auto;
+  margin-bottom: auto;
+  max-height: calc(100dvh - 1.5rem);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+@media (min-width: 640px) {
+  .umed-modal-panel {
+    max-height: 90dvh;
   }
 }
 

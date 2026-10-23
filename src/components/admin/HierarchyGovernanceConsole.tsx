@@ -1523,8 +1523,8 @@ export default function HierarchyGovernanceConsole({
 
       {/* Modal: Quick Add Independent University (Platform Owner) */}
       {showNewUnivModal && callerRole === 'platform_owner' && (
-        <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4">
-          <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+        <div className="fixed inset-0 z-50 bg-black/75 flex items-start sm:items-center justify-center p-3 sm:p-4 overflow-y-auto overscroll-contain">
+          <div className="max-w-md w-full max-h-[calc(100dvh-1.5rem)] sm:max-h-[90dvh] overflow-y-auto my-auto bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 space-y-4 shadow-2xl">
             <h3 className="text-base font-bold text-white">إضافة جامعة يمنية مستقلة جديدة</h3>
             <p className="text-xs text-slate-400">
               سيتم إنشاء هيكل أكاديمي ومستويات دراسية مستقلة تماماً لهذه الجامعة بحيث تكون معزولة عن بقية الجامعات.
