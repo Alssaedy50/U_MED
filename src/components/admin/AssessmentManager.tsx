@@ -121,6 +121,7 @@ export default function AssessmentManager({
 
   // Assessments State
   const [assessments, setAssessments] = useState<Assessment[]>([]);
+  const [assessmentFilterType, setAssessmentFilterType] = useState<'all' | 'exam' | 'competition'>('all');
   const [showNewAssessmentForm, setShowNewAssessmentForm] = useState<boolean>(false);
   const [assessmentType, setAssessmentType] = useState<AssessmentType>('exam');
   const [titleArabic, setTitleArabic] = useState<string>('');
@@ -449,7 +450,13 @@ export default function AssessmentManager({
       setTitleArabic('');
       setDescArabic('');
       setShowNewAssessmentForm(false);
-      setStatusMsg({ type: 'success', text: 'تم نشر الاختبار / المسابقة وربط الأسئلة بنجاح' });
+      setStatusMsg({
+        type: 'success',
+        text:
+          assessmentType === 'competition'
+            ? `تم نشر المسابقة الطبية فقط ("${created.titleArabic}") وربط الأسئلة بنجاح ✓`
+            : `تم نشر الاختبار الأكاديمي فقط ("${created.titleArabic}") وربط الأسئلة بنجاح ✓`
+      });
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err.message || 'فشل النشر' });
     }
@@ -1101,33 +1108,100 @@ export default function AssessmentManager({
       {/* TAB 2: ASSESSMENTS CREATOR & MANAGER */}
       {activeTab === 'assessments' && (
         <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-bold text-white">الامتحانات والمسابقات ({assessments.length})</h3>
-            <button
-              onClick={() => setShowNewAssessmentForm(true)}
-              className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-lg"
-            >
-              <Plus className="w-4 h-4" />
-              <span>إنشاء اختبار / مسابقة جديدة</span>
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/90 border border-slate-800 p-4 rounded-2xl">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setAssessmentFilterType('all')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  assessmentFilterType === 'all'
+                    ? 'bg-slate-700 text-white shadow'
+                    : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                }`}
+              >
+                الكل ({assessments.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setAssessmentFilterType('exam')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  assessmentFilterType === 'exam'
+                    ? 'bg-teal-600 text-white shadow'
+                    : 'bg-slate-950 text-teal-400 hover:text-white border border-slate-800'
+                }`}
+              >
+                📝 الاختبارات فقط ({assessments.filter(a => a.assessmentType === 'exam').length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setAssessmentFilterType('competition')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  assessmentFilterType === 'competition'
+                    ? 'bg-amber-600 text-white shadow'
+                    : 'bg-slate-950 text-amber-400 hover:text-white border border-slate-800'
+                }`}
+              >
+                🏆 المسابقات فقط ({assessments.filter(a => a.assessmentType === 'competition').length})
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setAssessmentType('exam');
+                  setDurationMinutes(30);
+                  setMaxAttempts(2);
+                  setShowNewAssessmentForm(true);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-lg"
+              >
+                <Plus className="w-4 h-4" />
+                <span>إنشاء اختبار أكاديمي فقط</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAssessmentType('competition');
+                  setDurationMinutes(15);
+                  setMaxAttempts(1);
+                  setShowNewAssessmentForm(true);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-lg"
+              >
+                <Plus className="w-4 h-4" />
+                <span>إنشاء مسابقة طبية فقط</span>
+              </button>
+            </div>
           </div>
 
           {showNewAssessmentForm && (
             <form onSubmit={handleCreateAssessment} className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-4 shadow-2xl">
-              <h4 className="text-sm font-bold text-amber-400 border-b border-slate-800 pb-2">
-                إعداد ونشر تقييم أكاديمي جديد
-              </h4>
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <h4 className={`text-sm font-bold ${assessmentType === 'competition' ? 'text-amber-400' : 'text-teal-400'}`}>
+                  {assessmentType === 'competition'
+                    ? '🏆 إعداد ونشر مسابقة طبية تنافسية فقط'
+                    : '📝 إعداد ونشر اختبار مادة أكاديمي فقط'}
+                </h4>
+                <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+                  assessmentType === 'competition'
+                    ? 'bg-amber-950/80 border-amber-700 text-amber-300'
+                    : 'bg-teal-950/80 border-teal-700 text-teal-300'
+                }`}>
+                  {assessmentType === 'competition' ? 'ينشر في قسم المسابقات فقط' : 'ينشر في قسم الاختبارات فقط'}
+                </span>
+              </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs text-slate-400 block mb-1">نوع التقييم</label>
+                  <label className="text-xs text-slate-400 block mb-1">نوع النشر (حصري ومستقل)</label>
                   <select
                     value={assessmentType}
                     onChange={(e) => setAssessmentType(e.target.value as AssessmentType)}
                     className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-bold"
                   >
-                    <option value="exam">امتحان مادة أسبوعي / نهائي</option>
-                    <option value="competition">مسابقة طبية تنافسية</option>
+                    <option value="exam">📝 اختبار مادة أكاديمي فقط (Exam Only)</option>
+                    <option value="competition">🏆 مسابقة طبية تنافسية فقط (Competition Only)</option>
                   </select>
                 </div>
 
@@ -1257,16 +1331,22 @@ export default function AssessmentManager({
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition-colors shadow-lg"
+                  className={`px-6 py-2 rounded-xl text-white text-xs font-bold transition-colors shadow-lg ${
+                    assessmentType === 'competition'
+                      ? 'bg-amber-600 hover:bg-amber-500'
+                      : 'bg-teal-600 hover:bg-teal-500'
+                  }`}
                 >
-                  حفظ ونشر التقييم
+                  {assessmentType === 'competition' ? 'حفظ ونشر كمسابقة طبية فقط' : 'حفظ ونشر كاختبار أكاديمي فقط'}
                 </button>
               </div>
             </form>
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {assessments.map(a => (
+            {assessments
+              .filter(a => assessmentFilterType === 'all' || a.assessmentType === assessmentFilterType)
+              .map(a => (
               <div key={a.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -1784,23 +1864,37 @@ export default function AssessmentManager({
         </div>
       )}
 
-      {/* MODAL: BULK QUESTION IMPORT (OFFLINE-FIRST + OPTIONAL AI EXPLANATIONS) */}
+      {/* MODAL: BULK QUESTION IMPORT (OFFLINE-FIRST + DIRECT SINGLE-MODE PUBLISHING) */}
       {showBulkImportModal && selectedBank && (
         <BulkQuestionImportModal
           bank={selectedBank}
           existingQuestions={bankQuestions}
           userRole={userRole}
+          studyLevels={studyLevels}
+          defaultStudyLevelId={studyLevelId}
           onClose={() => setShowBulkImportModal(false)}
           onSaved={(result) => {
             setBankQuestions(result.savedQuestions);
+            if (result.publishedAssessment) {
+              setAssessments((prev) => [
+                result.publishedAssessment!,
+                ...prev.filter((a) => a.id !== result.publishedAssessment!.id)
+              ]);
+            }
+
+            const modeSummary =
+              result.publishMode === 'exam_only' && result.publishedAssessment
+                ? `وتم نشره كـ "اختبار أكاديمي فقط" بعنوان (${result.publishedAssessment.titleArabic})`
+                : result.publishMode === 'competition_only' && result.publishedAssessment
+                ? `وتم نشره كـ "مسابقة طبية فقط" بعنوان (${result.publishedAssessment.titleArabic})`
+                : 'في بنك الأسئلة فقط';
+
             setStatusMsg({
               type: 'success',
-              text: `تم حفظ الدفعة بنجاح: ${result.createdCount} سؤال جديد، و${result.updatedCount} سؤال محدّث${
-                result.skippedDuplicatesCount > 0 ? ` (تم تخطي ${result.skippedDuplicatesCount} مكرر)` : ''
-              } — ${
+              text: `تم اعتماد الدفعة بنجاح (${result.createdCount} جديد، ${result.updatedCount} محدّث) ${modeSummary} — ${
                 result.syncedImmediately
                   ? 'تمت المزامنة السحابية فوراً ✓'
-                  : 'محفوظ بأمان على الجهاز وسيتم مزامنته تلقائياً فور توفر الإنترنت'
+                  : 'محفوظ محلياً وسيتم مزامنته تلقائياً فور توفر الإنترنت'
               }`
             });
           }}

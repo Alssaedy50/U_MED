@@ -35,6 +35,7 @@ import {
   getStudentResults,
   subscribeToAssessments
 } from '../../services/assessmentService.ts';
+import { syncNotificationsForAssessments } from '../../services/notificationService.ts';
 import ExamTakingModal from './ExamTakingModal.tsx';
 
 interface StudentAssessmentListProps {
@@ -42,15 +43,21 @@ interface StudentAssessmentListProps {
   studyLevelId: string;
   uid: string;
   studentNameArabic?: string;
+  initialAssessmentType?: AssessmentType;
+  highlightedAssessmentId?: string;
+  navigationTimestamp?: number;
 }
 
 export default function StudentAssessmentList({
   universityId,
   studyLevelId,
   uid,
-  studentNameArabic
+  studentNameArabic,
+  initialAssessmentType,
+  highlightedAssessmentId,
+  navigationTimestamp
 }: StudentAssessmentListProps) {
-  const [activeTab, setActiveTab] = useState<AssessmentType>('exam');
+  const [activeTab, setActiveTab] = useState<AssessmentType>(initialAssessmentType || 'exam');
   const [assessments, setAssessments] = useState<Assessment[]>(() =>
     getCachedPublishedAssessments(universityId, studyLevelId)
   );
@@ -65,6 +72,22 @@ export default function StudentAssessmentList({
   const [activeQuestions, setActiveQuestions] = useState<AssessmentQuestionPublic[]>([]);
   const [startingAttempt, setStartingAttempt] = useState<string | null>(null);
 
+  // Synchronize activeTab when navigated from a notification (Exam vs Competition)
+  useEffect(() => {
+    if (initialAssessmentType === 'competition' || initialAssessmentType === 'exam') {
+      setActiveTab(initialAssessmentType);
+    }
+  }, [initialAssessmentType, navigationTimestamp]);
+
+  // Also auto-detect tab if highlightedAssessmentId matches a known assessment
+  useEffect(() => {
+    if (!highlightedAssessmentId || assessments.length === 0) return;
+    const target = assessments.find((a) => a.id === highlightedAssessmentId);
+    if (target && (target.assessmentType === 'competition' || target.assessmentType === 'exam')) {
+      setActiveTab(target.assessmentType);
+    }
+  }, [highlightedAssessmentId, assessments]);
+
   const loadData = async (showSpinner = false) => {
     if (showSpinner) setLoading(true);
     setStatusMsg(null);
@@ -77,6 +100,7 @@ export default function StudentAssessmentList({
       setAssessments(list);
       setAttempts(userAttempts);
       setResults(userResults);
+      syncNotificationsForAssessments(uid, list, universityId, studyLevelId);
     } catch (err: any) {
       console.error('Failed to load assessments:', err);
       setStatusMsg({ type: 'error', text: 'حدث خطأ أثناء تحميل التقييمات' });
@@ -89,17 +113,17 @@ export default function StudentAssessmentList({
     const cached = getCachedPublishedAssessments(universityId, studyLevelId);
     if (cached.length > 0) {
       setAssessments(cached);
+      syncNotificationsForAssessments(uid, cached, universityId, studyLevelId);
     }
     loadData(cached.length === 0);
     const unsub = subscribeToAssessments(
       universityId,
       (liveList) => {
         const published = liveList.filter(
-          a => a.status === 'published' && (!a.studyLevelId || a.studyLevelId === studyLevelId)
+          a => a.status === 'published' && (!a.studyLevelId || a.studyLevelId === studyLevelId || a.studyLevelId === 'ALL')
         );
-        if (published.length > 0) {
-          setAssessments(published);
-        }
+        setAssessments(published);
+        syncNotificationsForAssessments(uid, published, universityId, studyLevelId);
       },
       undefined,
       'published'
@@ -123,7 +147,15 @@ export default function StudentAssessmentList({
     }
   };
 
-  const filteredAssessments = assessments.filter(a => a.assessmentType === activeTab);
+  const filteredAssessments = assessments
+    .filter(a => a.assessmentType === activeTab)
+    .sort((a, b) => {
+      if (highlightedAssessmentId) {
+        if (a.id === highlightedAssessmentId) return -1;
+        if (b.id === highlightedAssessmentId) return 1;
+      }
+      return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+    });
 
   return (
     <div className="space-y-6" dir="rtl">
@@ -209,22 +241,37 @@ export default function StudentAssessmentList({
             const attemptCount = userAttemptList.length;
             const hasMaxAttempts = attemptCount >= assessment.maxAttempts && !activeInProgressAttempt;
 
+            const isHighlighted = Boolean(highlightedAssessmentId && highlightedAssessmentId === assessment.id);
+
             return (
               <div 
                 key={assessment.id}
-                className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl hover:border-slate-700 transition-all space-y-4 flex flex-col justify-between"
+                className={`bg-slate-900 rounded-2xl p-5 shadow-xl transition-all space-y-4 flex flex-col justify-between border ${
+                  isHighlighted
+                    ? activeTab === 'competition'
+                      ? 'border-amber-500 ring-2 ring-amber-500/30 bg-amber-950/15'
+                      : 'border-teal-500 ring-2 ring-teal-500/30 bg-teal-950/15'
+                    : 'border-slate-800 hover:border-slate-700'
+                }`}
               >
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
-                      isOpen 
-                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' 
-                        : isUpcoming 
-                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
-                        : 'bg-slate-800 text-slate-400 border-slate-700'
-                    }`}>
-                      {isOpen ? 'متاح الآن' : isUpcoming ? 'قادم قريباً' : 'مغلق / منتهي'}
-                    </span>
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+                        isOpen 
+                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' 
+                          : isUpcoming 
+                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                          : 'bg-slate-800 text-slate-400 border-slate-700'
+                      }`}>
+                        {isOpen ? 'متاح الآن' : isUpcoming ? 'قادم قريباً' : 'مغلق / منتهي'}
+                      </span>
+                      {isHighlighted && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/40">
+                          مفتوح من الإشعار ✓
+                        </span>
+                      )}
+                    </div>
 
                     <span className="text-[11px] text-slate-400 font-mono">
                       المحاولات المكتملة: {attemptCount}/{assessment.maxAttempts}

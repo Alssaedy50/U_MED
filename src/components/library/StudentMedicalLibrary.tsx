@@ -29,6 +29,10 @@ import {
   getCachedEducationalResources,
   subscribeToEducationalResources
 } from '../../services/resourceService.ts';
+import {
+  getActiveNotificationUser,
+  syncNotificationsForResources
+} from '../../services/notificationService.ts';
 import ResourcePreviewModal from './ResourcePreviewModal.tsx';
 
 interface StudentMedicalLibraryProps {
@@ -68,6 +72,10 @@ export default function StudentMedicalLibrary({
         status: 'published' // Students strictly see published content
       });
       setResources(list);
+      const activeUid = getActiveNotificationUser();
+      if (activeUid && activeUid !== 'guest') {
+        syncNotificationsForResources(activeUid, list, universityId, studyLevelId);
+      }
     } catch (err) {
       console.warn('Failed to load educational resources:', err);
     } finally {
@@ -96,6 +104,10 @@ export default function StudentMedicalLibrary({
       (liveList) => {
         setResources(liveList);
         setLoading(false);
+        const activeUid = getActiveNotificationUser();
+        if (activeUid && activeUid !== 'guest') {
+          syncNotificationsForResources(activeUid, liveList, universityId, studyLevelId);
+        }
       }
     );
     return () => unsub();

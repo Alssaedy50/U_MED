@@ -764,11 +764,6 @@ async function ensureAssessmentsInitialized(universityId: string): Promise<Asses
   if (localStorage.getItem(initKey) !== 'true') {
     localStorage.setItem(`${LOCAL_STORAGE_PREFIX}assessments_${universityId}`, JSON.stringify(current));
     localStorage.setItem(initKey, 'true');
-    for (const a of current) {
-      try {
-        await setDoc(doc(db, 'assessments', a.id), a, { merge: true });
-      } catch (e) {}
-    }
   }
   return current;
 }
@@ -778,11 +773,14 @@ export async function createAssessment(
   bankQuestions?: QuestionItemFull[]
 ): Promise<Assessment> {
   const existing = await ensureAssessmentsInitialized(assessment.universityId);
-  const id = `asmnt-${Date.now()}`;
+  const strictType: AssessmentType = assessment.assessmentType === 'competition' ? 'competition' : 'exam';
+  const prefix = strictType === 'competition' ? 'comp' : 'exam';
+  const id = `${prefix}-${Date.now()}`;
   unmarkAssessmentDeleted(id);
   const now = new Date().toISOString();
   const newAssessment: Assessment = {
     ...assessment,
+    assessmentType: strictType,
     id,
     createdAt: now
   };

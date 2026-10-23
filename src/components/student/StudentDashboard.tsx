@@ -32,7 +32,8 @@ import {
   University
 } from '../../types/umed.ts';
 import { 
-  fetchStudentEnrollment
+  fetchStudentEnrollment,
+  subscribeToStudentEnrollment
 } from '../../services/enrollmentService.ts';
 import { 
   fetchStudyPeriods, 
@@ -50,6 +51,10 @@ import {
   subscribeToCourseInstructors
 } from '../../services/batchGovernanceService.ts';
 import { resolveResourceFileUrl } from '../../services/resourceService.ts';
+import {
+  syncNotificationsForBatchPosts,
+  syncNotificationForEnrollment
+} from '../../services/notificationService.ts';
 import RegisterEnrollment from './RegisterEnrollment.tsx';
 import StudentMedicalLibrary from '../library/StudentMedicalLibrary.tsx';
 import StudentAssessmentList from '../assessment/StudentAssessmentList.tsx';
@@ -61,6 +66,14 @@ interface StudentDashboardProps {
   activeSection?: 'study' | 'library' | 'assessments';
   onSelectSection?: (section: 'study' | 'library' | 'assessments' | 'profile') => void;
   onEnrollmentStatusChange?: (enr: StudentEnrollment | null) => void;
+  isAdminPreview?: boolean;
+  previewUniversityId?: string;
+  previewStudyLevelId?: string;
+  assessmentNavTarget?: {
+    assessmentType?: 'exam' | 'competition';
+    assessmentId?: string;
+    timestamp?: number;
+  } | null;
 }
 
 export default function StudentDashboard({
@@ -68,13 +81,40 @@ export default function StudentDashboard({
   displayNameArabic,
   activeSection = 'study',
   onSelectSection,
-  onEnrollmentStatusChange
+  onEnrollmentStatusChange,
+  isAdminPreview = false,
+  previewUniversityId = 'univ-dar-al-salam',
+  previewStudyLevelId = 'lvl-4',
+  assessmentNavTarget
 }: StudentDashboardProps) {
+  const buildAdminPreviewEnrollment = (): StudentEnrollment => ({
+    id: `enr-preview-${uid}`,
+    uid,
+    studentNameArabic: displayNameArabic || 'معاينة المسؤول',
+    academicStudentNumber: 'ADMIN-PREVIEW',
+    universityId: previewUniversityId || 'univ-dar-al-salam',
+    collegeId: 'col-med-dar',
+    programId: 'prog-mbbs',
+    curriculumVersionId: 'cur-dar-2024',
+    currentStudyLevelId: previewStudyLevelId || 'lvl-4',
+    academicYear: '2025-2026',
+    status: 'approved',
+    enrolledAt: new Date().toISOString()
+  });
+
   const [enrollment, setEnrollment] = useState<StudentEnrollment | null>(() => {
     try {
       const cached = localStorage.getItem(`umed_enrollment_${uid}`);
-      if (cached) return JSON.parse(cached) as StudentEnrollment;
+      if (cached) {
+        const parsed = JSON.parse(cached) as StudentEnrollment;
+        if (parsed && (parsed.status === 'approved' || !isAdminPreview)) {
+          return parsed;
+        }
+      }
     } catch (e) {}
+    if (isAdminPreview) {
+      return buildAdminPreviewEnrollment();
+    }
     return null;
   });
   const [universities, setUniversities] = useState<University[]>(() =>
@@ -147,20 +187,32 @@ export default function StudentDashboard({
         fetchUniversities('YE')
       ]);
       setUniversities(univList);
-      setEnrollment(enr);
+      const effectiveEnrollment =
+        enr && enr.status === 'approved'
+          ? enr
+          : isAdminPreview
+          ? buildAdminPreviewEnrollment()
+          : enr;
+      setEnrollment(effectiveEnrollment);
       if (onEnrollmentStatusChange) {
-        onEnrollmentStatusChange(enr);
+        onEnrollmentStatusChange(effectiveEnrollment);
       }
 
-      if (enr && enr.status === 'approved') {
+      if (effectiveEnrollment && effectiveEnrollment.status === 'approved') {
         const [periods, instList, notifList] = await Promise.all([
-          fetchStudyPeriods(enr.currentStudyLevelId, enr.universityId),
-          fetchCourseInstructors({ universityId: enr.universityId, studyLevelId: enr.currentStudyLevelId }),
-          fetchBatchNotifications({ universityId: enr.universityId, studyLevelId: enr.currentStudyLevelId })
+          fetchStudyPeriods(effectiveEnrollment.currentStudyLevelId, effectiveEnrollment.universityId),
+          fetchCourseInstructors({ universityId: effectiveEnrollment.universityId, studyLevelId: effectiveEnrollment.currentStudyLevelId }),
+          fetchBatchNotifications({ universityId: effectiveEnrollment.universityId, studyLevelId: effectiveEnrollment.currentStudyLevelId })
         ]);
         setStudyPeriods(periods);
         setInstructors(instList);
         setBatchNotifications(notifList);
+        syncNotificationsForBatchPosts(
+          uid,
+          notifList,
+          effectiveEnrollment.universityId,
+          effectiveEnrollment.currentStudyLevelId
+        );
         setSelectedPeriod(prev => {
           if (prev && periods.some(p => p.id === prev.id)) {
             return periods.find(p => p.id === prev.id) || periods[0] || null;
@@ -177,6 +229,17 @@ export default function StudentDashboard({
 
   useEffect(() => {
     loadStudentData(false);
+    if (!uid) return;
+    const unsubEnrollment = subscribeToStudentEnrollment(uid, (liveEnr) => {
+      if (liveEnr) {
+        syncNotificationForEnrollment(uid, liveEnr);
+        setEnrollment(liveEnr);
+        if (onEnrollmentStatusChange) {
+          onEnrollmentStatusChange(liveEnr);
+        }
+      }
+    });
+    return () => unsubEnrollment();
   }, [uid]);
 
   // Subscribe in real-time to Batch Notifications, Course Instructors, and Academic Structure
@@ -186,7 +249,15 @@ export default function StudentDashboard({
     const unsubNotifs = subscribeToBatchNotifications(
       enrollment.universityId,
       enrollment.currentStudyLevelId,
-      (notifs) => setBatchNotifications(notifs)
+      (notifs) => {
+        setBatchNotifications(notifs);
+        syncNotificationsForBatchPosts(
+          uid,
+          notifs,
+          enrollment.universityId,
+          enrollment.currentStudyLevelId
+        );
+      }
     );
 
     const unsubInstructors = subscribeToCourseInstructors(
@@ -453,6 +524,9 @@ export default function StudentDashboard({
           studyLevelId={enrollment.currentStudyLevelId}
           uid={uid}
           studentNameArabic={displayNameArabic}
+          initialAssessmentType={assessmentNavTarget?.assessmentType}
+          highlightedAssessmentId={assessmentNavTarget?.assessmentId}
+          navigationTimestamp={assessmentNavTarget?.timestamp}
         />
       )}
 

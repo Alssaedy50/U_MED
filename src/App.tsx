@@ -178,6 +178,11 @@ export default function App() {
   const [studentEnrollment, setStudentEnrollment] = useState<StudentEnrollment | null>(null);
   const [isNotificationModalOpen, setIsNotificationModalOpen] = useState<boolean>(false);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState<number>(0);
+  const [targetAssessmentNav, setTargetAssessmentNav] = useState<{
+    assessmentType?: 'exam' | 'competition';
+    assessmentId?: string;
+    timestamp?: number;
+  } | null>(null);
 
   useEffect(() => {
     const unsub = subscribeToAppNotifications((list) => {
@@ -252,7 +257,7 @@ export default function App() {
     return () => unsub();
   }, [user?.uid]);
 
-  const isStudentApproved = studentEnrollment?.status === 'approved';
+  const isStudentApproved = studentEnrollment?.status === 'approved' || isAuthorizedAdmin;
 
   // Strict Workspace Isolation:
   // 1) When in Student Mode (!isAdminMode), block access to all admin tabs
@@ -271,6 +276,7 @@ export default function App() {
         setActiveTab('student_dashboard');
       } else if (
         (activeTab === 'student_profile' || activeTab === 'student_library' || activeTab === 'student_assessments') &&
+        !isAuthorizedAdmin &&
         studentEnrollment &&
         studentEnrollment.status !== 'approved'
       ) {
@@ -545,6 +551,35 @@ export default function App() {
     }
   };
 
+  const handleNotificationNavigation = (tab: string, payload?: Record<string, unknown>) => {
+    const studentTabsList: ActiveTabType[] = [
+      'student_dashboard',
+      'student_library',
+      'student_assessments',
+      'student_profile'
+    ];
+    const targetTab = (tab as ActiveTabType) || 'student_dashboard';
+
+    if (studentTabsList.includes(targetTab) && activeRole !== 'student') {
+      setActiveRole('student');
+    }
+
+    if (targetTab === 'student_assessments') {
+      const requestedType =
+        payload?.assessmentType === 'competition' || payload?.category === 'competition'
+          ? 'competition'
+          : 'exam';
+      setTargetAssessmentNav({
+        assessmentType: requestedType,
+        assessmentId: typeof payload?.assessmentId === 'string' ? payload.assessmentId : undefined,
+        timestamp: Date.now()
+      });
+    }
+
+    setActiveTab(targetTab);
+    setIsNotificationModalOpen(false);
+  };
+
   const pageInfo = getPageTitleInfo();
 
   return (
@@ -556,7 +591,19 @@ export default function App() {
       } transition-colors duration-200`}
       dir="rtl"
     >
-      <GlobalNotificationWatcher />
+      <GlobalNotificationWatcher
+        onNavigateTab={handleNotificationNavigation}
+        studentUniversityId={
+          !isAuthorizedAdmin && studentEnrollment?.status === 'approved'
+            ? studentEnrollment.universityId
+            : undefined
+        }
+        studentStudyLevelId={
+          !isAuthorizedAdmin && studentEnrollment?.status === 'approved'
+            ? studentEnrollment.currentStudyLevelId
+            : undefined
+        }
+      />
       {/* IF INITIALIZING AUTH SESSION ON RELOAD: DO NOT FLASH LOGIN FORM */}
       {loading ? (
         <div className="min-h-[100dvh] flex items-center justify-center p-4 overflow-y-auto">
@@ -1425,6 +1472,10 @@ export default function App() {
                     else setActiveTab('student_dashboard');
                   }}
                   onEnrollmentStatusChange={(enr) => setStudentEnrollment(enr)}
+                  isAdminPreview={isAuthorizedAdmin}
+                  previewUniversityId={roleDoc?.assignedUniversityId || 'univ-dar-al-salam'}
+                  previewStudyLevelId={roleDoc?.assignedStudyLevelId || 'lvl-4'}
+                  assessmentNavTarget={targetAssessmentNav}
                 />
               )}
 
@@ -1926,10 +1977,7 @@ export default function App() {
       <NotificationCenterModal
         isOpen={isNotificationModalOpen}
         onClose={() => setIsNotificationModalOpen(false)}
-        onNavigateTab={(tab) => {
-          setActiveTab(tab as ActiveTabType);
-          setIsNotificationModalOpen(false);
-        }}
+        onNavigateTab={handleNotificationNavigation}
         isDarkMode={isDarkMode}
       />
     </div>
