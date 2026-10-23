@@ -152,12 +152,12 @@ export default function StudentMedicalLibrary({
           </button>
         </div>
 
-        {/* Section Filter */}
-        <div className="flex items-center gap-2">
+        {/* Section Filter & Search Box */}
+        <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
           <select
             value={selectedSection}
             onChange={(e) => setSelectedSection(e.target.value as any)}
-            className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-300 text-xs focus:outline-none focus:border-teal-500"
+            className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-300 text-xs focus:outline-none focus:border-teal-500"
           >
             <option value="all">جميع الشعب (نظري وعملي)</option>
             <option value="theoretical">القسم النظري فقط</option>
@@ -165,7 +165,7 @@ export default function StudentMedicalLibrary({
           </select>
 
           {/* Search Box */}
-          <div className="relative min-w-[200px]">
+          <div className="relative w-full sm:w-56">
             <Search className="w-3.5 h-3.5 absolute right-3 top-2.5 text-slate-500" />
             <input
               type="text"

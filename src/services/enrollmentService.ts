@@ -14,7 +14,8 @@ import {
   setDoc, 
   deleteDoc,
   query, 
-  where 
+  where,
+  onSnapshot
 } from 'firebase/firestore';
 import { db, cleanFirestoreData } from '../lib/firebase.ts';
 import { 
@@ -669,4 +670,122 @@ export async function reviewAcademicChangeRequest(
   }
 
   return updatedReq;
+}
+
+// ---------------------------------------------------------------------------
+// 4. Real-Time Automatic Firestore Subscriptions (Zero-Stop Live Sync)
+// ---------------------------------------------------------------------------
+
+export function subscribeToStudentEnrollment(
+  uid: string,
+  onUpdate: (enrollment: StudentEnrollment | null) => void
+): () => void {
+  if (!uid) return () => {};
+  const deleted = getDeletedEnrollmentIds();
+
+  // Listen to deterministic enrollment document enr-{uid}
+  const unsubDoc = onSnapshot(
+    doc(db, 'studentEnrollments', `enr-${uid}`),
+    (snap) => {
+      if (snap.exists() && !deleted.has(snap.id)) {
+        const remote = { id: snap.id, ...snap.data() } as StudentEnrollment;
+        try {
+          const cachedRaw = localStorage.getItem(`umed_enrollment_${uid}`);
+          const local = cachedRaw ? (JSON.parse(cachedRaw) as StudentEnrollment) : null;
+          const winner = local ? pickNewestEnrollment(local, remote) : remote;
+          localStorage.setItem(`umed_enrollment_${uid}`, JSON.stringify(winner));
+          onUpdate(winner);
+        } catch (e) {
+          onUpdate(remote);
+        }
+      }
+    },
+    () => {}
+  );
+
+  // Also listen to uid query for any legacy enrollment document
+  const q = query(collection(db, 'studentEnrollments'), where('uid', '==', uid));
+  const unsubQuery = onSnapshot(
+    q,
+    (snap) => {
+      let best: StudentEnrollment | null = null;
+      snap.forEach((d) => {
+        if (!deleted.has(d.id)) {
+          const item = { id: d.id, ...d.data() } as StudentEnrollment;
+          best = best ? pickNewestEnrollment(best, item) : item;
+        }
+      });
+      if (best) {
+        try {
+          const cachedRaw = localStorage.getItem(`umed_enrollment_${uid}`);
+          const local = cachedRaw ? (JSON.parse(cachedRaw) as StudentEnrollment) : null;
+          const winner = local ? pickNewestEnrollment(local, best) : best;
+          localStorage.setItem(`umed_enrollment_${uid}`, JSON.stringify(winner));
+          onUpdate(winner);
+        } catch (e) {
+          onUpdate(best);
+        }
+      }
+    },
+    () => {}
+  );
+
+  return () => {
+    unsubDoc();
+    unsubQuery();
+  };
+}
+
+export function subscribeToAdminEnrollments(
+  universityId: string | undefined,
+  onUpdate: (list: StudentEnrollment[]) => void
+): () => void {
+  const q = universityId
+    ? query(collection(db, 'studentEnrollments'), where('universityId', '==', universityId))
+    : query(collection(db, 'studentEnrollments'));
+
+  const unsub = onSnapshot(
+    q,
+    (snap) => {
+      const deleted = getDeletedEnrollmentIds();
+      const localList = getLocalEnrollments();
+      const byIdMap = new Map<string, StudentEnrollment>();
+
+      for (const item of localList) {
+        if (!deleted.has(item.id)) {
+          byIdMap.set(item.id, item);
+        }
+      }
+
+      snap.forEach((d) => {
+        if (!deleted.has(d.id)) {
+          const remoteItem = { id: d.id, ...d.data() } as StudentEnrollment;
+          const existingLocal = byIdMap.get(remoteItem.id);
+          if (existingLocal) {
+            byIdMap.set(remoteItem.id, pickNewestEnrollment(existingLocal, remoteItem));
+          } else {
+            byIdMap.set(remoteItem.id, remoteItem);
+          }
+        }
+      });
+
+      const byUidMap = new Map<string, StudentEnrollment>();
+      for (const item of byIdMap.values()) {
+        const key = item.uid || item.id;
+        const prev = byUidMap.get(key);
+        byUidMap.set(key, prev ? pickNewestEnrollment(prev, item) : item);
+      }
+
+      const merged = Array.from(byUidMap.values()).sort(
+        (a, b) => new Date(b.updatedAt || b.enrolledAt || 0).getTime() - new Date(a.updatedAt || a.enrolledAt || 0).getTime()
+      );
+      if (merged.length > 0) {
+        saveLocalEnrollments(merged);
+        onUpdate(universityId ? merged.filter(e => e.universityId === universityId) : merged);
+      }
+    },
+    () => {}
+  );
+
+  return unsub;
 }

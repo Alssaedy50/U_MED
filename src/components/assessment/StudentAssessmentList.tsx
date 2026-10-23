@@ -119,27 +119,27 @@ export default function StudentAssessmentList({
         </div>
 
         {/* Tab Switcher */}
-        <div className="flex items-center gap-1.5 p-1 bg-slate-950 rounded-xl border border-slate-800">
+        <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-950 rounded-xl border border-slate-800 w-full sm:w-auto">
           <button
             onClick={() => setActiveTab('exam')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+            className={`flex-1 sm:flex-initial justify-center px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
               activeTab === 'exam'
                 ? 'bg-teal-600 text-white shadow-md'
                 : 'text-slate-400 hover:text-white hover:bg-slate-900'
             }`}
           >
-            <FileText className="w-4 h-4" />
+            <FileText className="w-4 h-4 shrink-0" />
             <span>امتحانات المواد ({assessments.filter(a => a.assessmentType === 'exam').length})</span>
           </button>
           <button
             onClick={() => setActiveTab('competition')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+            className={`flex-1 sm:flex-initial justify-center px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
               activeTab === 'competition'
                 ? 'bg-amber-600 text-white shadow-md'
                 : 'text-slate-400 hover:text-white hover:bg-slate-900'
             }`}
           >
-            <Award className="w-4 h-4" />
+            <Award className="w-4 h-4 shrink-0" />
             <span>المسابقات الطبية ({assessments.filter(a => a.assessmentType === 'competition').length})</span>
           </button>
         </div>

@@ -15,7 +15,7 @@ import {
   updateDoc, 
   deleteDoc 
 } from 'firebase/firestore';
-import { db } from '../lib/firebase.ts';
+import { db, cleanFirestoreData } from '../lib/firebase.ts';
 import { EducationalResource } from '../types/umed.ts';
 
 const RESOURCES_STORAGE_KEY = 'umed_educational_resources';
@@ -226,10 +226,10 @@ function applyLocalFilters(list: EducationalResource[], filters: ResourceFilters
 export async function saveEducationalResource(resource: EducationalResource): Promise<void> {
   unmarkResourceDeleted(resource.id);
   const current = await ensureResourcesInitialized();
-  const updatedResource: EducationalResource = {
+  const updatedResource: EducationalResource = cleanFirestoreData({
     ...resource,
     updatedAt: new Date().toISOString()
-  };
+  });
 
   const index = current.findIndex(r => r.id === resource.id);
   if (index >= 0) {
@@ -244,7 +244,7 @@ export async function saveEducationalResource(resource: EducationalResource): Pr
   } catch (e) {}
 
   try {
-    await setDoc(doc(db, 'educationalResources', resource.id), updatedResource, { merge: true });
+    await setDoc(doc(db, 'educationalResources', resource.id), cleanFirestoreData(updatedResource), { merge: true });
   } catch (err) {
     console.warn('Firestore saveEducationalResource fallback to localStorage:', err);
   }

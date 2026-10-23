@@ -30,6 +30,7 @@ import {
 } from '../../types/umed.ts';
 import { 
   fetchEnrollmentsForAdmin, 
+  subscribeToAdminEnrollments,
   submitEnrollmentRequest,
   updateEnrollmentStatus,
   updateStudentEnrollment,
@@ -98,6 +99,10 @@ export default function EnrollmentApprovalManager({
 
   useEffect(() => {
     loadAll();
+    const unsub = subscribeToAdminEnrollments(assignedUniversityId, (liveList) => {
+      setEnrollments(liveList);
+    });
+    return () => unsub();
   }, [assignedUniversityId]);
 
   const handleApprove = async (enrollmentId: string) => {
@@ -284,28 +289,28 @@ export default function EnrollmentApprovalManager({
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
+        <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
+          <div className="flex flex-wrap bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs w-full sm:w-auto gap-1">
             <button
               onClick={() => setActiveView('enrollments')}
-              className={`px-3.5 py-2 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
+              className={`flex-1 sm:flex-initial justify-center px-3.5 py-2 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
                 activeView === 'enrollments'
                   ? 'bg-teal-600 text-white shadow-md'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              <GraduationCap className="w-4 h-4" />
+              <GraduationCap className="w-4 h-4 shrink-0" />
               <span>سجلات القيد ({enrollments.length})</span>
             </button>
             <button
               onClick={() => setActiveView('change_requests')}
-              className={`px-3.5 py-2 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
+              className={`flex-1 sm:flex-initial justify-center px-3.5 py-2 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
                 activeView === 'change_requests'
                   ? 'bg-amber-600 text-white shadow-md'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              <FileEdit className="w-4 h-4" />
+              <FileEdit className="w-4 h-4 shrink-0" />
               <span>طلبات التعديل الأكاديمي ({changeRequests.length})</span>
               {pendingChangeRequestsCount > 0 && (
                 <span className="px-1.5 py-0.2 rounded-full bg-amber-400 text-slate-950 text-[10px] font-extrabold">
@@ -389,7 +394,7 @@ export default function EnrollmentApprovalManager({
               </button>
             </div>
 
-            <div className="relative min-w-[240px]">
+            <div className="relative w-full sm:w-64">
               <Search className="w-3.5 h-3.5 absolute right-3 top-3 text-slate-500" />
               <input
                 type="text"
@@ -412,18 +417,18 @@ export default function EnrollmentApprovalManager({
               filteredList.map((item) => (
                 <div key={item.id} className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-lg text-xs space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-teal-500/10 text-teal-400 flex items-center justify-center font-bold">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-10 h-10 rounded-xl bg-teal-500/10 text-teal-400 flex items-center justify-center font-bold shrink-0">
                         <GraduationCap className="w-5 h-5" />
                       </div>
-                      <div>
-                        <div className="flex items-center gap-2">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
                           <span className="font-bold text-white text-sm">{item.studentNameArabic || 'طالب كلية الطب'}</span>
                           <span className="font-mono text-teal-300 font-bold bg-teal-950/60 px-2 py-0.5 rounded border border-teal-800" dir="ltr">
                             {item.academicStudentNumber}
                           </span>
                         </div>
-                        <div className="text-[11px] text-slate-400 mt-0.5 font-mono" dir="ltr">
+                        <div className="text-[11px] text-slate-400 mt-0.5 font-mono break-all" dir="ltr">
                           UID: {item.uid}
                         </div>
                       </div>

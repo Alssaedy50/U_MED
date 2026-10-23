@@ -506,7 +506,7 @@ export default function EducationalContentManager({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-300 mb-1 font-semibold">الجامعة:</label>
                   <select
@@ -534,7 +534,7 @@ export default function EducationalContentManager({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-300 mb-1 font-semibold">البلوك / الفترة الدراسية:</label>
                   <select
@@ -564,7 +564,7 @@ export default function EducationalContentManager({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-300 mb-1 font-semibold">نوع المورد:</label>
                   <select
@@ -606,7 +606,7 @@ export default function EducationalContentManager({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-300 mb-1 font-semibold">الشعبة الأكاديمية:</label>
                   <select
@@ -687,7 +687,7 @@ export default function EducationalContentManager({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-300 mb-1 font-semibold">الجامعة:</label>
                   <select
@@ -715,7 +715,7 @@ export default function EducationalContentManager({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-300 mb-1 font-semibold">البلوك الدراسي:</label>
                   <select
@@ -745,7 +745,7 @@ export default function EducationalContentManager({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-300 mb-1 font-semibold">نوع المورد:</label>
                   <select
@@ -785,7 +785,7 @@ export default function EducationalContentManager({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-300 mb-1 font-semibold">الشعبة الأكاديمية:</label>
                   <select

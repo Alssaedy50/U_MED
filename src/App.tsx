@@ -32,12 +32,14 @@ import {
   ExternalLink,
   Settings,
   Menu,
-  X
+  X,
+  Phone,
+  Mail
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext.tsx';
 import { UserRole, UserRoleDoc, AuditLog, StudentEnrollment } from './types/umed.ts';
-import { fetchMergedAuditLogs, fetchAllUserRoles, assignUserRole } from './lib/firebase.ts';
-import { fetchStudentEnrollment } from './services/enrollmentService.ts';
+import { fetchMergedAuditLogs, fetchAllUserRoles, assignUserRole, formatUserIdentifier } from './lib/firebase.ts';
+import { fetchStudentEnrollment, subscribeToStudentEnrollment } from './services/enrollmentService.ts';
 import StudentDashboard from './components/student/StudentDashboard.tsx';
 import StudentProfile from './components/student/StudentProfile.tsx';
 
@@ -75,6 +77,8 @@ export default function App() {
     loginGoogle, 
     loginEmail, 
     registerEmail, 
+    loginPhone,
+    registerPhone,
     logout, 
     bootstrapInitialOwner, 
     checkConnectivity,
@@ -101,7 +105,9 @@ export default function App() {
 
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
   const [authTab, setAuthTab] = useState<'login' | 'register'>('login');
+  const [authMethod, setAuthMethod] = useState<'phone' | 'email'>('phone');
   const [emailInput, setEmailInput] = useState<string>('');
+  const [phoneInput, setPhoneInput] = useState<string>('');
   const [passwordInput, setPasswordInput] = useState<string>('');
   const [displayNameInput, setDisplayNameInput] = useState<string>('');
   const [authError, setAuthError] = useState<string | null>(null);
@@ -160,7 +166,7 @@ export default function App() {
     }
   }, [isAuthorizedAdmin, activeTab]);
 
-  // Load current user's student enrollment status
+  // Load and subscribe in real-time to current user's student enrollment status
   useEffect(() => {
     if (!user) {
       setStudentEnrollment(null);
@@ -169,7 +175,11 @@ export default function App() {
     fetchStudentEnrollment(user.uid).then(enr => {
       setStudentEnrollment(enr);
     });
-  }, [user?.uid, activeTab]);
+    const unsub = subscribeToStudentEnrollment(user.uid, (enr) => {
+      if (enr) setStudentEnrollment(enr);
+    });
+    return () => unsub();
+  }, [user?.uid]);
 
   const isStudentApproved = studentEnrollment?.status === 'approved';
 
@@ -201,13 +211,25 @@ export default function App() {
     }
   }, [isAdminMode, isOwnerMode, activeTab, studentEnrollment?.status]);
 
-  const handleEmailAuth = async (e: React.FormEvent) => {
+  const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
     setAuthSuccess(null);
     try {
       if (authTab === 'login') {
-        await loginEmail(emailInput, passwordInput);
+        if (authMethod === 'phone') {
+          if (!phoneInput.trim()) {
+            setAuthError('يرجى إدخال رقم الهاتف اليمني (مثال: 771234567)');
+            return;
+          }
+          await loginPhone(phoneInput, passwordInput);
+        } else {
+          if (!emailInput.trim()) {
+            setAuthError('يرجى إدخال البريد الإلكتروني أو رقم الهاتف');
+            return;
+          }
+          await loginEmail(emailInput, passwordInput);
+        }
         setAuthSuccess('تم تسجيل الدخول بنجاح');
         setActiveTab('student_dashboard');
       } else {
@@ -215,21 +237,40 @@ export default function App() {
           setAuthError('يرجى إدخال الاسم الرباعي بالعربية');
           return;
         }
-        await registerEmail(emailInput, passwordInput, displayNameInput);
-        setAuthSuccess('تم إنشاء الحساب وتسجيل الدخول بنجاح');
+        if (authMethod === 'phone') {
+          if (!phoneInput.trim()) {
+            setAuthError('يرجى إدخال رقم الهاتف اليمني (مثال: 771234567)');
+            return;
+          }
+          await registerPhone(phoneInput, passwordInput, displayNameInput);
+          setAuthSuccess('تم إنشاء الحساب برقم الهاتف وتسجيل الدخول بنجاح');
+        } else {
+          if (!emailInput.trim()) {
+            setAuthError('يرجى إدخال البريد الإلكتروني');
+            return;
+          }
+          await registerEmail(emailInput, passwordInput, displayNameInput, phoneInput);
+          setAuthSuccess('تم إنشاء الحساب وتسجيل الدخول بنجاح');
+        }
         setActiveTab('student_dashboard');
       }
       setPasswordInput('');
     } catch (err: any) {
       let msg = err.message || 'حدث خطأ أثناء المصادقة';
-      if (msg.includes('user-not-found') || msg.includes('invalid-credential')) {
-        msg = 'البريد الإلكتروني أو كلمة المرور غير صحيحة';
+      if (msg.includes('INVALID_PHONE_NUMBER')) {
+        msg = 'يرجى إدخال رقم هاتف يمني صحيح مكوّن من 9 أرقام يبدأ بـ 7 (مثال: 771234567)';
+      } else if (msg.includes('user-not-found') || msg.includes('invalid-credential')) {
+        msg = authMethod === 'phone'
+          ? 'رقم الهاتف أو كلمة المرور غير صحيحة (إذا كنت طالباً جديداً اضغط على "إنشاء حساب طالب جديد" أولاً)'
+          : 'البريد الإلكتروني أو كلمة المرور غير صحيحة';
       } else if (msg.includes('wrong-password')) {
         msg = 'كلمة المرور غير صحيحة';
       } else if (msg.includes('email-already-in-use')) {
-        msg = 'البريد الإلكتروني مسجل مسبقاً، يرجى تسجيل الدخول به';
+        msg = authMethod === 'phone'
+          ? 'رقم الهاتف مسجل مسبقاً، يرجى التبديل إلى "تسجيل الدخول" والدخول به'
+          : 'البريد الإلكتروني مسجل مسبقاً، يرجى تسجيل الدخول به';
       } else if (msg.includes('weak-password')) {
-        msg = 'كلمة المرور ضعيفة (يجب أن تكون 6 أحرف على الأقل)';
+        msg = 'كلمة المرور ضعيفة (يجب أن تكون 6 أحرف أو أرقام على الأقل)';
       }
       setAuthError(msg);
     }
@@ -386,6 +427,34 @@ export default function App() {
               </button>
             </div>
 
+            {/* Method Toggle: Phone (+967) vs Email */}
+            <div className="grid grid-cols-2 gap-2 bg-slate-950/70 p-1 rounded-xl border border-slate-800/80 text-xs">
+              <button
+                type="button"
+                onClick={() => { setAuthMethod('phone'); setAuthError(null); }}
+                className={`py-2 px-3 rounded-lg font-bold transition-all flex items-center justify-center gap-1.5 ${
+                  authMethod === 'phone'
+                    ? 'bg-slate-800 text-teal-300 border border-teal-500/40 shadow-xs'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Phone className="w-3.5 h-3.5" />
+                <span>برقم الهاتف (+967)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => { setAuthMethod('email'); setAuthError(null); }}
+                className={`py-2 px-3 rounded-lg font-bold transition-all flex items-center justify-center gap-1.5 ${
+                  authMethod === 'email'
+                    ? 'bg-slate-800 text-teal-300 border border-teal-500/40 shadow-xs'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Mail className="w-3.5 h-3.5" />
+                <span>بالبريد الإلكتروني</span>
+              </button>
+            </div>
+
             {authError && (
               <div className="p-3 bg-rose-950/50 border border-rose-800/80 rounded-xl text-rose-300 text-xs flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 flex-shrink-0" />
@@ -400,7 +469,7 @@ export default function App() {
               </div>
             )}
 
-            <form onSubmit={handleEmailAuth} className="space-y-3.5 text-xs">
+            <form onSubmit={handleAuthSubmit} className="space-y-3.5 text-xs">
               {authTab === 'register' && (
                 <div>
                   <label className="block text-slate-300 mb-1 font-semibold">الاسم الرباعي بالعربية:</label>
@@ -415,21 +484,61 @@ export default function App() {
                 </div>
               )}
 
-              <div>
-                <label className="block text-slate-300 mb-1 font-semibold">البريد الإلكتروني:</label>
-                <input
-                  type="email"
-                  required
-                  value={emailInput}
-                  onChange={(e) => setEmailInput(e.target.value)}
-                  placeholder="name@example.com"
-                  className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono focus:outline-none focus:border-teal-500"
-                  dir="ltr"
-                />
-              </div>
+              {authMethod === 'phone' ? (
+                <div>
+                  <label className="block text-slate-300 mb-1 font-semibold">رقم الهاتف اليمني:</label>
+                  <div className="flex items-center gap-2" dir="ltr">
+                    <span className="px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-teal-400 font-mono font-bold select-none shrink-0">
+                      +967
+                    </span>
+                    <input
+                      type="tel"
+                      required
+                      value={phoneInput}
+                      onChange={(e) => setPhoneInput(e.target.value)}
+                      placeholder="771234567"
+                      className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono focus:outline-none focus:border-teal-500"
+                      dir="ltr"
+                    />
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    يدعم جميع شبكات الاتصالات اليمنية (يمن موبايل 77/78، سبأفون 71، YOU 73، واي 70)
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-slate-300 mb-1 font-semibold">
+                      {authTab === 'login' ? 'البريد الإلكتروني (أو رقم الهاتف):' : 'البريد الإلكتروني:'}
+                    </label>
+                    <input
+                      type={authTab === 'login' ? 'text' : 'email'}
+                      required
+                      value={emailInput}
+                      onChange={(e) => setEmailInput(e.target.value)}
+                      placeholder={authTab === 'login' ? 'name@example.com أو 771234567' : 'name@example.com'}
+                      className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono focus:outline-none focus:border-teal-500"
+                      dir="ltr"
+                    />
+                  </div>
+                  {authTab === 'register' && (
+                    <div>
+                      <label className="block text-slate-300 mb-1 font-semibold">رقم الهاتف اليمني (اختياري):</label>
+                      <input
+                        type="tel"
+                        value={phoneInput}
+                        onChange={(e) => setPhoneInput(e.target.value)}
+                        placeholder="+967 77XXXXXXX"
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono focus:outline-none focus:border-teal-500"
+                        dir="ltr"
+                      />
+                    </div>
+                  )}
+                </>
+              )}
 
               <div>
-                <label className="block text-slate-300 mb-1 font-semibold">كلمة المرور:</label>
+                <label className="block text-slate-300 mb-1 font-semibold">كلمة المرور (6 أحرف أو أرقام على الأقل):</label>
                 <input
                   type="password"
                   required
@@ -473,7 +582,7 @@ export default function App() {
         </div>
       ) : (
         /* AUTHENTICATED WORKSPACE WITH RTL SIDEBAR NAVIGATION */
-        <div className="min-h-screen flex">
+        <div className="min-h-screen flex overflow-x-hidden w-full max-w-full">
           
           {/* Mobile Sidebar Backdrop */}
           {sidebarOpen && (
@@ -485,7 +594,7 @@ export default function App() {
 
           {/* RTL SIDEBAR MENU (قائمة جانبية) */}
           <aside
-            className={`fixed lg:sticky top-0 right-0 z-50 h-screen w-68 bg-slate-900 border-l border-slate-800 flex flex-col justify-between transition-transform duration-200 ease-in-out shrink-0 ${
+            className={`fixed lg:sticky top-0 right-0 z-50 h-screen w-64 max-w-[82vw] bg-slate-900 border-l border-slate-800 flex flex-col justify-between transition-transform duration-200 ease-in-out shrink-0 ${
               sidebarOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'
             }`}
           >
@@ -707,7 +816,7 @@ export default function App() {
                     {userProfile?.displayNameArabic || user.displayName || 'مستخدم UMED'}
                   </div>
                   <div className="text-[10px] text-slate-400 font-mono truncate" dir="ltr">
-                    {user.email}
+                    {formatUserIdentifier(user.email, userProfile?.phone)}
                   </div>
                 </div>
                 <span
@@ -726,7 +835,7 @@ export default function App() {
           </aside>
 
           {/* MAIN WORKSPACE CONTENT AREA */}
-          <div className="flex-1 flex flex-col min-w-0">
+          <div className="flex-1 flex flex-col min-w-0 max-w-full overflow-x-hidden">
             
             {/* Clean Contextual Top Bar (Zero Telemetry Clutter) */}
             <header className="sticky top-0 z-30 bg-slate-900/85 backdrop-blur border-b border-slate-800 px-4 py-3 sm:px-6">
@@ -1209,19 +1318,27 @@ export default function App() {
                     </div>
 
                     <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-2.5 text-xs">
-                      <div className="flex justify-between items-center pb-2 border-b border-slate-800/80">
+                      <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-slate-800/80">
                         <span className="text-slate-400">الاسم الكامل:</span>
                         <strong className="text-white">{userProfile?.displayNameArabic || user.displayName || 'مستخدم مسجل'}</strong>
                       </div>
-                      <div className="flex justify-between items-center pb-2 border-b border-slate-800/80">
-                        <span className="text-slate-400">البريد الإلكتروني:</span>
-                        <span className="font-mono text-teal-300" dir="ltr">{user.email}</span>
+                      <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-slate-800/80">
+                        <span className="text-slate-400">معرف الدخول (الهاتف / البريد):</span>
+                        <span className="font-mono text-teal-300 break-all" dir="ltr">
+                          {formatUserIdentifier(user.email, userProfile?.phone)}
+                        </span>
                       </div>
-                      <div className="flex justify-between items-center pb-2 border-b border-slate-800/80">
+                      {userProfile?.phone && !user.email?.startsWith('phone_') && (
+                        <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-slate-800/80">
+                          <span className="text-slate-400">رقم الهاتف المرتبط:</span>
+                          <span className="font-mono text-emerald-300" dir="ltr">{userProfile.phone}</span>
+                        </div>
+                      )}
+                      <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-slate-800/80">
                         <span className="text-slate-400">معرف المستخدم (UID):</span>
-                        <span className="font-mono text-slate-400 text-[11px]" dir="ltr">{user.uid}</span>
+                        <span className="font-mono text-slate-400 text-[11px] break-all" dir="ltr">{user.uid}</span>
                       </div>
-                      <div className="flex justify-between items-center">
+                      <div className="flex flex-wrap justify-between items-center gap-2">
                         <span className="text-slate-400">الوضع والصلاحية النشطة:</span>
                         <span className="font-bold text-amber-400">
                           {activeRole === 'platform_owner' ? '👑 مالك المنصة (Platform Owner)' :

@@ -734,7 +734,7 @@ export default function AcademicStructureManager() {
       )}
 
       {/* 2. Interactive Cascading Academic Hierarchy Explorer */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         
         {/* Column 1: Universities */}
         <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between">

@@ -1,8 +1,11 @@
 @import "tailwindcss";
 
 @layer base {
+  html,
   body {
     font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    overflow-x: hidden;
+    max-width: 100vw;
   }
 }
 
@@ -95,11 +98,13 @@
 
 /* Keep white text on vibrant primary action buttons & brand badges */
 .theme-light .bg-teal-600.text-white,
+.theme-light .bg-teal-600\/90.text-white,
 .theme-light .bg-teal-500.text-white,
 .theme-light .bg-emerald-600.text-white,
 .theme-light .bg-emerald-500.text-white,
 .theme-light .bg-indigo-600.text-white,
 .theme-light .bg-indigo-500.text-white,
+.theme-light .bg-blue-600.text-white,
 .theme-light .bg-rose-600.text-white,
 .theme-light .bg-rose-500.text-white,
 .theme-light .bg-amber-600.text-white,
@@ -110,6 +115,8 @@
 .theme-light .bg-emerald-600 .text-white,
 .theme-light .bg-indigo-600 .text-white,
 .theme-light .bg-indigo-500 .text-white,
+.theme-light .bg-blue-600 .text-white,
+.theme-light .bg-amber-600 .text-white,
 .theme-light .bg-rose-600 .text-white,
 .theme-light .from-teal-500 .text-white,
 .theme-light .from-teal-600 .text-white {

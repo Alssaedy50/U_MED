@@ -8,13 +8,18 @@
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User, onAuthStateChanged } from 'firebase/auth';
+import { doc, onSnapshot } from 'firebase/firestore';
 import { 
   auth, 
+  db,
   INITIAL_OWNER_EMAIL,
   isInitialOwnerEmail,
   signInWithGoogle, 
   signInWithEmail, 
   signUpWithEmail, 
+  signInWithPhone,
+  signUpWithPhone,
+  normalizeYemenPhone,
   logOut, 
   fetchUserRole, 
   fetchUserProfile,
@@ -35,7 +40,9 @@ interface AuthContextType {
   firestoreError: string | null;
   loginGoogle: () => Promise<void>;
   loginEmail: (email: string, pass: string) => Promise<void>;
-  registerEmail: (email: string, pass: string, nameArabic: string) => Promise<void>;
+  registerEmail: (email: string, pass: string, nameArabic: string, phoneOptional?: string) => Promise<void>;
+  loginPhone: (phone: string, pass: string) => Promise<void>;
+  registerPhone: (phone: string, pass: string, nameArabic: string) => Promise<void>;
   logout: () => Promise<void>;
   bootstrapInitialOwner: () => Promise<{ success: boolean; message: string }>;
   checkConnectivity: () => Promise<void>;
@@ -135,7 +142,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
+    let unsubRole: (() => void) | null = null;
+    let unsubProfile: (() => void) | null = null;
+
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (unsubRole) { unsubRole(); unsubRole = null; }
+      if (unsubProfile) { unsubProfile(); unsubProfile = null; }
+
       if (currentUser) {
         setUser(currentUser);
         // Hydrate cached profile immediately
@@ -163,6 +176,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } catch (err) {
           console.warn('Could not load user data from remote Firestore:', err);
         }
+
+        // Real-time listeners for userRole & userProfile changes
+        try {
+          unsubRole = onSnapshot(doc(db, 'userRoles', currentUser.uid), (snap) => {
+            if (snap.exists()) {
+              const r = snap.data() as UserRoleDoc;
+              setRoleDoc(r);
+              try {
+                localStorage.setItem(`umed_cached_role_${currentUser.uid}`, JSON.stringify(r));
+              } catch (e) {}
+            }
+          }, () => {});
+
+          unsubProfile = onSnapshot(doc(db, 'userProfiles', currentUser.uid), (snap) => {
+            if (snap.exists()) {
+              const p = snap.data() as UserProfile;
+              setUserProfile(p);
+              try {
+                localStorage.setItem(`umed_cached_profile_${currentUser.uid}`, JSON.stringify(p));
+              } catch (e) {}
+            }
+          }, () => {});
+        } catch (e) {}
       } else {
         setUser(null);
         setRoleDoc(null);
@@ -172,7 +208,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(false);
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      if (unsubRole) unsubRole();
+      if (unsubProfile) unsubProfile();
+    };
   }, []);
 
   const loginGoogle = async () => {
@@ -209,13 +249,49 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const registerEmail = async (email: string, pass: string, nameArabic: string) => {
+  const registerEmail = async (email: string, pass: string, nameArabic: string, phoneOptional?: string) => {
     setLoading(true);
     try {
       const u = await signUpWithEmail(email, pass);
+      const normalizedPhone = phoneOptional ? normalizeYemenPhone(phoneOptional) : undefined;
       const newProf: UserProfile = {
         uid: u.uid,
         email: u.email || email,
+        displayNameArabic: nameArabic.trim(),
+        ...(normalizedPhone ? { phone: normalizedPhone } : {}),
+        isActive: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      await saveUserProfile(newProf);
+      setUserProfile(newProf);
+      try {
+        localStorage.setItem(`umed_cached_profile_${u.uid}`, JSON.stringify(newProf));
+      } catch (e) {}
+      await loadRoleForUser(u);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loginPhone = async (phone: string, pass: string) => {
+    setLoading(true);
+    try {
+      const u = await signInWithPhone(phone, pass);
+      await loadRoleForUser(u);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const registerPhone = async (phone: string, pass: string, nameArabic: string) => {
+    setLoading(true);
+    try {
+      const { user: u, normalizedPhone } = await signUpWithPhone(phone, pass);
+      const newProf: UserProfile = {
+        uid: u.uid,
+        email: u.email || '',
+        phone: normalizedPhone,
         displayNameArabic: nameArabic.trim(),
         isActive: true,
         createdAt: new Date().toISOString(),
@@ -223,6 +299,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       };
       await saveUserProfile(newProf);
       setUserProfile(newProf);
+      try {
+        localStorage.setItem(`umed_cached_profile_${u.uid}`, JSON.stringify(newProf));
+      } catch (e) {}
       await loadRoleForUser(u);
     } finally {
       setLoading(false);
@@ -296,6 +375,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         loginGoogle,
         loginEmail,
         registerEmail,
+        loginPhone,
+        registerPhone,
         logout,
         bootstrapInitialOwner,
         checkConnectivity,

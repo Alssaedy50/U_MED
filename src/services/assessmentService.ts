@@ -18,7 +18,7 @@ import {
   query, 
   where
 } from 'firebase/firestore';
-import { db, auth, writeAuditLogToCloud } from '../lib/firebase.ts';
+import { db, auth, writeAuditLogToCloud, cleanFirestoreData } from '../lib/firebase.ts';
 import { 
   QuestionBank, 
   QuestionItemFull, 
@@ -212,7 +212,7 @@ export async function createQuestionBank(bank: Omit<QuestionBank, 'id' | 'create
   };
 
   try {
-    await setDoc(doc(db, 'questionBanks', id), newBank);
+    await setDoc(doc(db, 'questionBanks', id), cleanFirestoreData(newBank));
   } catch (err) {
     console.warn('Firestore failed, saving question bank to localStorage fallback');
   }
@@ -238,15 +238,15 @@ export async function updateQuestionBank(
     universityId
   };
 
-  const updatedBank: QuestionBank = {
+  const updatedBank: QuestionBank = cleanFirestoreData({
     ...target,
     ...updates,
     id: bankId,
     updatedAt: new Date().toISOString()
-  };
+  });
 
   try {
-    await setDoc(doc(db, 'questionBanks', bankId), updatedBank, { merge: true });
+    await setDoc(doc(db, 'questionBanks', bankId), cleanFirestoreData(updatedBank), { merge: true });
   } catch (err) {
     console.warn('Firestore updateQuestionBank fallback:', err);
   }
@@ -414,9 +414,9 @@ export async function createQuestion(question: Omit<QuestionItemFull, 'id' | 'cr
 
   try {
     await Promise.all([
-      setDoc(doc(db, 'questions', id), newQ),
-      setDoc(doc(db, 'assessmentQuestions', id), publicQ),
-      setDoc(doc(db, 'questionAnswerKeys', id), answerKey)
+      setDoc(doc(db, 'questions', id), cleanFirestoreData(newQ)),
+      setDoc(doc(db, 'assessmentQuestions', id), cleanFirestoreData(publicQ)),
+      setDoc(doc(db, 'questionAnswerKeys', id), cleanFirestoreData(answerKey))
     ]);
   } catch (err) {
     console.warn('Saving question to localStorage fallback:', err);
@@ -448,7 +448,7 @@ export async function updateQuestion(
   const existing = await ensureBankQuestionsInitialized(bankId);
   const target = existing.find(q => q.id === questionId);
 
-  const updatedQ: QuestionItemFull = {
+  const updatedQ: QuestionItemFull = cleanFirestoreData({
     ...(target || {
       id: questionId,
       bankId,
@@ -461,9 +461,9 @@ export async function updateQuestion(
     }),
     ...updates,
     id: questionId
-  };
+  });
 
-  const publicQ: AssessmentQuestionPublic = {
+  const publicQ: AssessmentQuestionPublic = cleanFirestoreData({
     id: questionId,
     bankId: updatedQ.bankId,
     stemArabic: updatedQ.stemArabic,
@@ -471,22 +471,22 @@ export async function updateQuestion(
     imageUrl: updatedQ.imageUrl,
     options: updatedQ.options,
     points: Number(updatedQ.points) || 5
-  };
+  });
 
-  const answerKey: QuestionAnswerKey = {
+  const answerKey: QuestionAnswerKey = cleanFirestoreData({
     questionId,
     assessmentId: updatedQ.bankId,
     correctOptionId: updatedQ.correctOptionId,
     explanationArabic: updatedQ.explanationArabic,
     explanationEnglish: updatedQ.explanationEnglish,
     points: Number(updatedQ.points) || 5
-  };
+  });
 
   try {
     await Promise.all([
-      setDoc(doc(db, 'questions', questionId), updatedQ, { merge: true }),
-      setDoc(doc(db, 'assessmentQuestions', questionId), publicQ, { merge: true }),
-      setDoc(doc(db, 'questionAnswerKeys', questionId), answerKey, { merge: true })
+      setDoc(doc(db, 'questions', questionId), cleanFirestoreData(updatedQ), { merge: true }),
+      setDoc(doc(db, 'assessmentQuestions', questionId), cleanFirestoreData(publicQ), { merge: true }),
+      setDoc(doc(db, 'questionAnswerKeys', questionId), cleanFirestoreData(answerKey), { merge: true })
     ]);
   } catch (err) {
     console.warn('Firestore updateQuestion fallback:', err);
@@ -611,24 +611,24 @@ export async function createAssessment(
   };
 
   try {
-    await setDoc(doc(db, 'assessments', id), newAssessment);
+    await setDoc(doc(db, 'assessments', id), cleanFirestoreData(newAssessment));
     if (Array.isArray(bankQuestions) && bankQuestions.length > 0) {
       for (const q of bankQuestions) {
-        await setDoc(doc(db, 'assessmentQuestions', q.id), {
+        await setDoc(doc(db, 'assessmentQuestions', q.id), cleanFirestoreData({
           id: q.id,
           bankId: q.bankId,
           stemArabic: q.stemArabic,
           stemEnglish: q.stemEnglish || '',
           options: q.options,
           points: Number(q.points) || 5
-        }, { merge: true });
-        await setDoc(doc(db, 'questionAnswerKeys', q.id), {
+        }), { merge: true });
+        await setDoc(doc(db, 'questionAnswerKeys', q.id), cleanFirestoreData({
           questionId: q.id,
           assessmentId: id,
           correctOptionId: q.correctOptionId,
           explanationArabic: q.explanationArabic || '',
           points: Number(q.points) || 5
-        }, { merge: true });
+        }), { merge: true });
       }
     }
   } catch (err) {}
@@ -660,7 +660,7 @@ export async function updateAssessment(
   const target = existing.find(a => a.id === assessmentId) ||
     DEFAULT_ASSESSMENTS.find(a => a.id === assessmentId);
 
-  const updatedAssessment: Assessment = {
+  const updatedAssessment: Assessment = cleanFirestoreData({
     ...(target || {
       id: assessmentId,
       assessmentType: 'exam',
@@ -681,27 +681,27 @@ export async function updateAssessment(
     }),
     ...updates,
     id: assessmentId
-  };
+  });
 
   try {
-    await setDoc(doc(db, 'assessments', assessmentId), updatedAssessment, { merge: true });
+    await setDoc(doc(db, 'assessments', assessmentId), cleanFirestoreData(updatedAssessment), { merge: true });
     if (Array.isArray(bankQuestions) && bankQuestions.length > 0) {
       for (const q of bankQuestions) {
-        await setDoc(doc(db, 'assessmentQuestions', q.id), {
+        await setDoc(doc(db, 'assessmentQuestions', q.id), cleanFirestoreData({
           id: q.id,
           bankId: q.bankId,
           stemArabic: q.stemArabic,
           stemEnglish: q.stemEnglish || '',
           options: q.options,
           points: Number(q.points) || 5
-        }, { merge: true });
-        await setDoc(doc(db, 'questionAnswerKeys', q.id), {
+        }), { merge: true });
+        await setDoc(doc(db, 'questionAnswerKeys', q.id), cleanFirestoreData({
           questionId: q.id,
           assessmentId,
           correctOptionId: q.correctOptionId,
           explanationArabic: q.explanationArabic || '',
           points: Number(q.points) || 5
-        }, { merge: true });
+        }), { merge: true });
       }
     }
   } catch (err) {
@@ -990,7 +990,7 @@ export async function submitAttemptServer(
   // Note: firestore.rules restricts assessmentResults creation to admins;
   // server API stores the result authoritatively, and admin syncs it to Firestore when viewing/releasing.
   try {
-    await setDoc(doc(db, 'assessmentResults', finalResult.id), finalResult, { merge: true });
+    await setDoc(doc(db, 'assessmentResults', finalResult.id), cleanFirestoreData(finalResult), { merge: true });
   } catch (e) {}
 
   try {

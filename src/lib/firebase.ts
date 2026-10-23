@@ -134,20 +134,92 @@ export async function testFirestoreConnection(): Promise<{ connected: boolean; l
   }
 }
 
-// 5. Authentication Service Functions
+// 5. Phone Number Normalization & Zero-Config Phone Auth Helpers (Yemen +967 First)
+export function normalizeYemenPhone(phoneInput: string): string {
+  const digits = phoneInput.replace(/[^\d+]/g, '');
+  const rawDigits = digits.replace(/\D/g, '');
+
+  // Standard 9-digit Yemen mobile number starting with 7 (e.g. 771234567, 73..., 71..., 70..., 78...)
+  if (rawDigits.length === 9 && rawDigits.startsWith('7')) {
+    return `+967${rawDigits}`;
+  }
+  // 10-digit starting with 07 (e.g. 0771234567)
+  if (rawDigits.length === 10 && rawDigits.startsWith('07')) {
+    return `+967${rawDigits.slice(1)}`;
+  }
+  // Starting with 967 (e.g. 967771234567)
+  if (rawDigits.startsWith('967') && rawDigits.length >= 11) {
+    return `+${rawDigits}`;
+  }
+  // Starting with 00967 (e.g. 00967771234567)
+  if (rawDigits.startsWith('00967') && rawDigits.length >= 13) {
+    return `+${rawDigits.slice(2)}`;
+  }
+  if (rawDigits.length >= 8) {
+    return `+${rawDigits}`;
+  }
+  return '';
+}
+
+export function isPhoneIdentifier(input: string): boolean {
+  const trimmed = input.trim();
+  if (!trimmed || trimmed.includes('@')) return false;
+  const digits = trimmed.replace(/\D/g, '');
+  return digits.length >= 8;
+}
+
+export function phoneToAuthEmail(phoneInput: string): string {
+  const normalized = normalizeYemenPhone(phoneInput);
+  if (!normalized) {
+    throw new Error('INVALID_PHONE_NUMBER');
+  }
+  const cleanDigits = normalized.replace(/\D/g, '');
+  return `phone_${cleanDigits}@umed.edu.ye`;
+}
+
+export function formatUserIdentifier(email?: string | null, phone?: string | null): string {
+  if (phone && phone.trim()) return phone.trim();
+  if (!email) return '';
+  const match = email.match(/^phone_(\d+)@umed\.edu\.ye$/i);
+  if (match) {
+    return `+${match[1]}`;
+  }
+  return email;
+}
+
+// 6. Authentication Service Functions
 export async function signInWithGoogle(): Promise<User> {
   const result = await signInWithPopup(auth, googleProvider);
   return result.user;
 }
 
-export async function signInWithEmail(email: string, pass: string): Promise<User> {
-  const result = await signInWithEmailAndPassword(auth, email.trim(), pass);
+export async function signInWithEmail(emailOrPhone: string, pass: string): Promise<User> {
+  const targetEmail = isPhoneIdentifier(emailOrPhone)
+    ? phoneToAuthEmail(emailOrPhone)
+    : emailOrPhone.trim();
+  const result = await signInWithEmailAndPassword(auth, targetEmail, pass);
   return result.user;
 }
 
 export async function signUpWithEmail(email: string, pass: string): Promise<User> {
   const result = await createUserWithEmailAndPassword(auth, email.trim(), pass);
   return result.user;
+}
+
+export async function signInWithPhone(phone: string, pass: string): Promise<User> {
+  const authEmail = phoneToAuthEmail(phone);
+  const result = await signInWithEmailAndPassword(auth, authEmail, pass);
+  return result.user;
+}
+
+export async function signUpWithPhone(phone: string, pass: string): Promise<{ user: User; normalizedPhone: string }> {
+  const normalizedPhone = normalizeYemenPhone(phone);
+  if (!normalizedPhone) {
+    throw new Error('INVALID_PHONE_NUMBER');
+  }
+  const authEmail = phoneToAuthEmail(normalizedPhone);
+  const result = await createUserWithEmailAndPassword(auth, authEmail, pass);
+  return { user: result.user, normalizedPhone };
 }
 
 export async function logOut(): Promise<void> {
