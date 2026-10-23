@@ -102,12 +102,21 @@ export default function StudentProfile({
   const loadProfileData = async () => {
     setLoading(true);
     try {
-      const enr = initialEnrollment || (await fetchStudentEnrollment(uid));
+      const freshEnr = await fetchStudentEnrollment(uid);
+      const enr = freshEnr || initialEnrollment || null;
       setEnrollment(enr);
 
-      const univId = enr?.universityId || 'univ-dar-al-salam';
-      const progId = enr?.programId || 'prog-mbbs';
-      const levelId = enr?.currentStudyLevelId || 'lvl-4';
+      // Do not load academic resources, blocks, or assessments if student enrollment is not yet approved
+      if (!enr || enr.status !== 'approved') {
+        setStudyPeriods([]);
+        setResources([]);
+        setAssessments([]);
+        return;
+      }
+
+      const univId = enr.universityId || 'univ-dar-al-salam';
+      const progId = enr.programId || 'prog-mbbs';
+      const levelId = enr.currentStudyLevelId || 'lvl-4';
 
       const [
         univList,
@@ -162,7 +171,7 @@ export default function StudentProfile({
 
   useEffect(() => {
     loadProfileData();
-  }, [uid, initialEnrollment?.currentStudyLevelId, initialEnrollment?.academicStudentNumber]);
+  }, [uid, initialEnrollment?.currentStudyLevelId, initialEnrollment?.academicStudentNumber, initialEnrollment?.status]);
 
   const handleAcademicChangeSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -203,6 +212,46 @@ export default function StudentProfile({
       <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-12 text-center text-xs text-slate-400">
         <RefreshCw className="w-6 h-6 animate-spin mx-auto text-teal-400 mb-2" />
         <span>جارٍ تحميل الملف الأكاديمي وتقدم البلوكات والنشاط الأخير...</span>
+      </div>
+    );
+  }
+
+  // Strict Enrollment Approval Gate: Students cannot access profile blocks/resources before enrollment is approved
+  if (!enrollment || enrollment.status !== 'approved') {
+    return (
+      <div className="max-w-xl mx-auto bg-slate-900/90 border border-slate-800 rounded-2xl p-6 sm:p-8 text-center space-y-4 shadow-2xl" dir="rtl">
+        <div className="w-14 h-14 rounded-2xl bg-amber-500/10 text-amber-400 mx-auto flex items-center justify-center">
+          <Clock className="w-8 h-8" />
+        </div>
+        <h2 className="text-lg font-bold text-white">
+          {!enrollment
+            ? 'يرجى إتمام تسجيل القيد الأكاديمي أولاً'
+            : enrollment.status === 'pending'
+            ? 'ملفك الأكاديمي وتقدم البلوكات بانتظار اعتماد القيد'
+            : 'طلب القيد الأكاديمي غير معتمد حالياً'}
+        </h2>
+        <p className="text-xs text-slate-300 leading-relaxed">
+          {!enrollment
+            ? 'لا يمكن استعراض تقدم البلوكات والمقررات والموارد الطبية قبل تقديم طلب القيد الأكاديمي واعتماده من إدارة الكلية.'
+            : 'تم استلام طلب قيدك الأكاديمي، ولن يتم فتح البلوكات الدراسية أو المحاضرات أو الاختبارات إلا بعد مراجعة واعتماد القيد رسمياً من قبل مشرف الجامعة.'}
+        </p>
+        <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+          <button
+            onClick={loadProfileData}
+            className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 border border-slate-700"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>تحديث حالة الاعتماد</span>
+          </button>
+          {onNavigateTab && (
+            <button
+              onClick={() => onNavigateTab('study')}
+              className="px-5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold transition-colors"
+            >
+              العودة لبوابة القيد الأكاديمي
+            </button>
+          )}
+        </div>
       </div>
     );
   }

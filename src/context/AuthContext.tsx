@@ -85,10 +85,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const loadRoleForUser = async (currentUser: User) => {
+    // Instant local cache hydration first
+    try {
+      const cachedRole = localStorage.getItem(`umed_cached_role_${currentUser.uid}`);
+      if (cachedRole) {
+        setRoleDoc(JSON.parse(cachedRole));
+      }
+    } catch (e) {}
+
     // 1. Check Firestore & Owner Email match first
     const fsRole = await fetchUserRole(currentUser.uid, currentUser.email);
     if (fsRole) {
       setRoleDoc(fsRole);
+      try {
+        localStorage.setItem(`umed_cached_role_${currentUser.uid}`, JSON.stringify(fsRole));
+      } catch (e) {}
       // If owner email, also sync with server silently
       if (isInitialOwnerEmail(currentUser.email)) {
         try {
@@ -106,6 +117,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const data = await res.json();
         if (data.role) {
           setRoleDoc(data.role);
+          try {
+            localStorage.setItem(`umed_cached_role_${currentUser.uid}`, JSON.stringify(data.role));
+          } catch (e) {}
           return;
         }
       }
@@ -124,16 +138,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
         setUser(currentUser);
+        // Hydrate cached profile immediately
+        try {
+          const cachedProf = localStorage.getItem(`umed_cached_profile_${currentUser.uid}`);
+          if (cachedProf) {
+            setUserProfile(JSON.parse(cachedProf));
+          }
+        } catch (e) {}
+
         try {
           await currentUser.getIdToken();
         } catch (err: any) {
-          // Ignore token-service-api restriction on Starter Tier projects; keep user session active
           console.warn('Using active session without token refresh:', err?.message || err);
         }
         try {
           await loadRoleForUser(currentUser);
           const profile = await fetchUserProfile(currentUser.uid);
-          setUserProfile(profile);
+          if (profile) {
+            setUserProfile(profile);
+            try {
+              localStorage.setItem(`umed_cached_profile_${currentUser.uid}`, JSON.stringify(profile));
+            } catch (e) {}
+          }
         } catch (err) {
           console.warn('Could not load user data from remote Firestore:', err);
         }

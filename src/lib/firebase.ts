@@ -72,12 +72,32 @@ const dbId = (firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreData
 let firestoreInstance;
 try {
   firestoreInstance = dbId
-    ? initializeFirestore(app, { experimentalForceLongPolling: true }, dbId)
-    : initializeFirestore(app, { experimentalForceLongPolling: true });
+    ? initializeFirestore(app, { experimentalForceLongPolling: true, ignoreUndefinedProperties: true }, dbId)
+    : initializeFirestore(app, { experimentalForceLongPolling: true, ignoreUndefinedProperties: true });
 } catch {
   firestoreInstance = dbId ? getFirestore(app, dbId) : getFirestore(app);
 }
 export const db = firestoreInstance;
+
+/**
+ * Recursively strips undefined fields so Firestore setDoc/updateDoc never throws
+ * "Unsupported field value: undefined"
+ */
+export function cleanFirestoreData<T>(obj: T): T {
+  if (obj === null || obj === undefined || typeof obj !== 'object') {
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(item => cleanFirestoreData(item)) as unknown as T;
+  }
+  const cleaned: Record<string, any> = {};
+  for (const [k, v] of Object.entries(obj as Record<string, any>)) {
+    if (v !== undefined) {
+      cleaned[k] = cleanFirestoreData(v);
+    }
+  }
+  return cleaned as T;
+}
 
 // 3. Google Auth Provider
 const googleProvider = new GoogleAuthProvider();
@@ -166,7 +186,7 @@ export async function fetchUserRole(uid: string, email?: string | null): Promise
 
 export async function saveUserRoleToFirestore(roleDoc: UserRoleDoc): Promise<void> {
   try {
-    await setDoc(doc(db, 'userRoles', roleDoc.uid), roleDoc, { merge: true });
+    await setDoc(doc(db, 'userRoles', roleDoc.uid), cleanFirestoreData(roleDoc), { merge: true });
   } catch (err) {
     console.warn('Could not write roleDoc to Firestore:', err);
   }
@@ -256,7 +276,7 @@ export async function fetchUserProfile(uid: string): Promise<UserProfile | null>
 export async function saveUserProfile(profile: UserProfile): Promise<void> {
   try {
     const profileRef = doc(db, 'userProfiles', profile.uid);
-    await setDoc(profileRef, profile, { merge: true });
+    await setDoc(profileRef, cleanFirestoreData(profile), { merge: true });
   } catch (err) {
     console.warn('Could not save user profile to Firestore:', err);
   }
@@ -337,7 +357,7 @@ export async function writeAuditLogToCloud(params: {
   };
 
   try {
-    await setDoc(doc(db, 'auditLogs', log.id), log);
+    await setDoc(doc(db, 'auditLogs', log.id), cleanFirestoreData(log));
   } catch (e) {}
 
   return log;

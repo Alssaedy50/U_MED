@@ -184,6 +184,7 @@ export default function RegisterEnrollment({
       const policy = selectedUniversity?.enrollmentPolicy || 'approval_required';
       const enrollment = await submitEnrollmentRequest({
         uid,
+        studentNameArabic,
         universityId: selectedUniversityId,
         collegeId: selectedCollegeId,
         programId: selectedProgramId,

@@ -18,7 +18,8 @@ import {
   Edit2,
   Trash2,
   FileEdit,
-  X
+  X,
+  UserPlus
 } from 'lucide-react';
 import { 
   StudentEnrollment, 
@@ -29,6 +30,7 @@ import {
 } from '../../types/umed.ts';
 import { 
   fetchEnrollmentsForAdmin, 
+  submitEnrollmentRequest,
   updateEnrollmentStatus,
   updateStudentEnrollment,
   deleteEnrollment,
@@ -59,9 +61,15 @@ export default function EnrollmentApprovalManager({
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState<string>('');
 
-  // Direct Edit & Delete States
+  // Direct Edit, Add & Delete States
   const [editingEnrollment, setEditingEnrollment] = useState<StudentEnrollment | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [showAddStudentModal, setShowAddStudentModal] = useState<boolean>(false);
+  const [newStudentName, setNewStudentName] = useState<string>('');
+  const [newStudentNumber, setNewStudentNumber] = useState<string>('');
+  const [newStudentLevelId, setNewStudentLevelId] = useState<string>('lvl-1');
+  const [newStudentUid, setNewStudentUid] = useState<string>('');
+  const [newStudentYear, setNewStudentYear] = useState<string>('2025/2026');
 
   const loadAll = async () => {
     setLoading(true);
@@ -75,6 +83,11 @@ export default function EnrollmentApprovalManager({
       setChangeRequests(reqList);
       if (lvlList && lvlList.length > 0) {
         setStudyLevels(lvlList);
+      }
+      // If pending queue is empty but there are enrollments, show all so list isn't blank
+      const pendingCount = enrList.filter(e => e.status === 'pending').length;
+      if (pendingCount === 0 && enrList.length > 0) {
+        setFilterStatus('all');
       }
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: err.message || 'فشل جلب طلبات القيد والتعديل الأكاديمي' });
@@ -91,11 +104,55 @@ export default function EnrollmentApprovalManager({
     setActionLoading(enrollmentId);
     setStatusMessage(null);
     try {
-      await updateEnrollmentStatus(enrollmentId, 'approved', adminUid);
-      setEnrollments(prev => prev.map(e => e.id === enrollmentId ? { ...e, status: 'approved' } : e));
-      setStatusMessage({ type: 'success', text: 'تم اعتماد القيد الأكاديمي للطالب بنجاح وتفعيل وصوله للمقررات.' });
+      const updated = await updateEnrollmentStatus(enrollmentId, 'approved', adminUid);
+      setEnrollments(prev => {
+        const next = prev.map(e => e.id === enrollmentId ? updated : e);
+        const remainingPending = next.filter(e => e.status === 'pending').length;
+        if (filterStatus === 'pending' && remainingPending === 0) {
+          setFilterStatus('all');
+        }
+        return next;
+      });
+      setStatusMessage({ type: 'success', text: `تم اعتماد القيد الأكاديمي للطالب (${updated.studentNameArabic || updated.academicStudentNumber}) وحفظه في السحابة بنجاح ✓` });
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: err.message || 'فشل اعتماد القيد' });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleAddAndApproveStudent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newStudentName.trim() || !newStudentNumber.trim()) return;
+    setActionLoading('add-new');
+    setStatusMessage(null);
+    try {
+      const targetUid = newStudentUid.trim() || `stu-${Date.now().toString(36)}`;
+      const created = await submitEnrollmentRequest({
+        uid: targetUid,
+        studentNameArabic: newStudentName.trim(),
+        universityId: assignedUniversityId || 'univ-dar-al-salam',
+        collegeId: 'col-human-medicine',
+        programId: 'prog-mbbs',
+        curriculumVersionId: 'cur-dar-2024',
+        currentStudyLevelId: newStudentLevelId,
+        academicStudentNumber: newStudentNumber.trim(),
+        academicYear: newStudentYear.trim() || '2025/2026',
+        policy: 'immediate'
+      });
+      const approved = await updateEnrollmentStatus(created.id, 'approved', adminUid);
+      setEnrollments(prev => [approved, ...prev.filter(item => item.id !== approved.id)]);
+      setFilterStatus('all');
+      setShowAddStudentModal(false);
+      setNewStudentName('');
+      setNewStudentNumber('');
+      setNewStudentUid('');
+      setStatusMessage({
+        type: 'success',
+        text: `تم تسجيل واعتماد الطالب الجديد (${approved.studentNameArabic} - ${approved.academicStudentNumber}) بنجاح ✓`
+      });
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || 'فشل إضافة الطالب الجديد' });
     } finally {
       setActionLoading(null);
     }
@@ -257,6 +314,14 @@ export default function EnrollmentApprovalManager({
               )}
             </button>
           </div>
+
+          <button
+            onClick={() => setShowAddStudentModal(true)}
+            className="py-2 px-3.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-lg shadow-teal-600/20"
+          >
+            <UserPlus className="w-3.5 h-3.5" />
+            <span>+ إضافة واعتماد طالب جديد</span>
+          </button>
 
           <button
             onClick={loadAll}
@@ -678,6 +743,104 @@ export default function EnrollmentApprovalManager({
                 className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold"
               >
                 حفظ التغييرات
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* MODAL: ADD & APPROVE NEW STUDENT DIRECTLY */}
+      {showAddStudentModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4" dir="rtl">
+          <form onSubmit={handleAddAndApproveStudent} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <UserPlus className="w-4 h-4 text-teal-400" />
+                <span>تسجيل واعتماد قيد طالب جديد مباشرة</span>
+              </h3>
+              <button type="button" onClick={() => setShowAddStudentModal(false)} className="text-slate-400 hover:text-white">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="text-slate-300 block mb-1 font-semibold">اسم الطالب الرباعي بالعربية:</label>
+                <input
+                  type="text"
+                  required
+                  value={newStudentName}
+                  onChange={(e) => setNewStudentName(e.target.value)}
+                  placeholder="مثال: د. محمد عبدالله الصالحي"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-300 block mb-1 font-semibold">الرقم الجامعي / الأكاديمي:</label>
+                <input
+                  type="text"
+                  required
+                  value={newStudentNumber}
+                  onChange={(e) => setNewStudentNumber(e.target.value)}
+                  placeholder="مثال: 20211105"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                  dir="ltr"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-300 block mb-1 font-semibold">المستوى الدراسي:</label>
+                <select
+                  value={newStudentLevelId}
+                  onChange={(e) => setNewStudentLevelId(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                >
+                  {studyLevels.map(lvl => (
+                    <option key={lvl.id} value={lvl.id}>{lvl.titleArabic}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-slate-300 block mb-1 font-semibold">العام الأكاديمي:</label>
+                  <input
+                    type="text"
+                    value={newStudentYear}
+                    onChange={(e) => setNewStudentYear(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                    dir="ltr"
+                  />
+                </div>
+                <div>
+                  <label className="text-slate-400 block mb-1">معرف حساب الطالب UID (اختياري):</label>
+                  <input
+                    type="text"
+                    value={newStudentUid}
+                    onChange={(e) => setNewStudentUid(e.target.value)}
+                    placeholder="إن وجد"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                    dir="ltr"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowAddStudentModal(false)}
+                className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold"
+              >
+                إلغاء
+              </button>
+              <button
+                type="submit"
+                disabled={actionLoading === 'add-new'}
+                className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold"
+              >
+                {actionLoading === 'add-new' ? 'جارٍ الحفظ والاعتماد...' : 'إضافة واعتماد القيد فوراً'}
               </button>
             </div>
           </form>

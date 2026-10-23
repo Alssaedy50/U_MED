@@ -45,14 +45,22 @@ interface StudentDashboardProps {
   uid: string;
   userEmail: string;
   displayNameArabic: string;
+  onEnrollmentStatusChange?: (enr: StudentEnrollment | null) => void;
 }
 
 export default function StudentDashboard({
   uid,
   userEmail,
-  displayNameArabic
+  displayNameArabic,
+  onEnrollmentStatusChange
 }: StudentDashboardProps) {
-  const [enrollment, setEnrollment] = useState<StudentEnrollment | null>(null);
+  const [enrollment, setEnrollment] = useState<StudentEnrollment | null>(() => {
+    try {
+      const cached = localStorage.getItem(`umed_enrollment_${uid}`);
+      if (cached) return JSON.parse(cached) as StudentEnrollment;
+    } catch (e) {}
+    return null;
+  });
   const [loading, setLoading] = useState<boolean>(true);
   const [activeTab, setActiveTab] = useState<'study' | 'library' | 'assessments' | 'profile'>('study');
 
@@ -75,6 +83,9 @@ export default function StudentDashboard({
     try {
       const enr = await fetchStudentEnrollment(uid);
       setEnrollment(enr);
+      if (onEnrollmentStatusChange) {
+        onEnrollmentStatusChange(enr);
+      }
 
       if (enr && enr.status === 'approved') {
         const lvls = await fetchStudyLevels(enr.programId);

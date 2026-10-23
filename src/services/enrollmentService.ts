@@ -12,12 +12,11 @@ import {
   getDoc,
   getDocs, 
   setDoc, 
-  updateDoc, 
   deleteDoc,
   query, 
   where 
 } from 'firebase/firestore';
-import { db } from '../lib/firebase.ts';
+import { db, cleanFirestoreData } from '../lib/firebase.ts';
 import { 
   StudentEnrollment, 
   EnrollmentStatus, 
@@ -26,6 +25,7 @@ import {
 
 const ENROLLMENTS_STORAGE_KEY = 'umed_enrollments_all';
 const ENROLLMENTS_INIT_KEY = 'umed_enrollments_init';
+const ENROLLMENTS_DELETED_KEY = 'umed_enrollments_deleted_ids';
 const CHANGE_REQUESTS_STORAGE_KEY = 'umed_academic_change_requests';
 const CHANGE_REQUESTS_INIT_KEY = 'umed_academic_change_requests_init';
 
@@ -33,6 +33,7 @@ const DEFAULT_DEMO_ENROLLMENTS: StudentEnrollment[] = [
   {
     id: 'enr-demo-1',
     uid: 'user-demo-s1',
+    studentNameArabic: 'أحمد محمد الشرعبي',
     universityId: 'univ-dar-al-salam',
     collegeId: 'col-human-medicine',
     programId: 'prog-mbbs',
@@ -47,6 +48,7 @@ const DEFAULT_DEMO_ENROLLMENTS: StudentEnrollment[] = [
   {
     id: 'enr-demo-2',
     uid: 'user-demo-s2',
+    studentNameArabic: 'سارة عبدالكريم الحكيمي',
     universityId: 'univ-dar-al-salam',
     collegeId: 'col-human-medicine',
     programId: 'prog-mbbs',
@@ -76,17 +78,48 @@ const DEFAULT_DEMO_CHANGE_REQUESTS: AcademicChangeRequest[] = [
   }
 ];
 
+function getDeletedEnrollmentIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(ENROLLMENTS_DELETED_KEY);
+    if (raw) return new Set(JSON.parse(raw));
+  } catch (e) {}
+  return new Set();
+}
+
+function markEnrollmentDeleted(id: string) {
+  try {
+    const set = getDeletedEnrollmentIds();
+    set.add(id);
+    localStorage.setItem(ENROLLMENTS_DELETED_KEY, JSON.stringify(Array.from(set)));
+  } catch (e) {}
+}
+
+function unmarkEnrollmentDeleted(id: string) {
+  try {
+    const set = getDeletedEnrollmentIds();
+    if (set.has(id)) {
+      set.delete(id);
+      localStorage.setItem(ENROLLMENTS_DELETED_KEY, JSON.stringify(Array.from(set)));
+    }
+  } catch (e) {}
+}
+
 function getLocalEnrollments(): StudentEnrollment[] {
   try {
     const raw = localStorage.getItem(ENROLLMENTS_STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const deleted = getDeletedEnrollmentIds();
+      return (JSON.parse(raw) as StudentEnrollment[]).filter(e => !deleted.has(e.id));
+    }
   } catch (e) {}
   return [];
 }
 
 function saveLocalEnrollments(list: StudentEnrollment[]) {
   try {
-    localStorage.setItem(ENROLLMENTS_STORAGE_KEY, JSON.stringify(list));
+    const deleted = getDeletedEnrollmentIds();
+    const clean = list.filter(e => !deleted.has(e.id));
+    localStorage.setItem(ENROLLMENTS_STORAGE_KEY, JSON.stringify(clean));
     localStorage.setItem(ENROLLMENTS_INIT_KEY, 'true');
   } catch (e) {}
 }
@@ -106,37 +139,95 @@ function saveLocalChangeRequests(list: AcademicChangeRequest[]) {
   } catch (e) {}
 }
 
+function pickNewestEnrollment(a: StudentEnrollment, b: StudentEnrollment): StudentEnrollment {
+  const timeA = new Date(a.updatedAt || a.reviewedAt || a.enrolledAt || 0).getTime();
+  const timeB = new Date(b.updatedAt || b.reviewedAt || b.enrolledAt || 0).getTime();
+  if (timeA !== timeB) {
+    return timeA > timeB ? a : b;
+  }
+  if (a.status === 'approved' && b.status !== 'approved') return a;
+  if (b.status === 'approved' && a.status !== 'approved') return b;
+  return b;
+}
+
 // ---------------------------------------------------------------------------
 // 1. Student Enrollment Operations
 // ---------------------------------------------------------------------------
 
 export async function fetchStudentEnrollment(uid: string): Promise<StudentEnrollment | null> {
+  if (!uid) return null;
+  const deleted = getDeletedEnrollmentIds();
+
+  // 1. Read local cache first so we never lose state if offline or if local was just updated
+  let localCandidate: StudentEnrollment | null = null;
   try {
+    const cachedRaw = localStorage.getItem(`umed_enrollment_${uid}`);
+    if (cachedRaw) {
+      const parsed = JSON.parse(cachedRaw) as StudentEnrollment;
+      if (!deleted.has(parsed.id)) {
+        localCandidate = parsed;
+      }
+    }
+    const allLocal = getLocalEnrollments().filter(e => e.uid === uid && !deleted.has(e.id));
+    for (const item of allLocal) {
+      localCandidate = localCandidate ? pickNewestEnrollment(localCandidate, item) : item;
+    }
+  } catch (e) {}
+
+  // 2. Query Firestore (both deterministic doc ID and uid query for legacy docs)
+  let remoteCandidate: StudentEnrollment | null = null;
+  try {
+    const deterministicRef = doc(db, 'studentEnrollments', `enr-${uid}`);
+    const detSnap = await getDoc(deterministicRef);
+    if (detSnap.exists() && !deleted.has(detSnap.id)) {
+      remoteCandidate = { id: detSnap.id, ...detSnap.data() } as StudentEnrollment;
+    }
+
     const q = query(collection(db, 'studentEnrollments'), where('uid', '==', uid));
     const snap = await getDocs(q);
-    if (!snap.empty) {
-      const data = { id: snap.docs[0].id, ...snap.docs[0].data() } as StudentEnrollment;
-      localStorage.setItem(`umed_enrollment_${uid}`, JSON.stringify(data));
-      return data;
-    }
+    snap.forEach((d) => {
+      if (!deleted.has(d.id)) {
+        const item = { id: d.id, ...d.data() } as StudentEnrollment;
+        remoteCandidate = remoteCandidate ? pickNewestEnrollment(remoteCandidate, item) : item;
+      }
+    });
   } catch (err) {
     console.warn('Firestore fetchStudentEnrollment error:', err);
   }
 
-  // Fallback to local storage cache
-  try {
-    const cached = localStorage.getItem(`umed_enrollment_${uid}`);
-    if (cached) return JSON.parse(cached);
-    const allLocal = getLocalEnrollments();
-    const found = allLocal.find(e => e.uid === uid);
-    if (found) return found;
-  } catch (e) {}
+  // 3. Resolve best candidate and ensure both LocalStorage & Firestore stay synchronized
+  let winner: StudentEnrollment | null = null;
+  if (localCandidate && remoteCandidate) {
+    winner = pickNewestEnrollment(localCandidate, remoteCandidate);
+  } else {
+    winner = remoteCandidate || localCandidate;
+  }
 
-  return null;
+  if (winner) {
+    try {
+      localStorage.setItem(`umed_enrollment_${uid}`, JSON.stringify(winner));
+      const allLocal = getLocalEnrollments();
+      const idx = allLocal.findIndex(e => e.id === winner!.id || e.uid === uid);
+      if (idx >= 0) {
+        allLocal[idx] = winner;
+        saveLocalEnrollments(allLocal);
+      } else {
+        saveLocalEnrollments([winner, ...allLocal]);
+      }
+    } catch (e) {}
+
+    // If local was newer than remote or remote didn't exist yet, sync up to Firestore
+    if (!remoteCandidate || winner !== remoteCandidate) {
+      setDoc(doc(db, 'studentEnrollments', winner.id), cleanFirestoreData(winner), { merge: true }).catch(() => {});
+    }
+  }
+
+  return winner;
 }
 
 export async function submitEnrollmentRequest(params: {
   uid: string;
+  studentNameArabic?: string;
   universityId: string;
   collegeId: string;
   programId: string;
@@ -146,12 +237,16 @@ export async function submitEnrollmentRequest(params: {
   academicYear: string;
   policy: 'immediate' | 'approval_required';
 }): Promise<StudentEnrollment> {
-  const enrollmentId = `enr-${params.uid}-${Date.now().toString(36)}`;
+  // Deterministic ID per student UID prevents duplicate pending records
+  const enrollmentId = `enr-${params.uid}`;
+  unmarkEnrollmentDeleted(enrollmentId);
   const status: EnrollmentStatus = params.policy === 'immediate' ? 'approved' : 'pending';
+  const nowIso = new Date().toISOString();
 
-  const enrollment: StudentEnrollment = {
+  const enrollment: StudentEnrollment = cleanFirestoreData({
     id: enrollmentId,
     uid: params.uid,
+    studentNameArabic: params.studentNameArabic?.trim() || 'طالب كلية الطب البشري',
     universityId: params.universityId,
     collegeId: params.collegeId,
     programId: params.programId,
@@ -160,21 +255,33 @@ export async function submitEnrollmentRequest(params: {
     academicStudentNumber: params.academicStudentNumber.trim(),
     academicYear: params.academicYear,
     status,
-    enrolledAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
+    enrolledAt: nowIso,
+    updatedAt: nowIso
+  });
 
-  try {
-    await setDoc(doc(db, 'studentEnrollments', enrollmentId), enrollment);
-  } catch (err) {
-    console.warn('Could not write enrollment directly to Firestore, saving to local cache:', err);
-  }
-
+  // Save to local cache immediately so page refresh never loses registration
   try {
     localStorage.setItem(`umed_enrollment_${params.uid}`, JSON.stringify(enrollment));
-    const currentAll = await fetchEnrollmentsForAdmin();
-    saveLocalEnrollments([enrollment, ...currentAll.filter(e => e.id !== enrollmentId)]);
+    const currentAll = getLocalEnrollments();
+    saveLocalEnrollments([
+      enrollment,
+      ...currentAll.filter(e => e.id !== enrollmentId && e.uid !== params.uid)
+    ]);
   } catch (e) {}
+
+  try {
+    await setDoc(doc(db, 'studentEnrollments', enrollmentId), cleanFirestoreData(enrollment), { merge: true });
+    // Also clean up any older random-ID enrollment docs for this same uid
+    const q = query(collection(db, 'studentEnrollments'), where('uid', '==', params.uid));
+    const snap = await getDocs(q);
+    for (const d of snap.docs) {
+      if (d.id !== enrollmentId) {
+        await deleteDoc(doc(db, 'studentEnrollments', d.id)).catch(() => {});
+      }
+    }
+  } catch (err) {
+    console.warn('Could not write enrollment directly to Firestore, saved to local cache:', err);
+  }
 
   return enrollment;
 }
@@ -184,6 +291,7 @@ export async function submitEnrollmentRequest(params: {
 // ---------------------------------------------------------------------------
 
 export async function fetchEnrollmentsForAdmin(universityId?: string): Promise<StudentEnrollment[]> {
+  const deleted = getDeletedEnrollmentIds();
   const localList = getLocalEnrollments();
   const isInitialized = localStorage.getItem(ENROLLMENTS_INIT_KEY) === 'true';
 
@@ -193,13 +301,51 @@ export async function fetchEnrollmentsForAdmin(universityId?: string): Promise<S
       q = query(collection(db, 'studentEnrollments'), where('universityId', '==', universityId));
     }
     const snap = await getDocs(q);
-    const list: StudentEnrollment[] = [];
-    snap.forEach((d) => list.push({ id: d.id, ...d.data() } as StudentEnrollment));
-    if (list.length > 0) {
-      const mergedMap: Record<string, StudentEnrollment> = {};
-      localList.forEach(item => { mergedMap[item.id] = item; });
-      list.forEach(item => { mergedMap[item.id] = item; });
-      const merged = Object.values(mergedMap);
+    const firestoreList: StudentEnrollment[] = [];
+    snap.forEach((d) => {
+      if (!deleted.has(d.id)) {
+        firestoreList.push({ id: d.id, ...d.data() } as StudentEnrollment);
+      }
+    });
+
+    if (firestoreList.length > 0 || localList.length > 0) {
+      // Merge by ID using newest updatedAt timestamp so local approvals are never overwritten by stale cloud data
+      const byIdMap = new Map<string, StudentEnrollment>();
+      for (const item of localList) {
+        if (!deleted.has(item.id)) {
+          byIdMap.set(item.id, item);
+        }
+      }
+      for (const remoteItem of firestoreList) {
+        if (deleted.has(remoteItem.id)) continue;
+        const existingLocal = byIdMap.get(remoteItem.id);
+        if (existingLocal) {
+          const winner = pickNewestEnrollment(existingLocal, remoteItem);
+          byIdMap.set(remoteItem.id, winner);
+          // If local was newer than Firestore, push local update to Firestore
+          if (winner === existingLocal && existingLocal.updatedAt !== remoteItem.updatedAt) {
+            setDoc(doc(db, 'studentEnrollments', winner.id), cleanFirestoreData(winner), { merge: true }).catch(() => {});
+          }
+        } else {
+          byIdMap.set(remoteItem.id, remoteItem);
+        }
+      }
+
+      // Deduplicate by UID (keep newest record per student UID)
+      const byUidMap = new Map<string, StudentEnrollment>();
+      for (const item of byIdMap.values()) {
+        const key = item.uid || item.id;
+        const prev = byUidMap.get(key);
+        if (!prev) {
+          byUidMap.set(key, item);
+        } else {
+          byUidMap.set(key, pickNewestEnrollment(prev, item));
+        }
+      }
+
+      const merged = Array.from(byUidMap.values()).sort(
+        (a, b) => new Date(b.updatedAt || b.enrolledAt || 0).getTime() - new Date(a.updatedAt || a.enrolledAt || 0).getTime()
+      );
       saveLocalEnrollments(merged);
       return universityId ? merged.filter(e => e.universityId === universityId) : merged;
     }
@@ -215,7 +361,7 @@ export async function fetchEnrollmentsForAdmin(universityId?: string): Promise<S
   saveLocalEnrollments(DEFAULT_DEMO_ENROLLMENTS);
   for (const demo of DEFAULT_DEMO_ENROLLMENTS) {
     try {
-      await setDoc(doc(db, 'studentEnrollments', demo.id), demo, { merge: true });
+      await setDoc(doc(db, 'studentEnrollments', demo.id), cleanFirestoreData(demo), { merge: true });
     } catch (e) {}
   }
 
@@ -229,47 +375,73 @@ export async function updateEnrollmentStatus(
   status: EnrollmentStatus, 
   reviewedBy: string, 
   rejectionReason?: string
-): Promise<void> {
+): Promise<StudentEnrollment> {
   const nowIso = new Date().toISOString();
   const existing = await fetchEnrollmentsForAdmin();
-  const target = existing.find(e => e.id === enrollmentId);
+  let target = existing.find(e => e.id === enrollmentId);
 
-  const updatedItem: StudentEnrollment = {
-    ...(target || {
-      id: enrollmentId,
-      uid: 'student',
-      universityId: 'univ-dar-al-salam',
-      collegeId: 'col-human-medicine',
-      programId: 'prog-mbbs',
-      curriculumVersionId: 'cur-dar-2024',
-      currentStudyLevelId: 'lvl-4',
-      academicStudentNumber: 'MED-0000',
-      academicYear: '2025/2026',
-      status,
-      enrolledAt: nowIso,
-      updatedAt: nowIso
-    }),
+  if (!target) {
+    try {
+      const snap = await getDoc(doc(db, 'studentEnrollments', enrollmentId));
+      if (snap.exists()) {
+        target = { id: snap.id, ...snap.data() } as StudentEnrollment;
+      }
+    } catch (e) {}
+  }
+
+  const baseItem: StudentEnrollment = target || {
+    id: enrollmentId,
+    uid: enrollmentId.startsWith('enr-') ? enrollmentId.replace(/^enr-/, '') : 'student',
+    universityId: 'univ-dar-al-salam',
+    collegeId: 'col-human-medicine',
+    programId: 'prog-mbbs',
+    curriculumVersionId: 'cur-dar-2024',
+    currentStudyLevelId: 'lvl-4',
+    academicStudentNumber: 'MED-0000',
+    academicYear: '2025/2026',
     status,
-    reviewedBy,
-    reviewedAt: nowIso,
-    rejectionReason: rejectionReason || undefined,
+    enrolledAt: nowIso,
     updatedAt: nowIso
   };
 
-  try {
-    await setDoc(doc(db, 'studentEnrollments', enrollmentId), updatedItem, { merge: true });
-  } catch (err) {
-    console.warn('Could not update enrollment directly, reporting to server API:', err);
-  }
+  const updatedItem: StudentEnrollment = cleanFirestoreData({
+    ...baseItem,
+    status,
+    reviewedBy,
+    reviewedAt: nowIso,
+    rejectionReason: status === 'rejected' ? (rejectionReason || 'لم يتم استيفاء متطلبات القيد') : '',
+    updatedAt: nowIso
+  });
 
-  saveLocalEnrollments(existing.map(e => e.id === enrollmentId ? updatedItem : e));
+  // 1. Update local storage immediately
+  const updatedList = existing.some(e => e.id === enrollmentId)
+    ? existing.map(e => (e.id === enrollmentId || (updatedItem.uid && e.uid === updatedItem.uid)) ? updatedItem : e)
+    : [updatedItem, ...existing];
+  saveLocalEnrollments(updatedList);
+
   if (updatedItem.uid) {
     try {
       localStorage.setItem(`umed_enrollment_${updatedItem.uid}`, JSON.stringify(updatedItem));
     } catch (e) {}
   }
 
-  // Record audit log via backend server
+  // 2. Persist to Firestore (both by enrollmentId and any duplicate docs for the same uid)
+  try {
+    await setDoc(doc(db, 'studentEnrollments', enrollmentId), cleanFirestoreData(updatedItem), { merge: true });
+    if (updatedItem.uid) {
+      const q = query(collection(db, 'studentEnrollments'), where('uid', '==', updatedItem.uid));
+      const snap = await getDocs(q);
+      for (const d of snap.docs) {
+        if (d.id !== enrollmentId) {
+          await setDoc(doc(db, 'studentEnrollments', d.id), cleanFirestoreData({ ...updatedItem, id: d.id }), { merge: true });
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Could not update enrollment directly in Firestore, saved locally:', err);
+  }
+
+  // 3. Record audit log via backend server
   try {
     await fetch('/api/admin/enrollment-review', {
       method: 'POST',
@@ -278,10 +450,12 @@ export async function updateEnrollmentStatus(
         enrollmentId,
         status,
         reviewedBy,
-        rejectionReason
+        rejectionReason: updatedItem.rejectionReason
       })
     });
   } catch (e) {}
+
+  return updatedItem;
 }
 
 export async function updateStudentEnrollment(
@@ -293,18 +467,12 @@ export async function updateStudentEnrollment(
   const target = existing.find(e => e.id === enrollmentId);
   if (!target) return null;
 
-  const updatedEnrollment: StudentEnrollment = {
+  const updatedEnrollment: StudentEnrollment = cleanFirestoreData({
     ...target,
     ...updates,
     id: enrollmentId,
     updatedAt: nowIso
-  };
-
-  try {
-    await setDoc(doc(db, 'studentEnrollments', enrollmentId), updatedEnrollment, { merge: true });
-  } catch (err) {
-    console.warn('Firestore updateStudentEnrollment fallback:', err);
-  }
+  });
 
   saveLocalEnrollments(existing.map(e => e.id === enrollmentId ? updatedEnrollment : e));
   if (updatedEnrollment.uid) {
@@ -313,18 +481,28 @@ export async function updateStudentEnrollment(
     } catch (e) {}
   }
 
+  try {
+    await setDoc(doc(db, 'studentEnrollments', enrollmentId), cleanFirestoreData(updatedEnrollment), { merge: true });
+    if (updatedEnrollment.uid) {
+      const q = query(collection(db, 'studentEnrollments'), where('uid', '==', updatedEnrollment.uid));
+      const snap = await getDocs(q);
+      for (const d of snap.docs) {
+        if (d.id !== enrollmentId) {
+          await setDoc(doc(db, 'studentEnrollments', d.id), cleanFirestoreData({ ...updatedEnrollment, id: d.id }), { merge: true });
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Firestore updateStudentEnrollment fallback:', err);
+  }
+
   return updatedEnrollment;
 }
 
 export async function deleteEnrollment(enrollmentId: string): Promise<void> {
   const existing = await fetchEnrollmentsForAdmin();
   const target = existing.find(e => e.id === enrollmentId);
-
-  try {
-    await deleteDoc(doc(db, 'studentEnrollments', enrollmentId));
-  } catch (err) {
-    console.warn('Firestore deleteEnrollment fallback:', err);
-  }
+  markEnrollmentDeleted(enrollmentId);
 
   const filtered = existing.filter(e => e.id !== enrollmentId);
   saveLocalEnrollments(filtered);
@@ -332,6 +510,20 @@ export async function deleteEnrollment(enrollmentId: string): Promise<void> {
     try {
       localStorage.removeItem(`umed_enrollment_${target.uid}`);
     } catch (e) {}
+  }
+
+  try {
+    await deleteDoc(doc(db, 'studentEnrollments', enrollmentId));
+    if (target?.uid) {
+      const q = query(collection(db, 'studentEnrollments'), where('uid', '==', target.uid));
+      const snap = await getDocs(q);
+      for (const d of snap.docs) {
+        markEnrollmentDeleted(d.id);
+        await deleteDoc(doc(db, 'studentEnrollments', d.id)).catch(() => {});
+      }
+    }
+  } catch (err) {
+    console.warn('Firestore deleteEnrollment fallback:', err);
   }
 }
 
@@ -358,10 +550,18 @@ export async function fetchAcademicChangeRequestsForAdmin(universityId?: string)
     const snap = await getDocs(q);
     const list: AcademicChangeRequest[] = [];
     snap.forEach(d => list.push({ id: d.id, ...d.data() } as AcademicChangeRequest));
-    if (list.length > 0) {
+    if (list.length > 0 || localReqs.length > 0) {
       const mergedMap: Record<string, AcademicChangeRequest> = {};
       localReqs.forEach(r => { mergedMap[r.id] = r; });
-      list.forEach(r => { mergedMap[r.id] = r; });
+      list.forEach(r => {
+        const local = mergedMap[r.id];
+        if (local && local.status !== 'pending' && r.status === 'pending') {
+          // Keep reviewed local state and sync to Firestore
+          setDoc(doc(db, 'academicChangeRequests', local.id), cleanFirestoreData(local), { merge: true }).catch(() => {});
+        } else {
+          mergedMap[r.id] = r;
+        }
+      });
       const merged = Object.values(mergedMap);
       saveLocalChangeRequests(merged);
       return universityId ? merged.filter(r => r.universityId === universityId) : merged;
@@ -377,7 +577,7 @@ export async function fetchAcademicChangeRequestsForAdmin(universityId?: string)
   saveLocalChangeRequests(DEFAULT_DEMO_CHANGE_REQUESTS);
   for (const demo of DEFAULT_DEMO_CHANGE_REQUESTS) {
     try {
-      await setDoc(doc(db, 'academicChangeRequests', demo.id), demo, { merge: true });
+      await setDoc(doc(db, 'academicChangeRequests', demo.id), cleanFirestoreData(demo), { merge: true });
     } catch (e) {}
   }
 
@@ -396,25 +596,26 @@ export async function submitAcademicChangeRequest(params: {
 }): Promise<AcademicChangeRequest> {
   const existing = await fetchAcademicChangeRequestsForAdmin();
   const reqId = `req-${Date.now().toString(36)}`;
-  const changeReq: AcademicChangeRequest = {
+  const changeReq: AcademicChangeRequest = cleanFirestoreData({
     id: reqId,
     uid: params.uid,
     enrollmentId: params.enrollmentId,
     universityId: params.universityId,
-    requestedLevelId: params.requestedLevelId,
-    requestedAcademicNumber: params.requestedAcademicNumber,
+    ...(params.requestedLevelId ? { requestedLevelId: params.requestedLevelId } : {}),
+    ...(params.requestedAcademicNumber ? { requestedAcademicNumber: params.requestedAcademicNumber } : {}),
     reason: params.reason,
     status: 'pending',
     createdAt: new Date().toISOString()
-  };
+  });
+
+  saveLocalChangeRequests([changeReq, ...existing]);
 
   try {
-    await setDoc(doc(db, 'academicChangeRequests', reqId), changeReq);
+    await setDoc(doc(db, 'academicChangeRequests', reqId), cleanFirestoreData(changeReq));
   } catch (err) {
     console.warn('Could not submit change request to Firestore:', err);
   }
 
-  saveLocalChangeRequests([changeReq, ...existing]);
   return changeReq;
 }
 
@@ -438,20 +639,20 @@ export async function reviewAcademicChangeRequest(
 
   if (!targetReq) return null;
 
-  const updatedReq: AcademicChangeRequest = {
+  const updatedReq: AcademicChangeRequest = cleanFirestoreData({
     ...targetReq,
     status,
     reviewedBy,
     reviewedAt: nowIso
-  };
+  });
+
+  saveLocalChangeRequests(requests.map(r => r.id === requestId ? updatedReq : r));
 
   try {
-    await setDoc(doc(db, 'academicChangeRequests', requestId), updatedReq, { merge: true });
+    await setDoc(doc(db, 'academicChangeRequests', requestId), cleanFirestoreData(updatedReq), { merge: true });
   } catch (err) {
     console.warn('Firestore reviewAcademicChangeRequest fallback:', err);
   }
-
-  saveLocalChangeRequests(requests.map(r => r.id === requestId ? updatedReq : r));
 
   // If approved, automatically update student's enrollment document (currentStudyLevelId & academicStudentNumber)
   if (status === 'approved' && targetReq.enrollmentId) {

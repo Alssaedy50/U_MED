@@ -32,8 +32,9 @@ import {
   ExternalLink
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext.tsx';
-import { UserRole, UserRoleDoc, AuditLog } from './types/umed.ts';
+import { UserRole, UserRoleDoc, AuditLog, StudentEnrollment } from './types/umed.ts';
 import { fetchMergedAuditLogs, fetchAllUserRoles, assignUserRole } from './lib/firebase.ts';
+import { fetchStudentEnrollment } from './services/enrollmentService.ts';
 import StudentDashboard from './components/student/StudentDashboard.tsx';
 import StudentProfile from './components/student/StudentProfile.tsx';
 
@@ -88,7 +89,27 @@ export default function App() {
   const [bootstrapMessage, setBootstrapMessage] = useState<string | null>(null);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [assignedRolesList, setAssignedRolesList] = useState<UserRoleDoc[]>([]);
-  const [activeTab, setActiveTab] = useState<ActiveTabType>('student_dashboard');
+  const [studentEnrollment, setStudentEnrollment] = useState<StudentEnrollment | null>(null);
+  const [activeTab, setActiveTabState] = useState<ActiveTabType>(() => {
+    try {
+      const saved = sessionStorage.getItem('umed_active_tab') as ActiveTabType | null;
+      if (saved) return saved;
+    } catch (e) {}
+    return 'student_dashboard';
+  });
+
+  const setActiveTab = (tab: ActiveTabType) => {
+    setActiveTabState(tab);
+    try {
+      sessionStorage.setItem('umed_active_tab', tab);
+    } catch (e) {}
+  };
+
+  // True when an authorized admin is in Admin or Owner mode (NOT previewing as a student)
+  const isAdminMode = Boolean(
+    isAuthorizedAdmin && (activeRole === 'platform_owner' || activeRole === 'university_admin')
+  );
+  const isOwnerMode = Boolean(isAuthorizedAdmin && activeRole === 'platform_owner');
 
   // Role assignment form state (Platform Owner only)
   const [targetUidInput, setTargetUidInput] = useState<string>('');
@@ -117,12 +138,34 @@ export default function App() {
     }
   }, [isAuthorizedAdmin, activeTab]);
 
-  // Ensure students cannot stay on an admin tab
+  // Load current user's student enrollment status
   useEffect(() => {
-    if (!isAuthorizedAdmin && activeTab !== 'student_dashboard' && activeTab !== 'student_profile' && activeTab !== 'auth') {
-      setActiveTab('student_dashboard');
+    if (!user) {
+      setStudentEnrollment(null);
+      return;
     }
-  }, [isAuthorizedAdmin, activeTab]);
+    fetchStudentEnrollment(user.uid).then(enr => {
+      setStudentEnrollment(enr);
+    });
+  }, [user?.uid, activeTab]);
+
+  // Strict Workspace Isolation:
+  // 1) When in Student Mode (!isAdminMode), block access to all admin tabs
+  // 2) When in Admin Mode (isAdminMode), default to 'enrollment_queue' if currently on a student tab
+  useEffect(() => {
+    if (!isAdminMode) {
+      if (activeTab !== 'student_dashboard' && activeTab !== 'student_profile' && activeTab !== 'auth') {
+        setActiveTab('student_dashboard');
+      }
+      if (activeTab === 'student_profile' && studentEnrollment && studentEnrollment.status !== 'approved') {
+        setActiveTab('student_dashboard');
+      }
+    } else if (activeTab === 'student_dashboard' || activeTab === 'student_profile') {
+      setActiveTab('enrollment_queue');
+    } else if (!isOwnerMode && (activeTab === 'roles' || activeTab === 'backup_restore')) {
+      setActiveTab('enrollment_queue');
+    }
+  }, [isAdminMode, isOwnerMode, activeTab, studentEnrollment?.status]);
 
   const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -268,16 +311,58 @@ export default function App() {
             </button>
 
             {user && (
-              <div className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-xs">
-                <span className={`font-bold flex items-center gap-1 ${
-                  activeRole === 'platform_owner' ? 'text-amber-400' :
-                  activeRole === 'university_admin' ? 'text-teal-400' :
-                  'text-indigo-400'
-                }`}>
-                  {activeRole === 'platform_owner' && <Crown className="w-3 h-3" />}
-                  {activeRole === 'platform_owner' ? 'مالك المنصة' :
-                   activeRole === 'university_admin' ? 'مشرف الجامعة' : 'طالب طب'}
-                </span>
+              <div className="flex items-center gap-1.5">
+                {isAuthorizedAdmin ? (
+                  <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-700 text-[11px]">
+                    <button
+                      onClick={() => {
+                        setActiveRole('platform_owner');
+                        setActiveTab('enrollment_queue');
+                      }}
+                      className={`px-2 py-0.5 rounded-md font-bold flex items-center gap-1 transition-colors ${
+                        activeRole === 'platform_owner'
+                          ? 'bg-amber-500 text-slate-950'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                      title="بوابة مالك المنصة الكاملة"
+                    >
+                      <Crown className="w-3 h-3" />
+                      <span>مالك المنصة</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setActiveRole('university_admin');
+                        setActiveTab('enrollment_queue');
+                      }}
+                      className={`px-2 py-0.5 rounded-md font-bold transition-colors ${
+                        activeRole === 'university_admin'
+                          ? 'bg-teal-500 text-slate-950'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                      title="بوابة مشرف الجامعة"
+                    >
+                      <span>مشرف جامعة</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setActiveRole('student');
+                        setActiveTab('student_dashboard');
+                      }}
+                      className={`px-2 py-0.5 rounded-md font-bold transition-colors ${
+                        activeRole === 'student'
+                          ? 'bg-indigo-500 text-white'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                      title="معاينة واجهة الطالب المعزولة تماماً عن الإدارة"
+                    >
+                      <span>معاينة كطالب</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-xs">
+                    <span className="font-bold text-indigo-400">طالب طب</span>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -344,40 +429,58 @@ export default function App() {
           )}
         </div>
 
-        {/* Navigation Bar (Only shown when logged in; Admin tabs strictly isolated to Authorized Admins) */}
+        {/* Navigation Bar: Strictly separated between Student Mode (!isAdminMode) and Admin Mode (isAdminMode) */}
         {user && (
           <div className="max-w-7xl mx-auto px-4 sm:px-6">
             <nav className="flex space-x-reverse space-x-2 border-t border-slate-800/60 py-2 overflow-x-auto no-scrollbar">
               
-              {/* Student Primary Dashboard Tab */}
-              <button
-                onClick={() => setActiveTab('student_dashboard')}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-                  activeTab === 'student_dashboard'
-                    ? 'bg-gradient-to-r from-teal-600 to-emerald-600 text-white shadow-md'
-                    : 'text-slate-300 hover:text-white bg-slate-800/60'
-                }`}
-              >
-                <Stethoscope className="w-3.5 h-3.5" />
-                <span>{isAuthorizedAdmin ? 'معاينة لوحة الطالب' : 'لوحة الطالب الطبية'}</span>
-              </button>
-
-              {/* Student Profile & Progress Toggle in Navigation Bar */}
-              <button
-                onClick={() => setActiveTab('student_profile')}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-                  activeTab === 'student_profile'
-                    ? 'bg-gradient-to-r from-teal-600 to-emerald-600 text-white shadow-md'
-                    : 'text-slate-300 hover:text-white bg-slate-800/60'
-                }`}
-              >
-                <UserCheck className="w-3.5 h-3.5" />
-                <span>الملف الأكاديمي والتقدم</span>
-              </button>
-
-              {/* ADMIN-ONLY TABS */}
-              {isAuthorizedAdmin && (
+              {/* STUDENT WORKSPACE TABS (Only shown when in Student Mode) */}
+              {!isAdminMode && (
                 <>
+                  <button
+                    onClick={() => setActiveTab('student_dashboard')}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+                      activeTab === 'student_dashboard'
+                        ? 'bg-gradient-to-r from-teal-600 to-emerald-600 text-white shadow-md'
+                        : 'text-slate-300 hover:text-white bg-slate-800/60'
+                    }`}
+                  >
+                    <Stethoscope className="w-3.5 h-3.5" />
+                    <span>لوحة الطالب الطبية</span>
+                  </button>
+
+                  {/* Student Profile & Progress Toggle — Only unlocked after enrollment is approved */}
+                  {studentEnrollment?.status === 'approved' && (
+                    <button
+                      onClick={() => setActiveTab('student_profile')}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+                        activeTab === 'student_profile'
+                          ? 'bg-gradient-to-r from-teal-600 to-emerald-600 text-white shadow-md'
+                          : 'text-slate-300 hover:text-white bg-slate-800/60'
+                      }`}
+                    >
+                      <UserCheck className="w-3.5 h-3.5" />
+                      <span>الملف الأكاديمي والتقدم</span>
+                    </button>
+                  )}
+                </>
+              )}
+
+              {/* ADMIN & OWNER WORKSPACE TABS (Strictly isolated to isAdminMode) */}
+              {isAdminMode && (
+                <>
+                  <button
+                    onClick={() => setActiveTab('enrollment_queue')}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+                      activeTab === 'enrollment_queue'
+                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Users className="w-3.5 h-3.5" />
+                    <span>اعتماد طلبات القيد</span>
+                  </button>
+
                   <button
                     onClick={() => setActiveTab('academic')}
                     className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
@@ -414,41 +517,33 @@ export default function App() {
                     <span>إدارة الاختبارات والمسابقات</span>
                   </button>
 
-                  <button
-                    onClick={() => setActiveTab('enrollment_queue')}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-                      activeTab === 'enrollment_queue'
-                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <Users className="w-3.5 h-3.5" />
-                    <span>اعتماد طلبات القيد</span>
-                  </button>
+                  {isOwnerMode && (
+                    <>
+                      <button
+                        onClick={() => setActiveTab('backup_restore')}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+                          activeTab === 'backup_restore'
+                            ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30 font-bold'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <HardDrive className="w-3.5 h-3.5 text-teal-400" />
+                        <span>النسخ الاحتياطي</span>
+                      </button>
 
-                  <button
-                    onClick={() => setActiveTab('backup_restore')}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-                      activeTab === 'backup_restore'
-                        ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30 font-bold'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <HardDrive className="w-3.5 h-3.5 text-teal-400" />
-                    <span>النسخ الاحتياطي</span>
-                  </button>
-
-                  <button
-                    onClick={() => setActiveTab('roles')}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-                      activeTab === 'roles'
-                        ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30 font-bold'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <ShieldCheck className="w-3.5 h-3.5" />
-                    <span>إدارة المشرفين والصلاحيات</span>
-                  </button>
+                      <button
+                        onClick={() => setActiveTab('roles')}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+                          activeTab === 'roles'
+                            ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30 font-bold'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <span>إدارة المشرفين والصلاحيات</span>
+                      </button>
+                    </>
+                  )}
 
                   <button
                     onClick={() => setActiveTab('audit')}
@@ -483,8 +578,14 @@ export default function App() {
       {/* 3. Main Body */}
       <main className="max-w-7xl mx-auto px-4 py-6 sm:px-6">
         
-        {/* IF NOT LOGGED IN: SHOW CLEAN LOGIN / REGISTRATION PORTAL */}
-        {!user ? (
+        {/* IF INITIALIZING AUTH SESSION ON RELOAD: DO NOT FLASH LOGIN FORM */}
+        {loading ? (
+          <div className="max-w-md mx-auto my-12 bg-slate-900/80 border border-slate-800 rounded-2xl p-10 text-center space-y-3 shadow-2xl">
+            <RefreshCw className="w-8 h-8 animate-spin text-teal-400 mx-auto" />
+            <h2 className="text-sm font-bold text-white">جارٍ استعادة جلستك النشطة في منصة UMED...</h2>
+            <p className="text-xs text-slate-400">يرجى الانتظار لحظة ريثما يتم التحقق من بيانات الحساب والقيد الأكاديمي</p>
+          </div>
+        ) : !user ? (
           <div className="max-w-md mx-auto my-6 bg-slate-900/90 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-2xl space-y-5">
             <div className="text-center space-y-2">
               <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center mx-auto text-white font-black text-2xl shadow-lg shadow-teal-500/20">
@@ -598,19 +699,21 @@ export default function App() {
         ) : (
           /* AUTHENTICATED USER VIEWS */
           <>
-            {activeTab === 'student_dashboard' && (
+            {!isAdminMode && activeTab === 'student_dashboard' && (
               <StudentDashboard
                 uid={user.uid}
                 userEmail={user.email || ''}
                 displayNameArabic={userProfile?.displayNameArabic || user.displayName || 'طالب كلية الطب البشري'}
+                onEnrollmentStatusChange={(enr) => setStudentEnrollment(enr)}
               />
             )}
 
-            {activeTab === 'student_profile' && (
+            {!isAdminMode && activeTab === 'student_profile' && (
               <StudentProfile
                 uid={user.uid}
                 userEmail={user.email || ''}
                 displayNameArabic={userProfile?.displayNameArabic || user.displayName || 'طالب كلية الطب البشري'}
+                initialEnrollment={studentEnrollment}
                 onNavigateTab={() => setActiveTab('student_dashboard')}
               />
             )}
@@ -623,31 +726,31 @@ export default function App() {
                 </div>
               }
             >
-              {isAuthorizedAdmin && activeTab === 'academic' && (
+              {isAdminMode && activeTab === 'academic' && (
                 <AcademicStructureManager />
               )}
 
-              {isAuthorizedAdmin && activeTab === 'content_manager' && (
+              {isAdminMode && activeTab === 'content_manager' && (
                 <EducationalContentManager
                   adminUid={user.uid}
                   assignedUniversityId={roleDoc?.assignedUniversityId || 'univ-dar-al-salam'}
                 />
               )}
 
-              {isAuthorizedAdmin && activeTab === 'assessments_manager' && (
+              {isAdminMode && activeTab === 'assessments_manager' && (
                 <AssessmentManager
                   universityId={roleDoc?.assignedUniversityId || 'univ-dar-al-salam'}
                 />
               )}
 
-              {isAuthorizedAdmin && activeTab === 'enrollment_queue' && (
+              {isAdminMode && activeTab === 'enrollment_queue' && (
                 <EnrollmentApprovalManager
                   adminUid={user.uid}
                   assignedUniversityId={roleDoc?.assignedUniversityId}
                 />
               )}
 
-              {isAuthorizedAdmin && activeTab === 'backup_restore' && (
+              {isOwnerMode && activeTab === 'backup_restore' && (
                 <BackupRestoreConsole
                   adminEmail={user.email || ''}
                   assignedUniversityId={roleDoc?.assignedUniversityId || 'univ-dar-al-salam'}
@@ -655,8 +758,8 @@ export default function App() {
               )}
             </React.Suspense>
 
-            {/* ADMIN TAB: ROLES & UNIVERSITY ADMIN ASSIGNMENT */}
-            {isAuthorizedAdmin && activeTab === 'roles' && (
+            {/* ADMIN TAB: ROLES & UNIVERSITY ADMIN ASSIGNMENT (Owner Only) */}
+            {isOwnerMode && activeTab === 'roles' && (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
                   <h2 className="text-base font-bold text-white flex items-center gap-2">
@@ -791,7 +894,7 @@ export default function App() {
             )}
 
             {/* ADMIN TAB: AUDIT LOGS */}
-            {isAuthorizedAdmin && activeTab === 'audit' && (
+            {isAdminMode && activeTab === 'audit' && (
               <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
                 <div className="flex items-center justify-between pb-3 border-b border-slate-800">
                   <div>
@@ -870,16 +973,16 @@ export default function App() {
                     <span className="font-mono text-slate-400 text-[11px]" dir="ltr">{user.uid}</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-slate-400">الصلاحية المعتمدة:</span>
+                    <span className="text-slate-400">الوضع والصلاحية النشطة:</span>
                     <span className="font-bold text-amber-400">
-                      {roleDoc?.role === 'platform_owner' ? '👑 مالك المنصة (Platform Owner)' :
-                       roleDoc?.role === 'university_admin' ? '🏛️ مشرف جامعة (University Admin)' :
-                       '🎓 طالب طب بشري (Student)'}
+                      {activeRole === 'platform_owner' ? '👑 مالك المنصة (Platform Owner)' :
+                       activeRole === 'university_admin' ? '🏛️ مشرف جامعة (University Admin)' :
+                       '🎓 طالب طب بشري (واجهة الطالب المعزولة)'}
                     </span>
                   </div>
                 </div>
 
-                {isAuthorizedAdmin && (
+                {isOwnerMode && (
                   <div className="p-4 bg-slate-950 rounded-xl border border-amber-500/30 space-y-3 text-xs">
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-amber-300 flex items-center gap-1.5">
