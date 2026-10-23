@@ -14,7 +14,8 @@ import {
   getDocs, 
   setDoc, 
   updateDoc, 
-  deleteDoc 
+  deleteDoc,
+  onSnapshot
 } from 'firebase/firestore';
 import { db, cleanFirestoreData } from '../lib/firebase.ts';
 import { EducationalResource } from '../types/umed.ts';
@@ -346,38 +347,34 @@ function unmarkResourceDeleted(id: string): void {
 
 async function ensureResourcesInitialized(): Promise<EducationalResource[]> {
   const deleted = getDeletedResourceIds();
-  const isInit = localStorage.getItem(RESOURCES_INIT_KEY) === 'true';
-
-  try {
-    const raw = localStorage.getItem(RESOURCES_STORAGE_KEY);
-    if (isInit && raw !== null) {
-      const parsed: EducationalResource[] = JSON.parse(raw);
-      return parsed.filter(r => !deleted.has(r.id));
-    }
-  } catch (e) {}
-
-  const mergedMap = new Map<string, EducationalResource>();
-  SAMPLE_EDUCATIONAL_RESOURCES.forEach(item => {
-    if (!deleted.has(item.id)) mergedMap.set(item.id, item);
-  });
 
   try {
     const snap = await getDocs(collection(db, 'educationalResources'));
-    snap.forEach(d => {
-      const data = d.data() as EducationalResource;
-      if (data && data.id && !deleted.has(data.id)) {
-        mergedMap.set(data.id, data);
-      }
-    });
+    if (!snap.empty) {
+      const list: EducationalResource[] = [];
+      snap.forEach(d => {
+        const data = d.data() as EducationalResource;
+        if (data && data.id && !deleted.has(data.id)) {
+          list.push(data);
+        }
+      });
+      localStorage.setItem(RESOURCES_STORAGE_KEY, JSON.stringify(list));
+      localStorage.setItem(RESOURCES_INIT_KEY, 'true');
+      return list;
+    }
   } catch (e) {}
 
-  const list = Array.from(mergedMap.values());
+  // If Firestore is empty, seed defaults
+  const defaults = SAMPLE_EDUCATIONAL_RESOURCES.filter(item => !deleted.has(item.id));
   try {
-    localStorage.setItem(RESOURCES_STORAGE_KEY, JSON.stringify(list));
+    localStorage.setItem(RESOURCES_STORAGE_KEY, JSON.stringify(defaults));
     localStorage.setItem(RESOURCES_INIT_KEY, 'true');
+    for (const item of defaults) {
+      setDoc(doc(db, 'educationalResources', item.id), cleanFirestoreData(item), { merge: true }).catch(() => {});
+    }
   } catch (e) {}
 
-  return list;
+  return defaults;
 }
 
 export interface ResourceFilters {
@@ -392,39 +389,75 @@ export interface ResourceFilters {
 
 export async function fetchEducationalResources(filters: ResourceFilters = {}): Promise<EducationalResource[]> {
   const deleted = getDeletedResourceIds();
-  const localList = await ensureResourcesInitialized();
-  const mergedMap = new Map<string, EducationalResource>();
-
-  localList.forEach(item => {
-    if (!deleted.has(item.id)) mergedMap.set(item.id, item);
-  });
 
   try {
     const snap = await getDocs(collection(db, 'educationalResources'));
-    snap.forEach((d) => {
-      const data = d.data() as EducationalResource;
-      if (data && data.id && !deleted.has(data.id)) {
-        // Keep local edits if newer
-        const existingLocal = mergedMap.get(data.id);
-        if (!existingLocal || (data.updatedAt && existingLocal.updatedAt && data.updatedAt >= existingLocal.updatedAt)) {
-          mergedMap.set(data.id, data);
+    if (!snap.empty) {
+      // Cloud Firestore is the authoritative source of truth across devices!
+      const cloudItems: EducationalResource[] = [];
+      snap.forEach((d) => {
+        const data = d.data() as EducationalResource;
+        if (data && data.id && !deleted.has(data.id)) {
+          cloudItems.push(data);
         }
-      }
-    });
+      });
+
+      const finalItems = cloudItems.sort(
+        (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+      );
+
+      try {
+        localStorage.setItem(RESOURCES_STORAGE_KEY, JSON.stringify(finalItems));
+        localStorage.setItem(RESOURCES_INIT_KEY, 'true');
+      } catch (e) {}
+
+      return applyLocalFilters(finalItems, filters);
+    }
   } catch (err) {
     console.warn('Firestore fetchEducationalResources fallback to local cache:', err);
   }
 
-  const finalItems = Array.from(mergedMap.values()).sort(
-    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-  );
+  // Fallback to local storage if Firestore is unreachable
+  const localList = await ensureResourcesInitialized();
+  return applyLocalFilters(localList, filters);
+}
 
+export function subscribeToEducationalResources(
+  filters: ResourceFilters = {},
+  onUpdate: (resources: EducationalResource[]) => void
+): () => void {
+  const deleted = getDeletedResourceIds();
   try {
-    localStorage.setItem(RESOURCES_STORAGE_KEY, JSON.stringify(finalItems));
-    localStorage.setItem(RESOURCES_INIT_KEY, 'true');
-  } catch (e) {}
+    const unsub = onSnapshot(
+      collection(db, 'educationalResources'),
+      (snap) => {
+        const cloudItems: EducationalResource[] = [];
+        snap.forEach((d) => {
+          const data = d.data() as EducationalResource;
+          if (data && data.id && !deleted.has(data.id)) {
+            cloudItems.push(data);
+          }
+        });
 
-  return applyLocalFilters(finalItems, filters);
+        const sorted = cloudItems.sort(
+          (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+        );
+
+        try {
+          localStorage.setItem(RESOURCES_STORAGE_KEY, JSON.stringify(sorted));
+          localStorage.setItem(RESOURCES_INIT_KEY, 'true');
+        } catch (e) {}
+
+        onUpdate(applyLocalFilters(sorted, filters));
+      },
+      (err) => {
+        console.warn('subscribeToEducationalResources error:', err);
+      }
+    );
+    return unsub;
+  } catch (err) {
+    return () => {};
+  }
 }
 
 function applyLocalFilters(list: EducationalResource[], filters: ResourceFilters): EducationalResource[] {

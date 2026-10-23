@@ -24,7 +24,7 @@ import {
   Video
 } from 'lucide-react';
 import { EducationalResource, ResourceType } from '../../types/umed.ts';
-import { fetchEducationalResources } from '../../services/resourceService.ts';
+import { fetchEducationalResources, subscribeToEducationalResources } from '../../services/resourceService.ts';
 import ResourcePreviewModal from './ResourcePreviewModal.tsx';
 
 interface StudentMedicalLibraryProps {
@@ -66,6 +66,19 @@ export default function StudentMedicalLibrary({
 
   useEffect(() => {
     loadResources();
+    const unsub = subscribeToEducationalResources(
+      {
+        universityId,
+        programId,
+        studyLevelId,
+        status: 'published'
+      },
+      (liveList) => {
+        setResources(liveList);
+        setLoading(false);
+      }
+    );
+    return () => unsub();
   }, [universityId, programId, studyLevelId]);
 
   const filteredResources = resources.filter((res) => {

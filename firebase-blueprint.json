@@ -1,0 +1,160 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with contact info, academic registration number, and verification status",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayNameArabic": { "type": "string" },
+        "phone": { "type": "string" },
+        "academicStudentNumber": { "type": "string" },
+        "registrationMethod": { "type": "string", "enum": ["email", "phone", "google"] },
+        "isPrimaryOwner": { "type": "boolean" },
+        "isActive": { "type": "boolean" },
+        "isArchived": { "type": "boolean" },
+        "emailVerified": { "type": "boolean" },
+        "phoneVerified": { "type": "boolean" },
+        "isVerified": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["uid"]
+    },
+    "UserRole": {
+      "title": "UserRole",
+      "description": "Role document defining user permissions in the academic hierarchy",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "role": { "type": "string", "enum": ["platform_owner", "university_admin", "batch_rep", "department_head", "student"] },
+        "email": { "type": "string" },
+        "displayNameArabic": { "type": "string" },
+        "phone": { "type": "string" },
+        "academicStudentNumber": { "type": "string" },
+        "assignedUniversityId": { "type": "string" },
+        "assignedStudyLevelId": { "type": "string" },
+        "assignedCourseId": { "type": "string" },
+        "departmentTitle": { "type": "string" },
+        "assignedAt": { "type": "string" },
+        "assignedBy": { "type": "string" },
+        "assignedByRole": { "type": "string" }
+      },
+      "required": ["uid", "role"]
+    },
+    "University": {
+      "title": "University",
+      "description": "Academic university entity",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "countryId": { "type": "string" },
+        "nameArabic": { "type": "string" },
+        "nameEnglish": { "type": "string" },
+        "cityArabic": { "type": "string" },
+        "type": { "type": "string", "enum": ["public", "private"] },
+        "enrollmentPolicy": { "type": "string", "enum": ["open", "approval_required"] },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "nameArabic"]
+    },
+    "StudentEnrollment": {
+      "title": "StudentEnrollment",
+      "description": "Student enrollment record within a university, program, and study level",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "uid": { "type": "string" },
+        "studentNameArabic": { "type": "string" },
+        "studentEmail": { "type": "string" },
+        "studentPhone": { "type": "string" },
+        "universityId": { "type": "string" },
+        "collegeId": { "type": "string" },
+        "programId": { "type": "string" },
+        "curriculumVersionId": { "type": "string" },
+        "currentStudyLevelId": { "type": "string" },
+        "academicStudentNumber": { "type": "string" },
+        "academicYear": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "reviewedBy": { "type": "string" },
+        "reviewedAt": { "type": "string" },
+        "rejectionReason": { "type": "string" },
+        "enrolledAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "uid", "universityId", "currentStudyLevelId", "status"]
+    },
+    "EducationalResource": {
+      "title": "EducationalResource",
+      "description": "Low-bandwidth medical educational resource (lecture, slide, guide)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "resourceType": { "type": "string", "enum": ["pdf", "image", "link", "audio", "video"] },
+        "url": { "type": "string" },
+        "fileSizeLabel": { "type": "string" },
+        "universityId": { "type": "string" },
+        "studyLevelId": { "type": "string" },
+        "courseOfferingId": { "type": "string" },
+        "status": { "type": "string", "enum": ["published", "draft", "archived"] },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "title", "resourceType", "status"]
+    },
+    "Assessment": {
+      "title": "Assessment",
+      "description": "Exam or clinical competition assessment",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "assessmentType": { "type": "string", "enum": ["exam", "competition"] },
+        "titleArabic": { "type": "string" },
+        "descriptionArabic": { "type": "string" },
+        "universityId": { "type": "string" },
+        "studyLevelId": { "type": "string" },
+        "durationMinutes": { "type": "number" },
+        "maxAttempts": { "type": "number" },
+        "resultReleasePolicy": { "type": "string", "enum": ["immediate", "after_deadline", "manual"] },
+        "status": { "type": "string", "enum": ["published", "draft", "closed", "archived"] },
+        "questionIds": { "type": "array" },
+        "totalPoints": { "type": "number" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "titleArabic", "assessmentType", "status"]
+    }
+  },
+  "firestore": {
+    "/userProfiles/{uid}": {
+      "schema": "UserProfile",
+      "description": "User profiles with PII and verification status"
+    },
+    "/userRoles/{uid}": {
+      "schema": "UserRole",
+      "description": "User roles and academic hierarchical permissions"
+    },
+    "/universities/{universityId}": {
+      "schema": "University",
+      "description": "Configurable universities in Yemen"
+    },
+    "/studentEnrollments/{enrollmentId}": {
+      "schema": "StudentEnrollment",
+      "description": "Student enrollments and approval status"
+    },
+    "/educationalResources/{resourceId}": {
+      "schema": "EducationalResource",
+      "description": "Published and draft educational materials"
+    },
+    "/assessments/{assessmentId}": {
+      "schema": "Assessment",
+      "description": "Exams and clinical competitions"
+    }
+  }
+}

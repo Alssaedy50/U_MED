@@ -39,6 +39,7 @@ import {
 } from '../../types/umed.ts';
 import { 
   fetchUniversities, 
+  subscribeToUniversities,
   saveUniversity, 
   toggleUniversityActive,
   deleteUniversity,
@@ -207,6 +208,18 @@ export default function AcademicStructureManager({
 
   useEffect(() => {
     loadUniversities();
+    const unsub = subscribeToUniversities((allUnivs) => {
+      const univs =
+        isUnivScoped && assignedUniversityId
+          ? allUnivs.filter(u => u.id === assignedUniversityId)
+          : allUnivs;
+      const finalUnivs = univs.length > 0 ? univs : allUnivs;
+      setUniversities(finalUnivs);
+      if (finalUnivs.length > 0) {
+        setSelectedUniversity(prev => (prev && finalUnivs.find(u => u.id === prev.id)) || finalUnivs[0]);
+      }
+    });
+    return () => unsub();
   }, [userRole, assignedUniversityId]);
 
   // Cascading Load: Colleges when University changes

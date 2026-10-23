@@ -383,35 +383,40 @@ export async function fetchCourseInstructors(filters?: {
   studyLevelId?: string;
   courseOfferingId?: string;
 }): Promise<CourseInstructor[]> {
-  const isInit = localStorage.getItem(INSTRUCTORS_INIT_KEY) === 'true';
   const localList = readLocalInstructors();
-  const map = new Map<string, CourseInstructor>();
-
-  if (!isInit && localList.length === 0) {
-    DEFAULT_COURSE_INSTRUCTORS.forEach(item => map.set(item.id, item));
-  } else {
-    localList.forEach(item => map.set(item.id, item));
-  }
 
   try {
     const snap = await getDocs(collection(db, 'courseInstructors'));
-    snap.forEach(d => {
-      const data = d.data() as CourseInstructor;
-      if (data && data.id) {
-        map.set(data.id, data);
-      }
-    });
+    if (!snap.empty) {
+      const cloudList: CourseInstructor[] = [];
+      snap.forEach(d => {
+        const data = d.data() as CourseInstructor;
+        if (data && data.id) {
+          cloudList.push(data);
+        }
+      });
+      writeLocalInstructors(cloudList);
+      return cloudList.filter(inst => {
+        if (filters?.universityId && inst.universityId !== filters.universityId) return false;
+        if (filters?.studyLevelId && inst.studyLevelId !== filters.studyLevelId) return false;
+        if (filters?.courseOfferingId && inst.courseOfferingId !== filters.courseOfferingId) return false;
+        return true;
+      });
+    }
   } catch (e) {}
 
-  const merged = Array.from(map.values());
-  writeLocalInstructors(merged);
+  if (localList.length > 0) {
+    return localList.filter(inst => {
+      if (filters?.universityId && inst.universityId !== filters.universityId) return false;
+      if (filters?.studyLevelId && inst.studyLevelId !== filters.studyLevelId) return false;
+      if (filters?.courseOfferingId && inst.courseOfferingId !== filters.courseOfferingId) return false;
+      return true;
+    });
+  }
 
-  return merged.filter(inst => {
-    if (filters?.universityId && inst.universityId !== filters.universityId) return false;
-    if (filters?.studyLevelId && inst.studyLevelId !== filters.studyLevelId) return false;
-    if (filters?.courseOfferingId && inst.courseOfferingId !== filters.courseOfferingId) return false;
-    return true;
-  });
+  const defaults = DEFAULT_COURSE_INSTRUCTORS;
+  writeLocalInstructors(defaults);
+  return defaults;
 }
 
 export async function saveCourseInstructor(
@@ -493,45 +498,58 @@ export async function fetchBatchNotifications(filters?: {
   universityId?: string;
   studyLevelId?: string;
 }): Promise<BatchNotification[]> {
-  const isInit = localStorage.getItem(NOTIFICATIONS_INIT_KEY) === 'true';
   const localList = readLocalNotifications();
-  const map = new Map<string, BatchNotification>();
-
-  if (!isInit && localList.length === 0) {
-    DEFAULT_BATCH_NOTIFICATIONS.forEach(n => map.set(n.id, n));
-  } else {
-    localList.forEach(n => map.set(n.id, n));
-  }
 
   try {
     const snap = await getDocs(collection(db, 'batchNotifications'));
-    snap.forEach(d => {
-      const data = d.data() as BatchNotification;
-      if (data && data.id) {
-        map.set(data.id, data);
-      }
-    });
+    if (!snap.empty) {
+      const cloudList: BatchNotification[] = [];
+      snap.forEach(d => {
+        const data = d.data() as BatchNotification;
+        if (data && data.id) {
+          cloudList.push(data);
+        }
+      });
+
+      const sorted = cloudList.sort((a, b) => {
+        if (a.isPinned && !b.isPinned) return -1;
+        if (!a.isPinned && b.isPinned) return 1;
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+
+      writeLocalNotifications(sorted);
+
+      return sorted.filter(n => {
+        if (filters?.universityId && n.universityId !== filters.universityId) return false;
+        if (
+          filters?.studyLevelId &&
+          n.studyLevelId !== filters.studyLevelId &&
+          n.studyLevelId !== 'ALL'
+        ) {
+          return false;
+        }
+        return true;
+      });
+    }
   } catch (e) {}
 
-  const merged = Array.from(map.values()).sort((a, b) => {
-    if (a.isPinned && !b.isPinned) return -1;
-    if (!a.isPinned && b.isPinned) return 1;
-    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-  });
+  if (localList.length > 0) {
+    return localList.filter(n => {
+      if (filters?.universityId && n.universityId !== filters.universityId) return false;
+      if (
+        filters?.studyLevelId &&
+        n.studyLevelId !== filters.studyLevelId &&
+        n.studyLevelId !== 'ALL'
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }
 
-  writeLocalNotifications(merged);
-
-  return merged.filter(n => {
-    if (filters?.universityId && n.universityId !== filters.universityId) return false;
-    if (
-      filters?.studyLevelId &&
-      n.studyLevelId !== filters.studyLevelId &&
-      n.studyLevelId !== 'ALL'
-    ) {
-      return false;
-    }
-    return true;
-  });
+  const defaults = DEFAULT_BATCH_NOTIFICATIONS;
+  writeLocalNotifications(defaults);
+  return defaults;
 }
 
 export function subscribeToBatchNotifications(

@@ -16,7 +16,8 @@ import {
   updateDoc, 
   deleteDoc, 
   query, 
-  where
+  where,
+  onSnapshot
 } from 'firebase/firestore';
 import { db, auth, writeAuditLogToCloud, cleanFirestoreData } from '../lib/firebase.ts';
 import { 
@@ -160,14 +161,9 @@ export async function getQuestionBanks(universityId: string): Promise<QuestionBa
     const list: QuestionBank[] = [];
     snap.forEach(d => list.push({ id: d.id, ...d.data() } as QuestionBank));
     if (list.length > 0) {
-      // Merge with localBanks
-      const mergedMap: Record<string, QuestionBank> = {};
-      localBanks.forEach(b => { mergedMap[b.id] = b; });
-      list.forEach(b => { mergedMap[b.id] = b; });
-      const merged = Object.values(mergedMap);
-      localStorage.setItem(`${LOCAL_STORAGE_PREFIX}banks_${universityId}`, JSON.stringify(merged));
+      localStorage.setItem(`${LOCAL_STORAGE_PREFIX}banks_${universityId}`, JSON.stringify(list));
       localStorage.setItem(initKey, 'true');
-      return merged;
+      return list;
     }
   } catch (err) {
     console.warn('Firestore fallback: reading local question banks');
@@ -323,13 +319,9 @@ export async function getBankQuestions(bankId: string): Promise<QuestionItemFull
     const list: QuestionItemFull[] = [];
     snap.forEach(d => list.push({ id: d.id, ...d.data() } as QuestionItemFull));
     if (list.length > 0) {
-      const mergedMap: Record<string, QuestionItemFull> = {};
-      localQuestions.forEach(item => { mergedMap[item.id] = item; });
-      list.forEach(item => { mergedMap[item.id] = item; });
-      const merged = Object.values(mergedMap);
-      localStorage.setItem(`${LOCAL_STORAGE_PREFIX}q_${bankId}`, JSON.stringify(merged));
+      localStorage.setItem(`${LOCAL_STORAGE_PREFIX}q_${bankId}`, JSON.stringify(list));
       localStorage.setItem(initKey, 'true');
-      return merged;
+      return list;
     }
   } catch (err) {}
 
@@ -576,10 +568,6 @@ export async function getAssessments(universityId: string, type?: AssessmentType
     const snap = await getDocs(q);
     snap.forEach(d => list.push({ id: d.id, ...d.data() } as Assessment));
     if (list.length > 0) {
-      const mergedMap: Record<string, Assessment> = {};
-      localList.forEach(a => { mergedMap[a.id] = a; });
-      list.forEach(a => { mergedMap[a.id] = a; });
-      list = Object.values(mergedMap);
       localStorage.setItem(`${LOCAL_STORAGE_PREFIX}assessments_${universityId}`, JSON.stringify(list));
       localStorage.setItem(initKey, 'true');
     }
@@ -601,6 +589,40 @@ export async function getAssessments(universityId: string, type?: AssessmentType
     result = result.filter(a => a.assessmentType === type);
   }
   return result;
+}
+
+export function subscribeToAssessments(
+  universityId: string,
+  onUpdate: (assessments: Assessment[]) => void,
+  type?: AssessmentType,
+  status?: AssessmentStatus
+): () => void {
+  try {
+    const q = query(
+      collection(db, 'assessments'),
+      where('universityId', '==', universityId)
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        let list: Assessment[] = [];
+        snap.forEach(d => list.push({ id: d.id, ...d.data() } as Assessment));
+        if (list.length > 0) {
+          localStorage.setItem(`${LOCAL_STORAGE_PREFIX}assessments_${universityId}`, JSON.stringify(list));
+          localStorage.setItem(`${LOCAL_STORAGE_PREFIX}assessments_init_${universityId}`, 'true');
+        }
+        if (status) list = list.filter(a => a.status === status);
+        if (type) list = list.filter(a => a.assessmentType === type);
+        onUpdate(list);
+      },
+      (err) => {
+        console.warn('subscribeToAssessments error:', err);
+      }
+    );
+    return unsub;
+  } catch (err) {
+    return () => {};
+  }
 }
 
 async function ensureAssessmentsInitialized(universityId: string): Promise<Assessment[]> {

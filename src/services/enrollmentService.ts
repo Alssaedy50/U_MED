@@ -154,14 +154,14 @@ function saveLocalChangeRequests(list: AcademicChangeRequest[]) {
 }
 
 function pickNewestEnrollment(a: StudentEnrollment, b: StudentEnrollment): StudentEnrollment {
-  const timeA = new Date(a.updatedAt || a.reviewedAt || a.enrolledAt || 0).getTime();
-  const timeB = new Date(b.updatedAt || b.reviewedAt || b.enrolledAt || 0).getTime();
-  if (timeA !== timeB) {
-    return timeA > timeB ? a : b;
-  }
+  // Officially reviewed status (approved or rejected) ALWAYS wins over unreviewed pending status
   if (a.status === 'approved' && b.status !== 'approved') return a;
   if (b.status === 'approved' && a.status !== 'approved') return b;
-  return b;
+  if (a.status === 'rejected' && b.status === 'pending') return a;
+  if (b.status === 'rejected' && a.status === 'pending') return b;
+  const timeA = new Date(a.updatedAt || a.reviewedAt || a.enrolledAt || 0).getTime();
+  const timeB = new Date(b.updatedAt || b.reviewedAt || b.enrolledAt || 0).getTime();
+  return timeA >= timeB ? a : b;
 }
 
 // ---------------------------------------------------------------------------
@@ -172,7 +172,7 @@ export async function fetchStudentEnrollment(uid: string): Promise<StudentEnroll
   if (!uid) return null;
   const deleted = getDeletedEnrollmentIds();
 
-  // 1. Read local cache first so we never lose state if offline or if local was just updated
+  // 1. Read local cache first for instant UI responsiveness
   let localCandidate: StudentEnrollment | null = null;
   try {
     const cachedRaw = localStorage.getItem(`umed_enrollment_${uid}`);
@@ -188,7 +188,7 @@ export async function fetchStudentEnrollment(uid: string): Promise<StudentEnroll
     }
   } catch (e) {}
 
-  // 2. Query Firestore (both deterministic doc ID and uid query for legacy docs)
+  // 2. Query Firestore (Cloud Source of Truth across devices)
   let remoteCandidate: StudentEnrollment | null = null;
   try {
     const deterministicRef = doc(db, 'studentEnrollments', `enr-${uid}`);
@@ -209,15 +209,10 @@ export async function fetchStudentEnrollment(uid: string): Promise<StudentEnroll
     console.warn('Firestore fetchStudentEnrollment error:', err);
   }
 
-  // 3. Resolve best candidate and ensure both LocalStorage & Firestore stay synchronized
+  // 3. Cloud Firestore is Authoritative across all user devices!
   let winner: StudentEnrollment | null = null;
-  if (localCandidate && remoteCandidate) {
-    winner = pickNewestEnrollment(localCandidate, remoteCandidate);
-  } else {
-    winner = remoteCandidate || localCandidate;
-  }
-
-  if (winner) {
+  if (remoteCandidate) {
+    winner = remoteCandidate;
     try {
       localStorage.setItem(`umed_enrollment_${uid}`, JSON.stringify(winner));
       const allLocal = getLocalEnrollments();
@@ -229,11 +224,10 @@ export async function fetchStudentEnrollment(uid: string): Promise<StudentEnroll
         saveLocalEnrollments([winner, ...allLocal]);
       }
     } catch (e) {}
-
-    // If local was newer than remote or remote didn't exist yet, sync up to Firestore
-    if (!remoteCandidate || winner !== remoteCandidate) {
-      setDoc(doc(db, 'studentEnrollments', winner.id), cleanFirestoreData(winner), { merge: true }).catch(() => {});
-    }
+  } else if (localCandidate) {
+    winner = localCandidate;
+    // Only upload to Firestore if no remote document exists at all in the cloud
+    setDoc(doc(db, 'studentEnrollments', winner.id), cleanFirestoreData(winner), { merge: true }).catch(() => {});
   }
 
   return winner;
@@ -390,50 +384,34 @@ export async function fetchEnrollmentsForAdmin(universityId?: string): Promise<S
       }
     });
 
-    if (firestoreList.length > 0 || localList.length > 0) {
-      const byIdMap = new Map<string, StudentEnrollment>();
-      for (const item of localList) {
-        if (!deleted.has(item.id) && !deletedUids.has(item.uid)) {
-          byIdMap.set(item.id, item);
-        }
-      }
-      for (const remoteItem of firestoreList) {
-        if (deleted.has(remoteItem.id) || deletedUids.has(remoteItem.uid)) continue;
-        const existingLocal = byIdMap.get(remoteItem.id);
-        if (existingLocal) {
-          const winner = pickNewestEnrollment(existingLocal, remoteItem);
-          byIdMap.set(remoteItem.id, winner);
-          if (winner === existingLocal && existingLocal.updatedAt !== remoteItem.updatedAt) {
-            setDoc(doc(db, 'studentEnrollments', winner.id), cleanFirestoreData(winner), { merge: true }).catch(() => {});
-          }
-        } else {
-          byIdMap.set(remoteItem.id, remoteItem);
-        }
-      }
-
-      // Deduplicate by UID (keep newest record per student UID)
+    if (firestoreList.length > 0) {
+      // Cloud Firestore is authoritative across all devices!
       const byUidMap = new Map<string, StudentEnrollment>();
-      for (const item of byIdMap.values()) {
-        const key = item.uid || item.id;
+      for (const remoteItem of firestoreList) {
+        const key = remoteItem.uid || remoteItem.id;
         const prev = byUidMap.get(key);
         if (!prev) {
-          byUidMap.set(key, item);
+          byUidMap.set(key, remoteItem);
         } else {
-          byUidMap.set(key, pickNewestEnrollment(prev, item));
+          byUidMap.set(key, pickNewestEnrollment(prev, remoteItem));
         }
       }
 
-      const merged = Array.from(byUidMap.values()).sort(
+      const cloudList = Array.from(byUidMap.values()).sort(
         (a, b) => new Date(b.updatedAt || b.enrolledAt || 0).getTime() - new Date(a.updatedAt || a.enrolledAt || 0).getTime()
       );
-      saveLocalEnrollments(merged);
-      return universityId ? merged.filter(e => e.universityId === universityId) : merged;
+      saveLocalEnrollments(cloudList);
+      return universityId ? cloudList.filter(e => e.universityId === universityId) : cloudList;
+    }
+
+    if (localList.length > 0) {
+      return universityId ? localList.filter(e => e.universityId === universityId) : localList;
     }
 
     saveLocalEnrollments([]);
     return [];
   } catch (err) {
-    console.warn('Firestore fetchEnrollmentsForAdmin error:', err);
+    console.warn('Firestore fetchEnrollmentsForAdmin fallback to local:', err);
   }
 
   return universityId ? localList.filter(e => e.universityId === universityId) : localList;
@@ -852,33 +830,16 @@ export function subscribeToAdminEnrollments(
     (snap) => {
       const deleted = getDeletedEnrollmentIds();
       const deletedUids = getLocalDeletedUids();
-      const localList = getLocalEnrollments();
-      const byIdMap = new Map<string, StudentEnrollment>();
-
-      for (const item of localList) {
-        if (!deleted.has(item.id) && !deletedUids.has(item.uid)) {
-          byIdMap.set(item.id, item);
-        }
-      }
+      const byUidMap = new Map<string, StudentEnrollment>();
 
       snap.forEach((d) => {
         const remoteItem = { id: d.id, ...d.data() } as StudentEnrollment;
         if (!deleted.has(d.id) && !deletedUids.has(remoteItem.uid)) {
-          const existingLocal = byIdMap.get(remoteItem.id);
-          if (existingLocal) {
-            byIdMap.set(remoteItem.id, pickNewestEnrollment(existingLocal, remoteItem));
-          } else {
-            byIdMap.set(remoteItem.id, remoteItem);
-          }
+          const key = remoteItem.uid || remoteItem.id;
+          const prev = byUidMap.get(key);
+          byUidMap.set(key, prev ? pickNewestEnrollment(prev, remoteItem) : remoteItem);
         }
       });
-
-      const byUidMap = new Map<string, StudentEnrollment>();
-      for (const item of byIdMap.values()) {
-        const key = item.uid || item.id;
-        const prev = byUidMap.get(key);
-        byUidMap.set(key, prev ? pickNewestEnrollment(prev, item) : item);
-      }
 
       const merged = Array.from(byUidMap.values()).sort(
         (a, b) => new Date(b.updatedAt || b.enrolledAt || 0).getTime() - new Date(a.updatedAt || a.enrolledAt || 0).getTime()
@@ -886,7 +847,9 @@ export function subscribeToAdminEnrollments(
       saveLocalEnrollments(merged);
       onUpdate(universityId ? merged.filter(e => e.universityId === universityId) : merged);
     },
-    () => {}
+    (err) => {
+      console.warn('subscribeToAdminEnrollments error:', err);
+    }
   );
 
   return unsub;

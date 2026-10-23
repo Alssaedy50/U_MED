@@ -16,7 +16,8 @@ import {
   deleteDoc,
   query, 
   where,
-  writeBatch
+  writeBatch,
+  onSnapshot
 } from 'firebase/firestore';
 import { db } from '../lib/firebase.ts';
 import { 
@@ -227,48 +228,34 @@ async function fetchHybridCollection<T extends { id: string }>(
   firestoreCollectionName: string,
   filterFn?: (item: T) => boolean
 ): Promise<T[]> {
-  const deleted = getDeletedIds();
   const isInitialized = localStorage.getItem(`${STORAGE_KEYS[key]}_init`) === 'true';
   const localItems = readLocalCollection<T>(key) || [];
 
   try {
     const snap = await getDocs(collection(db, firestoreCollectionName));
-    const firestoreItems: T[] = [];
-    snap.forEach((d) => {
-      const data = d.data() as T;
-      if (data && data.id && !deleted.has(data.id)) {
-        firestoreItems.push(data);
-      }
-    });
-
-    if (firestoreItems.length > 0 || isInitialized) {
-      // Cloud Firestore is the authoritative source of truth across devices when reachable.
-      // Only include defaults if not initialized and Firestore is empty.
-      const mergedMap = new Map<string, T>();
-      if (firestoreItems.length > 0) {
-        firestoreItems.forEach(fItem => mergedMap.set(fItem.id, fItem));
-      } else {
-        if (!isInitialized) {
-          (DEFAULT_SEED_DATA[key] as T[]).forEach(def => {
-            if (!deleted.has(def.id)) mergedMap.set(def.id, def);
-          });
+    if (!snap.empty) {
+      // Cloud Firestore is the definitive source of truth across all devices!
+      const cloudItems: T[] = [];
+      snap.forEach((d) => {
+        const data = d.data() as T;
+        if (data && data.id) {
+          cloudItems.push(data);
+          unmarkIdDeleted(data.id);
         }
-        localItems.forEach(lItem => mergedMap.set(lItem.id, lItem));
-      }
+      });
 
-      const merged = Array.from(mergedMap.values());
-      writeLocalCollection(key, merged);
-      return filterFn ? merged.filter(filterFn) : merged;
+      writeLocalCollection(key, cloudItems);
+      return filterFn ? cloudItems.filter(filterFn) : cloudItems;
     }
   } catch (err) {
     console.warn(`Firestore fetch error (${firestoreCollectionName}), using local/seed cache:`, err);
   }
 
-  if (isInitialized) {
+  if (isInitialized && localItems.length > 0) {
     return filterFn ? localItems.filter(filterFn) : localItems;
   }
 
-  const defaults = (DEFAULT_SEED_DATA[key] as T[]).filter(item => !deleted.has(item.id));
+  const defaults = (DEFAULT_SEED_DATA[key] as T[]);
   writeLocalCollection(key, defaults);
   return filterFn ? defaults.filter(filterFn) : defaults;
 }
@@ -299,6 +286,28 @@ export async function fetchUniversities(countryId: string = 'YE'): Promise<Unive
     'universities',
     (u) => !countryId || u.countryId === countryId
   );
+}
+
+export function subscribeToUniversities(onUpdate: (universities: University[]) => void): () => void {
+  try {
+    return onSnapshot(
+      collection(db, 'universities'),
+      (snap) => {
+        const list: University[] = [];
+        snap.forEach(d => {
+          const data = d.data() as University;
+          if (data && data.id) list.push(data);
+        });
+        if (list.length > 0) {
+          writeLocalCollection('universities', list);
+          onUpdate(list);
+        }
+      },
+      (err) => console.warn('subscribeToUniversities error:', err)
+    );
+  } catch {
+    return () => {};
+  }
 }
 
 export async function saveUniversity(university: University): Promise<void> {

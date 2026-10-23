@@ -31,7 +31,8 @@ import {
   getPublishedAssessmentsForStudent, 
   startAttemptServer, 
   getStudentAttempts, 
-  getStudentResults 
+  getStudentResults,
+  subscribeToAssessments
 } from '../../services/assessmentService.ts';
 import ExamTakingModal from './ExamTakingModal';
 
@@ -83,6 +84,15 @@ export default function StudentAssessmentList({
 
   useEffect(() => {
     loadData();
+    const unsub = subscribeToAssessments(universityId, (liveList) => {
+      const published = liveList.filter(
+        a => a.status === 'published' && (!a.studyLevelId || a.studyLevelId === studyLevelId)
+      );
+      if (published.length > 0) {
+        setAssessments(published);
+      }
+    });
+    return () => unsub();
   }, [universityId, studyLevelId, uid]);
 
   const handleStartAttempt = async (assessment: Assessment) => {
