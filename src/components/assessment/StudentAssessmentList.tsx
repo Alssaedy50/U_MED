@@ -29,6 +29,7 @@ import {
 } from '../../types/umed.ts';
 import { 
   getPublishedAssessmentsForStudent, 
+  getCachedPublishedAssessments,
   startAttemptServer, 
   getStudentAttempts, 
   getStudentResults,
@@ -50,10 +51,12 @@ export default function StudentAssessmentList({
   studentNameArabic
 }: StudentAssessmentListProps) {
   const [activeTab, setActiveTab] = useState<AssessmentType>('exam');
-  const [assessments, setAssessments] = useState<Assessment[]>([]);
+  const [assessments, setAssessments] = useState<Assessment[]>(() =>
+    getCachedPublishedAssessments(universityId, studyLevelId)
+  );
   const [attempts, setAttempts] = useState<AssessmentAttempt[]>([]);
   const [results, setResults] = useState<AssessmentResult[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [loading, setLoading] = useState<boolean>(false);
   const [statusMsg, setStatusMsg] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
 
   // Active Exam Session Modal States
@@ -62,8 +65,8 @@ export default function StudentAssessmentList({
   const [activeQuestions, setActiveQuestions] = useState<AssessmentQuestionPublic[]>([]);
   const [startingAttempt, setStartingAttempt] = useState<string | null>(null);
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (showSpinner = false) => {
+    if (showSpinner) setLoading(true);
     setStatusMsg(null);
     try {
       const [list, userAttempts, userResults] = await Promise.all([
@@ -83,15 +86,24 @@ export default function StudentAssessmentList({
   };
 
   useEffect(() => {
-    loadData();
-    const unsub = subscribeToAssessments(universityId, (liveList) => {
-      const published = liveList.filter(
-        a => a.status === 'published' && (!a.studyLevelId || a.studyLevelId === studyLevelId)
-      );
-      if (published.length > 0) {
-        setAssessments(published);
-      }
-    });
+    const cached = getCachedPublishedAssessments(universityId, studyLevelId);
+    if (cached.length > 0) {
+      setAssessments(cached);
+    }
+    loadData(cached.length === 0);
+    const unsub = subscribeToAssessments(
+      universityId,
+      (liveList) => {
+        const published = liveList.filter(
+          a => a.status === 'published' && (!a.studyLevelId || a.studyLevelId === studyLevelId)
+        );
+        if (published.length > 0) {
+          setAssessments(published);
+        }
+      },
+      undefined,
+      'published'
+    );
     return () => unsub();
   }, [universityId, studyLevelId, uid]);
 

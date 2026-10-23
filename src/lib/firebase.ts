@@ -64,12 +64,17 @@ export const firebaseConfig = {
 };
 
 // Primary Platform Owner Official Details (Non-duplicable & Strictly Reserved)
-export const INITIAL_OWNER_EMAILS = [
+const parsedEnvOwnerEmails = (import.meta.env.VITE_INITIAL_OWNER_EMAIL || '')
+  .split(',')
+  .map((e: string) => e.trim().toLowerCase())
+  .filter(Boolean);
+
+export const INITIAL_OWNER_EMAILS = Array.from(new Set([
   'alssaedy50@gmail.com',
   'alssaedy500@gmail.com',
   'doctoshi50@gmail.com',
-  (import.meta.env.VITE_INITIAL_OWNER_EMAIL || '').trim().toLowerCase()
-].filter(Boolean);
+  ...parsedEnvOwnerEmails
+])).filter(Boolean);
 
 export const INITIAL_OWNER_EMAIL = INITIAL_OWNER_EMAILS[0];
 export const DEFAULT_OWNER_PHONE = '+967770000001';

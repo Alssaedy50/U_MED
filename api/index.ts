@@ -30,12 +30,17 @@ const FIREBASE_PROJECT_ID = (
   'umed-yemen'
 ).trim();
 
-const INITIAL_OWNER_EMAILS = [
+const parsedEnvOwnerEmails = (process.env.INITIAL_OWNER_EMAIL || '')
+  .split(',')
+  .map(e => e.trim().toLowerCase())
+  .filter(Boolean);
+
+const INITIAL_OWNER_EMAILS = Array.from(new Set([
   'alssaedy500@gmail.com',
   'alssaedy50@gmail.com',
   'doctoshi50@gmail.com',
-  (process.env.INITIAL_OWNER_EMAIL || '').trim().toLowerCase()
-].filter(Boolean);
+  ...parsedEnvOwnerEmails
+])).filter(Boolean);
 
 export const isInitialOwnerEmail = (email?: string | null): boolean => {
   if (!email) return false;

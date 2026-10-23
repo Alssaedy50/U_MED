@@ -24,7 +24,11 @@ import {
   Video
 } from 'lucide-react';
 import { EducationalResource, ResourceType } from '../../types/umed.ts';
-import { fetchEducationalResources, subscribeToEducationalResources } from '../../services/resourceService.ts';
+import {
+  fetchEducationalResources,
+  getCachedEducationalResources,
+  subscribeToEducationalResources
+} from '../../services/resourceService.ts';
 import ResourcePreviewModal from './ResourcePreviewModal.tsx';
 
 interface StudentMedicalLibraryProps {
@@ -40,15 +44,22 @@ export default function StudentMedicalLibrary({
   studyLevelId,
   studentNameArabic
 }: StudentMedicalLibraryProps) {
-  const [resources, setResources] = useState<EducationalResource[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [resources, setResources] = useState<EducationalResource[]>(() =>
+    getCachedEducationalResources({
+      universityId,
+      programId,
+      studyLevelId,
+      status: 'published'
+    })
+  );
+  const [loading, setLoading] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedType, setSelectedType] = useState<ResourceType | 'all'>('all');
   const [selectedSection, setSelectedSection] = useState<'all' | 'theoretical' | 'practical'>('all');
   const [activePreviewResource, setActivePreviewResource] = useState<EducationalResource | null>(null);
 
-  const loadResources = async () => {
-    setLoading(true);
+  const loadResources = async (showSpinner = false) => {
+    if (showSpinner) setLoading(true);
     try {
       const list = await fetchEducationalResources({
         universityId,
@@ -65,7 +76,16 @@ export default function StudentMedicalLibrary({
   };
 
   useEffect(() => {
-    loadResources();
+    const cached = getCachedEducationalResources({
+      universityId,
+      programId,
+      studyLevelId,
+      status: 'published'
+    });
+    if (cached.length > 0) {
+      setResources(cached);
+    }
+    loadResources(cached.length === 0);
     const unsub = subscribeToEducationalResources(
       {
         universityId,
@@ -113,7 +133,7 @@ export default function StudentMedicalLibrary({
         </div>
 
         <button
-          onClick={loadResources}
+          onClick={() => loadResources(true)}
           disabled={loading}
           className="py-2 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition-colors border border-slate-700"
         >

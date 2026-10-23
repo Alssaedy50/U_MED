@@ -321,6 +321,17 @@ export async function getBankQuestions(bankId: string): Promise<QuestionItemFull
     if (list.length > 0) {
       localStorage.setItem(`${LOCAL_STORAGE_PREFIX}q_${bankId}`, JSON.stringify(list));
       localStorage.setItem(initKey, 'true');
+      // Keep backend grading store synchronized in background
+      getIdTokenSafe().then(token => {
+        fetch('/api/admin/sync-assessment-questions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({ questions: list })
+        }).catch(() => {});
+      });
       return list;
     }
   } catch (err) {}
@@ -554,34 +565,116 @@ export async function deleteQuestion(questionId: string, bankId: string): Promis
 // 2. Admin Assessments (Exams & Competitions - Full Dynamic CRUD)
 // ---------------------------------------------------------------------------
 
+const DELETED_ASSESSMENTS_KEY = `${LOCAL_STORAGE_PREFIX}deleted_ids`;
+
+function getDeletedAssessmentIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DELETED_ASSESSMENTS_KEY);
+    if (raw) return new Set(JSON.parse(raw));
+  } catch (e) {}
+  return new Set();
+}
+
+function markAssessmentDeleted(id: string): void {
+  try {
+    const set = getDeletedAssessmentIds();
+    set.add(id);
+    localStorage.setItem(DELETED_ASSESSMENTS_KEY, JSON.stringify(Array.from(set)));
+  } catch (e) {}
+}
+
+function unmarkAssessmentDeleted(id: string): void {
+  try {
+    const set = getDeletedAssessmentIds();
+    if (set.has(id)) {
+      set.delete(id);
+      localStorage.setItem(DELETED_ASSESSMENTS_KEY, JSON.stringify(Array.from(set)));
+    }
+  } catch (e) {}
+}
+
+function mergeAssessmentsWithDefaults(universityId: string, items: Assessment[]): Assessment[] {
+  const deleted = getDeletedAssessmentIds();
+  const map = new Map<string, Assessment>();
+  if (universityId === 'univ-dar-al-salam') {
+    for (const def of DEFAULT_ASSESSMENTS) {
+      if (!deleted.has(def.id)) {
+        map.set(def.id, def);
+      }
+    }
+  }
+  for (const item of items) {
+    if (item && item.id && !deleted.has(item.id) && (!universityId || item.universityId === universityId)) {
+      map.set(item.id, item);
+    }
+  }
+  return Array.from(map.values());
+}
+
+export function getCachedPublishedAssessments(universityId: string, studyLevelId: string): Assessment[] {
+  try {
+    const raw = localStorage.getItem(`${LOCAL_STORAGE_PREFIX}assessments_${universityId}`);
+    const localList: Assessment[] = raw ? JSON.parse(raw) : [];
+    const merged = mergeAssessmentsWithDefaults(universityId, localList);
+    return merged.filter(
+      a => a.status === 'published' && (!a.studyLevelId || a.studyLevelId === studyLevelId || a.studyLevelId === 'ALL')
+    );
+  } catch {
+    return mergeAssessmentsWithDefaults(universityId, []).filter(
+      a => a.status === 'published' && (!a.studyLevelId || a.studyLevelId === studyLevelId || a.studyLevelId === 'ALL')
+    );
+  }
+}
+
 export async function getAssessments(universityId: string, type?: AssessmentType, status?: AssessmentStatus): Promise<Assessment[]> {
   const initKey = `${LOCAL_STORAGE_PREFIX}assessments_init_${universityId}`;
   const raw = localStorage.getItem(`${LOCAL_STORAGE_PREFIX}assessments_${universityId}`);
   const localList: Assessment[] = raw ? JSON.parse(raw) : [];
 
-  let list: Assessment[] = [];
+  let cloudList: Assessment[] = [];
   try {
-    const q = query(
-      collection(db, 'assessments'),
-      where('universityId', '==', universityId)
-    );
-    const snap = await getDocs(q);
-    snap.forEach(d => list.push({ id: d.id, ...d.data() } as Assessment));
-    if (list.length > 0) {
-      localStorage.setItem(`${LOCAL_STORAGE_PREFIX}assessments_${universityId}`, JSON.stringify(list));
-      localStorage.setItem(initKey, 'true');
+    if (status === 'published') {
+      // Student-safe query that 100% satisfies `resource.data.status == 'published'` in Firestore security rules
+      const q = query(collection(db, 'assessments'), where('status', '==', 'published'));
+      const snap = await getDocs(q);
+      snap.forEach(d => {
+        const data = { id: d.id, ...d.data() } as Assessment;
+        if (!universityId || data.universityId === universityId) {
+          cloudList.push(data);
+        }
+      });
+    } else {
+      try {
+        const q = query(collection(db, 'assessments'), where('universityId', '==', universityId));
+        const snap = await getDocs(q);
+        snap.forEach(d => cloudList.push({ id: d.id, ...d.data() } as Assessment));
+      } catch {
+        const q = query(collection(db, 'assessments'), where('status', '==', 'published'));
+        const snap = await getDocs(q);
+        snap.forEach(d => {
+          const data = { id: d.id, ...d.data() } as Assessment;
+          if (!universityId || data.universityId === universityId) {
+            cloudList.push(data);
+          }
+        });
+      }
     }
   } catch (err) {}
 
-  if (list.length === 0) {
-    if (localStorage.getItem(initKey) === 'true' || localList.length > 0) {
-      list = localList;
-    } else if (universityId === 'univ-dar-al-salam') {
-      list = DEFAULT_ASSESSMENTS;
-    }
-  }
+  const draftsFromLocal = status === 'published'
+    ? localList.filter(a => a.status !== 'published')
+    : [];
+  const merged = mergeAssessmentsWithDefaults(
+    universityId,
+    cloudList.length > 0 ? [...draftsFromLocal, ...cloudList] : localList
+  );
 
-  let result = list;
+  try {
+    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}assessments_${universityId}`, JSON.stringify(merged));
+    localStorage.setItem(initKey, 'true');
+  } catch (e) {}
+
+  let result = merged;
   if (status) {
     result = result.filter(a => a.status === status);
   }
@@ -598,19 +691,29 @@ export function subscribeToAssessments(
   status?: AssessmentStatus
 ): () => void {
   try {
-    const q = query(
-      collection(db, 'assessments'),
-      where('universityId', '==', universityId)
-    );
+    // Use `where('status', '==', 'published')` when status is 'published' so student listeners
+    // 100% comply with Firestore security rules on `umed-yemen`.
+    const q = status === 'published'
+      ? query(collection(db, 'assessments'), where('status', '==', 'published'))
+      : query(collection(db, 'assessments'), where('universityId', '==', universityId));
+
     const unsub = onSnapshot(
       q,
       (snap) => {
-        let list: Assessment[] = [];
-        snap.forEach(d => list.push({ id: d.id, ...d.data() } as Assessment));
-        if (list.length > 0) {
-          localStorage.setItem(`${LOCAL_STORAGE_PREFIX}assessments_${universityId}`, JSON.stringify(list));
+        const cloudItems: Assessment[] = [];
+        snap.forEach(d => {
+          const data = { id: d.id, ...d.data() } as Assessment;
+          if (!universityId || data.universityId === universityId) {
+            cloudItems.push(data);
+          }
+        });
+        const merged = mergeAssessmentsWithDefaults(universityId, cloudItems);
+        try {
+          localStorage.setItem(`${LOCAL_STORAGE_PREFIX}assessments_${universityId}`, JSON.stringify(merged));
           localStorage.setItem(`${LOCAL_STORAGE_PREFIX}assessments_init_${universityId}`, 'true');
-        }
+        } catch (e) {}
+
+        let list = merged;
         if (status) list = list.filter(a => a.status === status);
         if (type) list = list.filter(a => a.assessmentType === type);
         onUpdate(list);
@@ -646,6 +749,7 @@ export async function createAssessment(
 ): Promise<Assessment> {
   const existing = await ensureAssessmentsInitialized(assessment.universityId);
   const id = `asmnt-${Date.now()}`;
+  unmarkAssessmentDeleted(id);
   const now = new Date().toISOString();
   const newAssessment: Assessment = {
     ...assessment,
@@ -656,23 +760,25 @@ export async function createAssessment(
   try {
     await setDoc(doc(db, 'assessments', id), cleanFirestoreData(newAssessment));
     if (Array.isArray(bankQuestions) && bankQuestions.length > 0) {
-      for (const q of bankQuestions) {
-        await setDoc(doc(db, 'assessmentQuestions', q.id), cleanFirestoreData({
-          id: q.id,
-          bankId: q.bankId,
-          stemArabic: q.stemArabic,
-          stemEnglish: q.stemEnglish || '',
-          options: q.options,
-          points: Number(q.points) || 5
-        }), { merge: true });
-        await setDoc(doc(db, 'questionAnswerKeys', q.id), cleanFirestoreData({
-          questionId: q.id,
-          assessmentId: id,
-          correctOptionId: q.correctOptionId,
-          explanationArabic: q.explanationArabic || '',
-          points: Number(q.points) || 5
-        }), { merge: true });
-      }
+      await Promise.all(
+        bankQuestions.map(async (q) => {
+          await setDoc(doc(db, 'assessmentQuestions', q.id), cleanFirestoreData({
+            id: q.id,
+            bankId: q.bankId,
+            stemArabic: q.stemArabic,
+            stemEnglish: q.stemEnglish || '',
+            options: q.options,
+            points: Number(q.points) || 5
+          }), { merge: true });
+          await setDoc(doc(db, 'questionAnswerKeys', q.id), cleanFirestoreData({
+            questionId: q.id,
+            assessmentId: id,
+            correctOptionId: q.correctOptionId,
+            explanationArabic: q.explanationArabic || '',
+            points: Number(q.points) || 5
+          }), { merge: true });
+        })
+      );
     }
   } catch (err) {}
 
@@ -702,6 +808,7 @@ export async function updateAssessment(
   updates: Partial<Assessment>,
   bankQuestions?: QuestionItemFull[]
 ): Promise<Assessment> {
+  unmarkAssessmentDeleted(assessmentId);
   const universityId = updates.universityId || 'univ-dar-al-salam';
   const existing = await ensureAssessmentsInitialized(universityId);
   const target = existing.find(a => a.id === assessmentId) ||
@@ -733,23 +840,25 @@ export async function updateAssessment(
   try {
     await setDoc(doc(db, 'assessments', assessmentId), cleanFirestoreData(updatedAssessment), { merge: true });
     if (Array.isArray(bankQuestions) && bankQuestions.length > 0) {
-      for (const q of bankQuestions) {
-        await setDoc(doc(db, 'assessmentQuestions', q.id), cleanFirestoreData({
-          id: q.id,
-          bankId: q.bankId,
-          stemArabic: q.stemArabic,
-          stemEnglish: q.stemEnglish || '',
-          options: q.options,
-          points: Number(q.points) || 5
-        }), { merge: true });
-        await setDoc(doc(db, 'questionAnswerKeys', q.id), cleanFirestoreData({
-          questionId: q.id,
-          assessmentId,
-          correctOptionId: q.correctOptionId,
-          explanationArabic: q.explanationArabic || '',
-          points: Number(q.points) || 5
-        }), { merge: true });
-      }
+      await Promise.all(
+        bankQuestions.map(async (q) => {
+          await setDoc(doc(db, 'assessmentQuestions', q.id), cleanFirestoreData({
+            id: q.id,
+            bankId: q.bankId,
+            stemArabic: q.stemArabic,
+            stemEnglish: q.stemEnglish || '',
+            options: q.options,
+            points: Number(q.points) || 5
+          }), { merge: true });
+          await setDoc(doc(db, 'questionAnswerKeys', q.id), cleanFirestoreData({
+            questionId: q.id,
+            assessmentId,
+            correctOptionId: q.correctOptionId,
+            explanationArabic: q.explanationArabic || '',
+            points: Number(q.points) || 5
+          }), { merge: true });
+        })
+      );
     }
   } catch (err) {
     console.warn('Firestore updateAssessment fallback:', err);
@@ -782,6 +891,7 @@ export async function deleteAssessment(
   assessmentId: string,
   universityId: string = 'univ-dar-al-salam'
 ): Promise<void> {
+  markAssessmentDeleted(assessmentId);
   const existing = await ensureAssessmentsInitialized(universityId);
 
   try {
@@ -825,39 +935,38 @@ export async function getPublishedAssessmentsForStudent(
 ): Promise<Assessment[]> {
   const all = await getAssessments(universityId, undefined, 'published');
   const filtered = all.filter(
-    a => a.status === 'published' && (a.studyLevelId === studyLevelId || !a.studyLevelId)
+    a => a.status === 'published' && (a.studyLevelId === studyLevelId || !a.studyLevelId || a.studyLevelId === 'ALL')
   );
   return filtered;
 }
 
 export async function fetchPublicQuestionsForAssessment(questionIds: string[]): Promise<AssessmentQuestionPublic[]> {
-  const results: AssessmentQuestionPublic[] = [];
   const defaultMap: Record<string, AssessmentQuestionPublic> = {};
   DEFAULT_PUBLIC_QUESTIONS.forEach(q => { defaultMap[q.id] = q; });
 
-  for (const qId of questionIds) {
-    try {
-      const snap = await getDoc(doc(db, 'assessmentQuestions', qId));
-      if (snap.exists()) {
-        const d = snap.data() as AssessmentQuestionPublic;
-        results.push({
-          id: d.id || qId,
-          bankId: d.bankId,
-          stemArabic: d.stemArabic,
-          stemEnglish: d.stemEnglish,
-          imageUrl: d.imageUrl,
-          options: d.options,
-          points: Number(d.points) || 5
-        });
-        continue;
-      }
-    } catch (e) {}
+  // Fetch all questions in parallel for fast exam start!
+  const fetched = await Promise.all(
+    questionIds.map(async (qId) => {
+      try {
+        const snap = await getDoc(doc(db, 'assessmentQuestions', qId));
+        if (snap.exists()) {
+          const d = snap.data() as AssessmentQuestionPublic;
+          return {
+            id: d.id || qId,
+            bankId: d.bankId,
+            stemArabic: d.stemArabic,
+            stemEnglish: d.stemEnglish,
+            imageUrl: d.imageUrl,
+            options: d.options,
+            points: Number(d.points) || 5
+          } as AssessmentQuestionPublic;
+        }
+      } catch (e) {}
+      return defaultMap[qId] || null;
+    })
+  );
 
-    if (defaultMap[qId]) {
-      results.push(defaultMap[qId]);
-    }
-  }
-
+  const results = fetched.filter(Boolean) as AssessmentQuestionPublic[];
   if (results.length === 0) {
     return DEFAULT_PUBLIC_QUESTIONS;
   }
@@ -1063,17 +1172,27 @@ export async function submitAttemptServer(
     };
   }
 
-  // 3. Persist finalized attempt and audit log to Cloud Firestore
+  // 3. Persist finalized attempt (including scoredResult for cross-device persistence) to Cloud Firestore
   try {
-    await updateDoc(doc(db, 'assessmentAttempts', attemptId), {
+    await setDoc(doc(db, 'assessmentAttempts', attemptId), cleanFirestoreData({
+      id: attemptId,
+      assessmentId,
+      uid,
       answers,
       status: 'scored',
-      submittedAt: finalResult.submittedAt
-    });
+      submittedAt: finalResult.submittedAt,
+      scoredResult: finalResult
+    }), { merge: true });
   } catch (e) {}
 
-  // Note: firestore.rules restricts assessmentResults creation to admins;
-  // server API stores the result authoritatively, and admin syncs it to Firestore when viewing/releasing.
+  try {
+    const localKey = `${LOCAL_STORAGE_PREFIX}results_${uid}`;
+    const raw = localStorage.getItem(localKey);
+    const prev: AssessmentResult[] = raw ? JSON.parse(raw) : [];
+    const updated = [finalResult, ...prev.filter(r => r.id !== finalResult!.id)];
+    localStorage.setItem(localKey, JSON.stringify(updated));
+  } catch (e) {}
+
   try {
     await setDoc(doc(db, 'assessmentResults', finalResult.id), cleanFirestoreData(finalResult), { merge: true });
   } catch (e) {}
@@ -1117,9 +1236,32 @@ export async function getStudentAttempts(uid: string): Promise<AssessmentAttempt
 export async function getStudentResults(uid: string): Promise<AssessmentResult[]> {
   const resultsMap: Record<string, AssessmentResult> = {};
 
+  // 0. Load local cached results first
   try {
-    // Query only released results from Firestore to satisfy security rule:
-    // allow read: if (resource.data.uid == request.auth.uid && resource.data.isReleased == true) || isAnyAdmin()
+    const raw = localStorage.getItem(`${LOCAL_STORAGE_PREFIX}results_${uid}`);
+    if (raw) {
+      const localList = JSON.parse(raw) as AssessmentResult[];
+      localList.forEach(r => {
+        if (r && r.id) resultsMap[r.id] = r;
+      });
+    }
+  } catch (e) {}
+
+  // 1. Read scored results stored inside student's own assessmentAttempts in Firestore
+  try {
+    const attemptsQ = query(collection(db, 'assessmentAttempts'), where('uid', '==', uid));
+    const attemptsSnap = await getDocs(attemptsQ);
+    attemptsSnap.forEach(d => {
+      const data = d.data();
+      if (data?.scoredResult && data.scoredResult.id) {
+        const r = data.scoredResult as AssessmentResult;
+        resultsMap[r.id] = r.isReleased ? r : { ...r, score: 0, percentage: 0 };
+      }
+    });
+  } catch (e) {}
+
+  try {
+    // Query released results from Firestore assessmentResults
     const q = query(
       collection(db, 'assessmentResults'),
       where('uid', '==', uid),
@@ -1139,7 +1281,6 @@ export async function getStudentResults(uid: string): Promise<AssessmentResult[]
       if (Array.isArray(data.results)) {
         data.results.forEach((r: AssessmentResult) => {
           if (r && r.id) {
-            // Mask score if not released yet
             resultsMap[r.id] = r.isReleased
               ? r
               : { ...r, score: 0, percentage: 0 };
@@ -1149,7 +1290,12 @@ export async function getStudentResults(uid: string): Promise<AssessmentResult[]
     }
   } catch (e) {}
 
-  return Object.values(resultsMap);
+  const finalResults = Object.values(resultsMap);
+  try {
+    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}results_${uid}`, JSON.stringify(finalResults));
+  } catch (e) {}
+
+  return finalResults;
 }
 
 export async function releaseAssessmentResults(assessmentId: string): Promise<number> {
@@ -1175,7 +1321,7 @@ export async function releaseAssessmentResults(assessmentId: string): Promise<nu
     }
   } catch (e) {}
 
-  // 2. Sync and release in Cloud Firestore (admin has write access to assessmentResults)
+  // 2. Sync and release in Cloud Firestore (both assessmentResults and assessmentAttempts)
   try {
     const serverRes = await fetch(`/api/assessments/results?assessmentId=${encodeURIComponent(assessmentId)}`);
     if (serverRes.ok) {
@@ -1188,6 +1334,23 @@ export async function releaseAssessmentResults(assessmentId: string): Promise<nu
             releasedAt: nowIso
           }, { merge: true });
         }
+      }
+    }
+
+    const attemptsQ = query(collection(db, 'assessmentAttempts'), where('assessmentId', '==', assessmentId));
+    const attemptsSnap = await getDocs(attemptsQ);
+    for (const d of attemptsSnap.docs) {
+      const attData = d.data();
+      if (attData?.scoredResult) {
+        const releasedRes = {
+          ...attData.scoredResult,
+          isReleased: true,
+          releasedAt: nowIso
+        };
+        await Promise.all([
+          updateDoc(doc(db, 'assessmentAttempts', d.id), { scoredResult: releasedRes }),
+          setDoc(doc(db, 'assessmentResults', releasedRes.id), cleanFirestoreData(releasedRes), { merge: true })
+        ]);
       }
     }
 
@@ -1232,6 +1395,20 @@ export async function getAssessmentResultsForAdmin(assessmentId: string): Promis
   } catch (err) {}
 
   try {
+    const attemptsQ = query(
+      collection(db, 'assessmentAttempts'),
+      where('assessmentId', '==', assessmentId)
+    );
+    const attemptsSnap = await getDocs(attemptsQ);
+    attemptsSnap.forEach(d => {
+      const data = d.data();
+      if (data?.scoredResult && data.scoredResult.id && !resultsMap[data.scoredResult.id]) {
+        resultsMap[data.scoredResult.id] = data.scoredResult as AssessmentResult;
+      }
+    });
+  } catch (err) {}
+
+  try {
     const res = await fetch(`/api/assessments/results?assessmentId=${encodeURIComponent(assessmentId)}`);
     if (res.ok) {
       const data = await res.json();
@@ -1239,7 +1416,6 @@ export async function getAssessmentResultsForAdmin(assessmentId: string): Promis
         for (const r of data.results as AssessmentResult[]) {
           if (r && r.id) {
             resultsMap[r.id] = r;
-            // Admin syncs server-scored results to Firestore assessmentResults
             try {
               await setDoc(doc(db, 'assessmentResults', r.id), r, { merge: true });
             } catch (e) {}

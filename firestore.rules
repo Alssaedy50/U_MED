@@ -42,7 +42,7 @@ service cloud.firestore {
         isPlatformOwner() ||
         (hasRoleDoc() &&
          getRoleDoc().data.role == 'university_admin' &&
-         (universityId == null || getRoleDoc().data.assignedUniversityId == universityId))
+         (universityId == null || !('assignedUniversityId' in getRoleDoc().data) || getRoleDoc().data.assignedUniversityId == universityId))
       );
     }
 
@@ -51,8 +51,8 @@ service cloud.firestore {
         isUniversityAdmin(universityId) ||
         (hasRoleDoc() &&
          getRoleDoc().data.role == 'batch_rep' &&
-         (universityId == null || getRoleDoc().data.assignedUniversityId == universityId) &&
-         (studyLevelId == null || getRoleDoc().data.assignedStudyLevelId == studyLevelId))
+         (universityId == null || !('assignedUniversityId' in getRoleDoc().data) || getRoleDoc().data.assignedUniversityId == universityId) &&
+         (studyLevelId == null || studyLevelId == 'ALL' || !('assignedStudyLevelId' in getRoleDoc().data) || getRoleDoc().data.assignedStudyLevelId == studyLevelId))
       );
     }
 
@@ -61,8 +61,8 @@ service cloud.firestore {
         isBatchRep(universityId, studyLevelId) ||
         (hasRoleDoc() &&
          getRoleDoc().data.role == 'department_head' &&
-         (universityId == null || getRoleDoc().data.assignedUniversityId == universityId) &&
-         (studyLevelId == null || getRoleDoc().data.assignedStudyLevelId == studyLevelId))
+         (universityId == null || !('assignedUniversityId' in getRoleDoc().data) || getRoleDoc().data.assignedUniversityId == universityId) &&
+         (studyLevelId == null || studyLevelId == 'ALL' || !('assignedStudyLevelId' in getRoleDoc().data) || getRoleDoc().data.assignedStudyLevelId == studyLevelId))
       );
     }
 
@@ -91,11 +91,11 @@ service cloud.firestore {
     }
 
     // -------------------------------------------------------------------------
-    // System Connectivity Probe
+    // System Connectivity Probe & Shared Deleted Entities Registry
     // -------------------------------------------------------------------------
     match /system/{docId} {
       allow read: if true;
-      allow write: if isPlatformOwner();
+      allow write: if isAnyAdmin();
     }
 
     // -------------------------------------------------------------------------
@@ -121,8 +121,7 @@ service cloud.firestore {
     }
 
     match /userProfiles/{uid} {
-      allow get: if isAuthenticated();
-      allow list: if isAnyAdmin();
+      allow read: if isAuthenticated();
       allow create, update: if isOwner(uid) || isPlatformOwner() || isAnyAdmin();
       allow delete: if isOwner(uid) || isPlatformOwner();
     }
@@ -138,7 +137,7 @@ service cloud.firestore {
 
     match /countries/{countryId} {
       allow read: if true;
-      allow write: if isPlatformOwner();
+      allow write: if isAnyAdmin();
     }
 
     match /universities/{universityId} {
@@ -149,38 +148,38 @@ service cloud.firestore {
 
     match /colleges/{collegeId} {
       allow read: if true;
-      allow create, update: if isUniversityAdmin(request.resource.data.universityId);
+      allow create, update: if isUniversityAdmin(request.resource.data.universityId) || isAnyAdmin();
       allow delete: if isUniversityAdmin(resource.data.universityId);
     }
 
     match /programs/{programId} {
       allow read: if true;
-      allow create, update: if isUniversityAdmin(request.resource.data.universityId);
+      allow create, update: if isUniversityAdmin(request.resource.data.universityId) || isAnyAdmin();
       allow delete: if isUniversityAdmin(resource.data.universityId);
     }
 
     match /curriculumVersions/{curriculumId} {
       allow read: if true;
-      allow create, update: if isUniversityAdmin(request.resource.data.universityId);
+      allow create, update: if isUniversityAdmin(request.resource.data.universityId) || isAnyAdmin();
       allow delete: if isUniversityAdmin(resource.data.universityId);
     }
 
     match /studyLevels/{levelId} {
       allow read: if true;
-      allow create, update: if isUniversityAdmin(request.resource.data.universityId);
+      allow create, update: if isUniversityAdmin(request.resource.data.universityId) || isAnyAdmin();
       allow delete: if isUniversityAdmin(resource.data.universityId);
     }
 
     match /studyPeriods/{periodId} {
       allow read: if true;
-      allow create, update: if isBatchRep(request.resource.data.universityId, request.resource.data.studyLevelId);
-      allow delete: if isBatchRep(resource.data.universityId, resource.data.studyLevelId);
+      allow create, update: if isBatchRep(request.resource.data.universityId, request.resource.data.studyLevelId) || isAnyAdmin();
+      allow delete: if isBatchRep(resource.data.universityId, resource.data.studyLevelId) || isAnyAdmin();
     }
 
     match /courseOfferings/{courseId} {
       allow read: if true;
-      allow create, update: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId);
-      allow delete: if isBatchRep(resource.data.universityId, resource.data.studyLevelId);
+      allow create, update: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId) || isAnyAdmin();
+      allow delete: if isBatchRep(resource.data.universityId, resource.data.studyLevelId) || isAnyAdmin();
     }
 
     // -------------------------------------------------------------------------
@@ -188,15 +187,15 @@ service cloud.firestore {
     // -------------------------------------------------------------------------
 
     match /courseInstructors/{instructorId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId);
-      allow delete: if isDepartmentHead(resource.data.universityId, resource.data.studyLevelId);
+      allow read: if true;
+      allow create, update: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId) || isAnyAdmin();
+      allow delete: if isDepartmentHead(resource.data.universityId, resource.data.studyLevelId) || isAnyAdmin();
     }
 
     match /batchNotifications/{notifId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId);
-      allow delete: if isDepartmentHead(resource.data.universityId, resource.data.studyLevelId);
+      allow read: if true;
+      allow create, update: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId) || isAnyAdmin();
+      allow delete: if isDepartmentHead(resource.data.universityId, resource.data.studyLevelId) || isAnyAdmin();
     }
 
     // -------------------------------------------------------------------------
@@ -204,8 +203,7 @@ service cloud.firestore {
     // -------------------------------------------------------------------------
 
     match /uniqueIdentifiers/{identifierId} {
-      allow get: if true;
-      allow list: if isAnyAdmin();
+      allow read: if true;
       allow create, update: if isAuthenticated() &&
         (request.resource.data.uid == request.auth.uid || isAnyAdmin()) &&
         (!exists(/databases/$(database)/documents/uniqueIdentifiers/$(identifierId)) ||
@@ -229,21 +227,21 @@ service cloud.firestore {
     match /studentEnrollments/{enrollmentId} {
       allow read: if isAuthenticated();
       allow create: if (isAuthenticated() && request.resource.data.uid == request.auth.uid) ||
-                       isUniversityAdmin(request.resource.data.universityId);
-      allow update: if isUniversityAdmin(resource.data.universityId) ||
+                       isAnyAdmin();
+      allow update: if isAnyAdmin() ||
                        (isAuthenticated() && resource.data.uid == request.auth.uid);
       allow delete: if isPlatformOwner() ||
-                       isUniversityAdmin(resource.data.universityId) ||
+                       isAnyAdmin() ||
                        (isAuthenticated() && resource.data.uid == request.auth.uid);
     }
 
     match /academicChangeRequests/{requestId} {
       allow read: if isAuthenticated() && 
-        (resource.data.uid == request.auth.uid || isUniversityAdmin(resource.data.universityId));
+        (resource.data.uid == request.auth.uid || isAnyAdmin());
       allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid;
-      allow update: if isUniversityAdmin(resource.data.universityId);
+      allow update: if isAnyAdmin();
       allow delete: if isPlatformOwner() ||
-                       isUniversityAdmin(resource.data.universityId) ||
+                       isAnyAdmin() ||
                        (isAuthenticated() && resource.data.uid == request.auth.uid);
     }
 
@@ -252,14 +250,13 @@ service cloud.firestore {
     // -------------------------------------------------------------------------
 
     match /educationalResources/{resourceId} {
-      allow read: if isAuthenticated() && 
-        (resource.data.status == 'published' || isAnyAdmin());
-      allow create, update: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId);
-      allow delete: if isDepartmentHead(resource.data.universityId, resource.data.studyLevelId);
+      allow read: if true;
+      allow create, update: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId) || isAnyAdmin();
+      allow delete: if isDepartmentHead(resource.data.universityId, resource.data.studyLevelId) || isAnyAdmin();
     }
 
     match /uploadedFileChunks/{chunkId} {
-      allow read: if isAuthenticated();
+      allow read: if true;
       allow write: if isAnyAdmin();
     }
 
@@ -269,8 +266,8 @@ service cloud.firestore {
 
     match /questionBanks/{bankId} {
       allow read: if isAnyAdmin();
-      allow create, update: if isDepartmentHead(request.resource.data.universityId, null);
-      allow delete: if isDepartmentHead(resource.data.universityId, null);
+      allow create, update: if isDepartmentHead(request.resource.data.universityId, null) || isAnyAdmin();
+      allow delete: if isDepartmentHead(resource.data.universityId, null) || isAnyAdmin();
     }
 
     // Admin Full Questions (includes answer keys - restricted to admins)
@@ -290,10 +287,9 @@ service cloud.firestore {
     }
 
     match /assessments/{assessmentId} {
-      allow read: if isAuthenticated() && 
-        (resource.data.status == 'published' || isAnyAdmin());
-      allow create, update: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId);
-      allow delete: if isDepartmentHead(resource.data.universityId, resource.data.studyLevelId);
+      allow read: if isAuthenticated();
+      allow create, update: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId) || isAnyAdmin();
+      allow delete: if isDepartmentHead(resource.data.universityId, resource.data.studyLevelId) || isAnyAdmin();
     }
 
     // Assessment Attempts (Student Progressive Saving)
@@ -304,12 +300,13 @@ service cloud.firestore {
       allow delete: if isPlatformOwner() || (isAuthenticated() && resource.data.uid == request.auth.uid);
     }
 
-    // Assessment Results (Controlled Release - Server/Admin Authoritative Only)
+    // Assessment Results
     match /assessmentResults/{resultId} {
       allow read: if isAuthenticated() && 
-        ((resource.data.uid == request.auth.uid && resource.data.isReleased == true) || isAnyAdmin());
-      allow create, update: if isAnyAdmin();
-      allow delete: if isPlatformOwner();
+        (resource.data.uid == request.auth.uid || isAnyAdmin());
+      allow create: if isAuthenticated() && (request.resource.data.uid == request.auth.uid || isAnyAdmin());
+      allow update: if isAnyAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      allow delete: if isPlatformOwner() || isAnyAdmin();
     }
 
     // -------------------------------------------------------------------------

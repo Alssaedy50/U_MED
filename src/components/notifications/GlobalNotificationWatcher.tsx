@@ -53,7 +53,7 @@ export default function GlobalNotificationWatcher() {
 
   // 1. Listen for new Batch Announcements & Posts (منشورات)
   useEffect(() => {
-    if (!db) return;
+    if (!db || !user?.uid) return;
 
     try {
       const q = query(collection(db, 'batchNotifications'));
@@ -102,7 +102,7 @@ export default function GlobalNotificationWatcher() {
 
   // 2. Listen for new Educational Resources & Clinical Data (داتا ومحاضرات)
   useEffect(() => {
-    if (!db) return;
+    if (!db || !user?.uid) return;
 
     try {
       const q = query(
@@ -163,7 +163,7 @@ export default function GlobalNotificationWatcher() {
 
   // 3. Listen for new Exams & Competitions (اختبارات ومسابقات)
   useEffect(() => {
-    if (!db) return;
+    if (!db || !user?.uid) return;
 
     try {
       const q = query(
@@ -224,7 +224,7 @@ export default function GlobalNotificationWatcher() {
     if (!db || !user?.uid) return;
 
     try {
-      const docRef = doc(db, 'studentEnrollments', user.uid);
+      const docRef = doc(db, 'studentEnrollments', `enr-${user.uid}`);
       const unsub = onSnapshot(
         docRef,
         (snap) => {

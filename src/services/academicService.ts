@@ -4,7 +4,7 @@
  * 
  * UMED Academic Hierarchy Service
  * Manages Universities, Colleges, Programs, Curricula, Levels, Blocks, and Courses
- * Full Dynamic CRUD with Hybrid Firestore + LocalStorage Persistence & Cascade Deletion
+ * High-Speed In-Memory Cache + Real-Time Firestore Sync + LocalStorage Persistence & Cascade Deletion
  */
 
 import { 
@@ -14,12 +14,10 @@ import {
   setDoc, 
   updateDoc, 
   deleteDoc,
-  query, 
-  where,
   writeBatch,
   onSnapshot
 } from 'firebase/firestore';
-import { db } from '../lib/firebase.ts';
+import { db, auth } from '../lib/firebase.ts';
 import { 
   Country, 
   University, 
@@ -33,7 +31,7 @@ import {
 } from '../types/umed.ts';
 
 // ---------------------------------------------------------------------------
-// Hybrid LocalStorage + Firestore Synchronization Helpers
+// Hybrid In-Memory + LocalStorage + Real-Time Firestore Synchronization
 // ---------------------------------------------------------------------------
 
 const STORAGE_KEYS = {
@@ -48,7 +46,18 @@ const STORAGE_KEYS = {
   deletedIds: 'umed_acad_deleted_ids'
 } as const;
 
-type CollectionKey = Exclude<keyof typeof STORAGE_KEYS, 'deletedIds'>;
+export type CollectionKey = Exclude<keyof typeof STORAGE_KEYS, 'deletedIds'>;
+
+const FIRESTORE_COLLECTIONS: Record<CollectionKey, string> = {
+  countries: 'countries',
+  universities: 'universities',
+  colleges: 'colleges',
+  programs: 'programs',
+  curriculumVersions: 'curriculumVersions',
+  studyLevels: 'studyLevels',
+  studyPeriods: 'studyPeriods',
+  courseOfferings: 'courseOfferings'
+};
 
 const DEFAULT_SEED_DATA: Record<CollectionKey, any[]> = {
   countries: [DAR_AL_SALAM_SEED.country],
@@ -85,6 +94,21 @@ const DEFAULT_SEED_DATA: Record<CollectionKey, any[]> = {
   ]
 };
 
+// Fast in-memory cache for 0ms synchronous access across tabs
+const memoryCache: Partial<Record<CollectionKey, any[]>> = {};
+const syncedCollections = new Set<CollectionKey>();
+const inFlightFetches: Partial<Record<CollectionKey, Promise<any[]>>> = {};
+const hierarchyListeners = new Set<() => void>();
+let realtimeWatchersStarted = false;
+
+function notifyHierarchyListeners() {
+  hierarchyListeners.forEach(cb => {
+    try {
+      cb();
+    } catch (e) {}
+  });
+}
+
 function getDeletedIds(): Set<string> {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.deletedIds);
@@ -93,95 +117,194 @@ function getDeletedIds(): Set<string> {
   return new Set();
 }
 
-function markIdDeleted(id: string): void {
+function saveDeletedIds(set: Set<string>): void {
   try {
-    const set = getDeletedIds();
-    set.add(id);
     localStorage.setItem(STORAGE_KEYS.deletedIds, JSON.stringify(Array.from(set)));
   } catch (e) {}
 }
 
+function markIdDeleted(id: string): void {
+  const set = getDeletedIds();
+  set.add(id);
+  saveDeletedIds(set);
+  // Sync deleted IDs to system/deleted_entities if user is platform owner / admin
+  if (auth.currentUser) {
+    setDoc(
+      doc(db, 'system', 'deleted_entities'),
+      { ids: Array.from(set), updatedAt: new Date().toISOString() },
+      { merge: true }
+    ).catch(() => {});
+  }
+}
+
 function unmarkIdDeleted(id: string): void {
-  try {
-    const set = getDeletedIds();
-    if (set.has(id)) {
-      set.delete(id);
-      localStorage.setItem(STORAGE_KEYS.deletedIds, JSON.stringify(Array.from(set)));
+  const set = getDeletedIds();
+  if (set.has(id)) {
+    set.delete(id);
+    saveDeletedIds(set);
+    if (auth.currentUser) {
+      setDoc(
+        doc(db, 'system', 'deleted_entities'),
+        { ids: Array.from(set), updatedAt: new Date().toISOString() },
+        { merge: true }
+      ).catch(() => {});
     }
-  } catch (e) {}
+  }
 }
 
 function clearDeletedIds(): void {
   try {
     localStorage.removeItem(STORAGE_KEYS.deletedIds);
+    if (auth.currentUser) {
+      setDoc(
+        doc(db, 'system', 'deleted_entities'),
+        { ids: [], updatedAt: new Date().toISOString() },
+        { merge: true }
+      ).catch(() => {});
+    }
   } catch (e) {}
 }
 
+function mergeWithDefaults<T extends { id: string }>(key: CollectionKey, cloudOrLocalItems: T[]): T[] {
+  const deleted = getDeletedIds();
+  const defaults = (DEFAULT_SEED_DATA[key] as T[]) || [];
+  const mergedMap = new Map<string, T>();
+
+  for (const defItem of defaults) {
+    if (!deleted.has(defItem.id)) {
+      mergedMap.set(defItem.id, defItem);
+    }
+  }
+  for (const item of cloudOrLocalItems) {
+    if (item && item.id && !deleted.has(item.id)) {
+      mergedMap.set(item.id, item);
+    }
+  }
+  return Array.from(mergedMap.values());
+}
+
 function readLocalCollection<T extends { id: string }>(key: CollectionKey): T[] | null {
+  if (memoryCache[key]) {
+    const deleted = getDeletedIds();
+    return (memoryCache[key] as T[]).filter(item => !deleted.has(item.id));
+  }
   try {
     const raw = localStorage.getItem(STORAGE_KEYS[key]);
     if (raw !== null) {
       const parsed = JSON.parse(raw) as T[];
-      const deleted = getDeletedIds();
-      return parsed.filter(item => !deleted.has(item.id));
+      const merged = mergeWithDefaults<T>(key, parsed);
+      memoryCache[key] = merged;
+      return merged;
     }
   } catch (e) {}
   return null;
 }
 
 function writeLocalCollection<T extends { id: string }>(key: CollectionKey, items: T[]): void {
+  const deleted = getDeletedIds();
+  const clean = items.filter(item => item && item.id && !deleted.has(item.id));
+  memoryCache[key] = clean;
   try {
-    const deleted = getDeletedIds();
-    const clean = items.filter(item => !deleted.has(item.id));
     localStorage.setItem(STORAGE_KEYS[key], JSON.stringify(clean));
     localStorage.setItem(`${STORAGE_KEYS[key]}_init`, 'true');
   } catch (e) {}
 }
 
 /**
- * Ensures default seed entities for a collection are materialized in localStorage & Firestore
- * before performing single-item create/update/toggle/delete so other default items never vanish.
+ * Synchronous instant cache reader for UI components to avoid loading spinners on tab switch
  */
+export function getCachedCollection<T extends { id: string }>(
+  key: CollectionKey,
+  filterFn?: (item: T) => boolean
+): T[] {
+  const existing = readLocalCollection<T>(key) || mergeWithDefaults<T>(key, []);
+  return filterFn ? existing.filter(filterFn) : existing;
+}
+
+/**
+ * Starts real-time Firestore listeners for all academic hierarchy collections so any change made
+ * by an admin or batch representative is immediately reflected across all connected users.
+ */
+export function startAcademicRealtimeSync(): void {
+  if (realtimeWatchersStarted || !db) return;
+  realtimeWatchersStarted = true;
+
+  // Listen to shared deleted entity IDs
+  try {
+    onSnapshot(
+      doc(db, 'system', 'deleted_entities'),
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          if (Array.isArray(data?.ids)) {
+            saveDeletedIds(new Set(data.ids));
+            notifyHierarchyListeners();
+          }
+        }
+      },
+      () => {}
+    );
+  } catch (e) {}
+
+  (Object.keys(FIRESTORE_COLLECTIONS) as CollectionKey[]).forEach((key) => {
+    const colName = FIRESTORE_COLLECTIONS[key];
+    try {
+      onSnapshot(
+        collection(db, colName),
+        (snap) => {
+          const cloudItems: any[] = [];
+          snap.forEach((d) => {
+            const data = d.data();
+            if (data && (data.id || d.id)) {
+              cloudItems.push({ ...data, id: data.id || d.id });
+            }
+          });
+          const merged = mergeWithDefaults(key, cloudItems);
+          writeLocalCollection(key, merged);
+          syncedCollections.add(key);
+          notifyHierarchyListeners();
+        },
+        () => {}
+      );
+    } catch (e) {}
+  });
+}
+
+export function subscribeToAcademicHierarchy(onUpdate: () => void): () => void {
+  startAcademicRealtimeSync();
+  hierarchyListeners.add(onUpdate);
+  return () => {
+    hierarchyListeners.delete(onUpdate);
+  };
+}
+
 async function ensureCollectionInitialized<T extends { id: string }>(
   key: CollectionKey,
   firestoreCollectionName: string
 ): Promise<T[]> {
-  const deleted = getDeletedIds();
-  let currentLocal = readLocalCollection<T>(key);
-  const isInitialized = localStorage.getItem(`${STORAGE_KEYS[key]}_init`) === 'true';
-
-  if (!isInitialized || currentLocal === null) {
-    const defaults = (DEFAULT_SEED_DATA[key] as T[]).filter(item => !deleted.has(item.id));
-    let firestoreList: T[] = [];
-    try {
-      const snap = await getDocs(collection(db, firestoreCollectionName));
-      snap.forEach(d => {
-        const data = d.data() as T;
-        if (!deleted.has(data.id)) {
-          firestoreList.push(data);
-        }
-      });
-    } catch (e) {}
-
-    // Merge defaults with any existing Firestore docs so we never lose unseeded defaults
-    const mergedMap = new Map<string, T>();
-    defaults.forEach(item => mergedMap.set(item.id, item));
-    firestoreList.forEach(item => mergedMap.set(item.id, item));
-    currentLocal = Array.from(mergedMap.values());
-    writeLocalCollection(key, currentLocal);
-
-    // If Firestore had fewer items than defaults, persist the missing defaults to Firestore in background
-    if (firestoreList.length < defaults.length) {
-      const existingIds = new Set(firestoreList.map(i => i.id));
-      for (const defItem of defaults) {
-        if (!existingIds.has(defItem.id)) {
-          setDoc(doc(db, firestoreCollectionName, defItem.id), defItem, { merge: true }).catch(() => {});
-        }
-      }
-    }
+  startAcademicRealtimeSync();
+  const currentLocal = readLocalCollection<T>(key);
+  if (currentLocal !== null && syncedCollections.has(key)) {
+    return currentLocal;
   }
 
-  return currentLocal;
+  const deleted = getDeletedIds();
+  let firestoreList: T[] = [];
+  try {
+    const snap = await getDocs(collection(db, firestoreCollectionName));
+    snap.forEach(d => {
+      const data = d.data() as T;
+      const item = { ...data, id: data.id || d.id };
+      if (!deleted.has(item.id)) {
+        firestoreList.push(item);
+      }
+    });
+    syncedCollections.add(key);
+  } catch (e) {}
+
+  const merged = mergeWithDefaults<T>(key, [...(currentLocal || []), ...firestoreList]);
+  writeLocalCollection(key, merged);
+  return merged;
 }
 
 async function upsertHybridItem<T extends { id: string }>(
@@ -190,14 +313,16 @@ async function upsertHybridItem<T extends { id: string }>(
   item: T
 ): Promise<void> {
   unmarkIdDeleted(item.id);
-  const current = await ensureCollectionInitialized<T>(key, firestoreCollectionName);
+  const current = readLocalCollection<T>(key) || mergeWithDefaults<T>(key, []);
   const idx = current.findIndex(existing => existing.id === item.id);
+  const updatedList = [...current];
   if (idx >= 0) {
-    current[idx] = { ...current[idx], ...item };
+    updatedList[idx] = { ...updatedList[idx], ...item };
   } else {
-    current.push(item);
+    updatedList.push(item);
   }
-  writeLocalCollection(key, current);
+  writeLocalCollection(key, updatedList);
+  notifyHierarchyListeners();
 
   try {
     await setDoc(doc(db, firestoreCollectionName, item.id), item, { merge: true });
@@ -211,10 +336,11 @@ async function removeHybridItem<T extends { id: string }>(
   firestoreCollectionName: string,
   id: string
 ): Promise<void> {
-  const current = await ensureCollectionInitialized<T>(key, firestoreCollectionName);
+  const current = readLocalCollection<T>(key) || mergeWithDefaults<T>(key, []);
   markIdDeleted(id);
   const filtered = current.filter(item => item.id !== id);
   writeLocalCollection(key, filtered);
+  notifyHierarchyListeners();
 
   try {
     await deleteDoc(doc(db, firestoreCollectionName, id));
@@ -228,36 +354,42 @@ async function fetchHybridCollection<T extends { id: string }>(
   firestoreCollectionName: string,
   filterFn?: (item: T) => boolean
 ): Promise<T[]> {
-  const isInitialized = localStorage.getItem(`${STORAGE_KEYS[key]}_init`) === 'true';
-  const localItems = readLocalCollection<T>(key) || [];
+  startAcademicRealtimeSync();
 
-  try {
-    const snap = await getDocs(collection(db, firestoreCollectionName));
-    if (!snap.empty) {
-      // Cloud Firestore is the definitive source of truth across all devices!
-      const cloudItems: T[] = [];
-      snap.forEach((d) => {
-        const data = d.data() as T;
-        if (data && data.id) {
-          cloudItems.push(data);
-          unmarkIdDeleted(data.id);
-        }
-      });
-
-      writeLocalCollection(key, cloudItems);
-      return filterFn ? cloudItems.filter(filterFn) : cloudItems;
-    }
-  } catch (err) {
-    console.warn(`Firestore fetch error (${firestoreCollectionName}), using local/seed cache:`, err);
+  // If already synced in this session via getDocs or onSnapshot, return from memoryCache in 0ms!
+  if (syncedCollections.has(key) && memoryCache[key]) {
+    const cached = readLocalCollection<T>(key) || [];
+    return filterFn ? cached.filter(filterFn) : cached;
   }
 
-  if (isInitialized && localItems.length > 0) {
-    return filterFn ? localItems.filter(filterFn) : localItems;
+  // Deduplicate concurrent network requests for the same collection
+  if (!inFlightFetches[key]) {
+    inFlightFetches[key] = (async () => {
+      try {
+        const snap = await getDocs(collection(db, firestoreCollectionName));
+        const cloudItems: T[] = [];
+        snap.forEach((d) => {
+          const data = d.data() as T;
+          if (data && (data.id || d.id)) {
+            cloudItems.push({ ...data, id: data.id || d.id });
+          }
+        });
+        const merged = mergeWithDefaults<T>(key, cloudItems);
+        writeLocalCollection(key, merged);
+        syncedCollections.add(key);
+        return merged;
+      } catch (err) {
+        const fallback = readLocalCollection<T>(key) || mergeWithDefaults<T>(key, []);
+        writeLocalCollection(key, fallback);
+        return fallback;
+      } finally {
+        delete inFlightFetches[key];
+      }
+    })();
   }
 
-  const defaults = (DEFAULT_SEED_DATA[key] as T[]);
-  writeLocalCollection(key, defaults);
-  return filterFn ? defaults.filter(filterFn) : defaults;
+  const list = (await inFlightFetches[key]) as T[];
+  return filterFn ? list.filter(filterFn) : list;
 }
 
 // ---------------------------------------------------------------------------
@@ -289,6 +421,7 @@ export async function fetchUniversities(countryId: string = 'YE'): Promise<Unive
 }
 
 export function subscribeToUniversities(onUpdate: (universities: University[]) => void): () => void {
+  startAcademicRealtimeSync();
   try {
     return onSnapshot(
       collection(db, 'universities'),
@@ -296,12 +429,12 @@ export function subscribeToUniversities(onUpdate: (universities: University[]) =
         const list: University[] = [];
         snap.forEach(d => {
           const data = d.data() as University;
-          if (data && data.id) list.push(data);
+          if (data && (data.id || d.id)) list.push({ ...data, id: data.id || d.id });
         });
-        if (list.length > 0) {
-          writeLocalCollection('universities', list);
-          onUpdate(list);
-        }
+        const merged = mergeWithDefaults<University>('universities', list);
+        writeLocalCollection('universities', merged);
+        syncedCollections.add('universities');
+        onUpdate(merged);
       },
       (err) => console.warn('subscribeToUniversities error:', err)
     );
@@ -544,7 +677,11 @@ export async function fetchStudyPeriods(studyLevelId?: string, universityId?: st
 }
 
 export async function saveStudyPeriod(period: StudyPeriod): Promise<void> {
-  await upsertHybridItem<StudyPeriod>('studyPeriods', 'studyPeriods', period);
+  const enriched: StudyPeriod = {
+    ...period,
+    universityId: period.universityId || 'univ-dar-al-salam'
+  };
+  await upsertHybridItem<StudyPeriod>('studyPeriods', 'studyPeriods', enriched);
 }
 
 export async function toggleStudyPeriodActive(periodId: string, currentStatus: boolean): Promise<void> {
@@ -589,7 +726,11 @@ export async function fetchCourseOfferings(studyPeriodId?: string, universityId?
 }
 
 export async function saveCourseOffering(course: CourseOffering): Promise<void> {
-  await upsertHybridItem<CourseOffering>('courseOfferings', 'courseOfferings', course);
+  const enriched: CourseOffering = {
+    ...course,
+    universityId: course.universityId || 'univ-dar-al-salam'
+  };
+  await upsertHybridItem<CourseOffering>('courseOfferings', 'courseOfferings', enriched);
 }
 
 export async function toggleCourseOfferingActive(courseId: string, currentStatus: boolean): Promise<void> {
@@ -741,7 +882,6 @@ export async function seedDarAlSalamToFirestore(performedBy: string = 'PLATFORM_
     isActive: true
   };
 
-  // Merge with existing local collections so other universities' entities are never overwritten
   const mergeSeedWithLocal = <T extends { id: string }>(key: CollectionKey, seedItems: T[]) => {
     const existing = readLocalCollection<T>(key) || [];
     const map = new Map<string, T>();
@@ -758,6 +898,7 @@ export async function seedDarAlSalamToFirestore(performedBy: string = 'PLATFORM_
   mergeSeedWithLocal('studyLevels', DAR_AL_SALAM_SEED.studyLevels);
   mergeSeedWithLocal('studyPeriods', periodsList);
   mergeSeedWithLocal('courseOfferings', [defaultCourse]);
+  notifyHierarchyListeners();
 
   let count = 1 + 1 + 1 + 1 + 1 + DAR_AL_SALAM_SEED.studyLevels.length + periodsList.length + 1;
 

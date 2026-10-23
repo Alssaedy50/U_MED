@@ -53,6 +53,7 @@ import {
   isPrimaryOwnerEmail
 } from './lib/firebase.ts';
 import { fetchStudentEnrollment, subscribeToStudentEnrollment } from './services/enrollmentService.ts';
+import { startAcademicRealtimeSync } from './services/academicService.ts';
 import { getRoleLabelArabic } from './services/batchGovernanceService.ts';
 import { subscribeToAppNotifications } from './services/notificationService.ts';
 import StudentDashboard from './components/student/StudentDashboard.tsx';
@@ -224,15 +225,24 @@ export default function App() {
   useEffect(() => {
     if (isAuthorizedAdmin) {
       refreshAdminData();
+      // Background preload admin chunks so switching tabs is instantaneous (0ms)
+      import('./components/admin/AcademicStructureManager.tsx').catch(() => {});
+      import('./components/admin/EnrollmentApprovalManager.tsx').catch(() => {});
+      import('./components/admin/EducationalContentManager.tsx').catch(() => {});
+      import('./components/admin/AssessmentManager.tsx').catch(() => {});
+      import('./components/admin/HierarchyGovernanceConsole.tsx').catch(() => {});
+      import('./components/admin/PlatformUsersManager.tsx').catch(() => {});
+      import('./components/admin/BackupRestoreConsole.tsx').catch(() => {});
     }
   }, [isAuthorizedAdmin, activeTab]);
 
-  // Load and subscribe in real-time to current user's student enrollment status
+  // Load and subscribe in real-time to current user's student enrollment status & academic structure
   useEffect(() => {
     if (!user) {
       setStudentEnrollment(null);
       return;
     }
+    startAcademicRealtimeSync();
     fetchStudentEnrollment(user.uid).then(enr => {
       setStudentEnrollment(enr);
     });

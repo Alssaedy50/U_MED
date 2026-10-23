@@ -37,12 +37,17 @@ import {
 import { 
   fetchStudyPeriods, 
   fetchCourseOfferings,
-  fetchUniversities
+  fetchUniversities,
+  getCachedCollection,
+  subscribeToAcademicHierarchy
 } from '../../services/academicService.ts';
 import {
   fetchCourseInstructors,
   fetchBatchNotifications,
-  subscribeToBatchNotifications
+  getCachedCourseInstructors,
+  getCachedBatchNotifications,
+  subscribeToBatchNotifications,
+  subscribeToCourseInstructors
 } from '../../services/batchGovernanceService.ts';
 import { resolveResourceFileUrl } from '../../services/resourceService.ts';
 import RegisterEnrollment from './RegisterEnrollment.tsx';
@@ -72,16 +77,52 @@ export default function StudentDashboard({
     } catch (e) {}
     return null;
   });
-  const [universities, setUniversities] = useState<University[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [universities, setUniversities] = useState<University[]>(() =>
+    getCachedCollection<University>('universities')
+  );
+  // Instant 0ms render if enrollment is already cached
+  const [loading, setLoading] = useState<boolean>(() => !enrollment);
   const [internalTab, setInternalTab] = useState<'study' | 'library' | 'assessments'>(activeSection);
 
   // Academic Content & Batch Governance State (Strictly scoped to Student's University & Batch)
-  const [studyPeriods, setStudyPeriods] = useState<StudyPeriod[]>([]);
-  const [selectedPeriod, setSelectedPeriod] = useState<StudyPeriod | null>(null);
-  const [courses, setCourses] = useState<CourseOffering[]>([]);
-  const [instructors, setInstructors] = useState<CourseInstructor[]>([]);
-  const [batchNotifications, setBatchNotifications] = useState<BatchNotification[]>([]);
+  const [studyPeriods, setStudyPeriods] = useState<StudyPeriod[]>(() => {
+    if (!enrollment) return [];
+    return getCachedCollection<StudyPeriod>('studyPeriods')
+      .filter(p => p.studyLevelId === enrollment.currentStudyLevelId && (!p.universityId || p.universityId === enrollment.universityId))
+      .sort((a, b) => a.order - b.order);
+  });
+  const [selectedPeriod, setSelectedPeriod] = useState<StudyPeriod | null>(() => {
+    if (!enrollment) return null;
+    const cachedPeriods = getCachedCollection<StudyPeriod>('studyPeriods')
+      .filter(p => p.studyLevelId === enrollment.currentStudyLevelId && (!p.universityId || p.universityId === enrollment.universityId))
+      .sort((a, b) => a.order - b.order);
+    return cachedPeriods[0] || null;
+  });
+  const [courses, setCourses] = useState<CourseOffering[]>(() => {
+    if (!enrollment) return [];
+    const cachedPeriods = getCachedCollection<StudyPeriod>('studyPeriods')
+      .filter(p => p.studyLevelId === enrollment.currentStudyLevelId && (!p.universityId || p.universityId === enrollment.universityId))
+      .sort((a, b) => a.order - b.order);
+    const firstPeriod = cachedPeriods[0];
+    if (!firstPeriod) return [];
+    return getCachedCollection<CourseOffering>('courseOfferings').filter(
+      c => c.studyPeriodId === firstPeriod.id && (!c.universityId || c.universityId === enrollment.universityId)
+    );
+  });
+  const [instructors, setInstructors] = useState<CourseInstructor[]>(() => {
+    if (!enrollment) return [];
+    return getCachedCourseInstructors({
+      universityId: enrollment.universityId,
+      studyLevelId: enrollment.currentStudyLevelId
+    });
+  });
+  const [batchNotifications, setBatchNotifications] = useState<BatchNotification[]>(() => {
+    if (!enrollment) return [];
+    return getCachedBatchNotifications({
+      universityId: enrollment.universityId,
+      studyLevelId: enrollment.currentStudyLevelId
+    });
+  });
   const [downloadingNotifId, setDownloadingNotifId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -96,8 +137,10 @@ export default function StudentDashboard({
     }
   };
 
-  const loadStudentData = async () => {
-    setLoading(true);
+  const loadStudentData = async (showSpinner = false) => {
+    if (showSpinner || !enrollment) {
+      setLoading(true);
+    }
     try {
       const [enr, univList] = await Promise.all([
         fetchStudentEnrollment(uid),
@@ -118,11 +161,12 @@ export default function StudentDashboard({
         setStudyPeriods(periods);
         setInstructors(instList);
         setBatchNotifications(notifList);
-        if (periods.length > 0) {
-          setSelectedPeriod(periods[0]);
-        } else {
-          setSelectedPeriod(null);
-        }
+        setSelectedPeriod(prev => {
+          if (prev && periods.some(p => p.id === prev.id)) {
+            return periods.find(p => p.id === prev.id) || periods[0] || null;
+          }
+          return periods[0] || null;
+        });
       }
     } catch (err) {
       console.warn('Failed to load student dashboard data:', err);
@@ -132,29 +176,64 @@ export default function StudentDashboard({
   };
 
   useEffect(() => {
-    loadStudentData();
+    loadStudentData(false);
   }, [uid]);
 
-  // Subscribe in real-time to Batch Notifications for this student's exact University & Study Level
+  // Subscribe in real-time to Batch Notifications, Course Instructors, and Academic Structure
   useEffect(() => {
     if (!enrollment || enrollment.status !== 'approved') return;
-    const unsub = subscribeToBatchNotifications(
+
+    const unsubNotifs = subscribeToBatchNotifications(
       enrollment.universityId,
       enrollment.currentStudyLevelId,
       (notifs) => setBatchNotifications(notifs)
     );
-    return () => unsub();
+
+    const unsubInstructors = subscribeToCourseInstructors(
+      enrollment.universityId,
+      enrollment.currentStudyLevelId,
+      (instList: CourseInstructor[]) => setInstructors(instList)
+    );
+
+    const unsubAcademic = subscribeToAcademicHierarchy(() => {
+      const liveUnivs = getCachedCollection<University>('universities').filter(u => u.countryId === 'YE');
+      if (liveUnivs.length > 0) setUniversities(liveUnivs);
+
+      const livePeriods = getCachedCollection<StudyPeriod>('studyPeriods')
+        .filter(p => p.studyLevelId === enrollment.currentStudyLevelId && (!p.universityId || p.universityId === enrollment.universityId))
+        .sort((a, b) => a.order - b.order);
+      setStudyPeriods(livePeriods);
+      setSelectedPeriod(prev => {
+        if (prev && livePeriods.some(p => p.id === prev.id)) {
+          return livePeriods.find(p => p.id === prev.id) || livePeriods[0] || null;
+        }
+        return livePeriods[0] || null;
+      });
+    });
+
+    return () => {
+      unsubNotifs();
+      unsubInstructors();
+      unsubAcademic();
+    };
   }, [enrollment?.universityId, enrollment?.currentStudyLevelId, enrollment?.status]);
 
   useEffect(() => {
     if (selectedPeriod && enrollment) {
+      // Hydrate synchronously first from cache for 0ms block switching
+      const cachedCourses = getCachedCollection<CourseOffering>('courseOfferings').filter(
+        c => c.studyPeriodId === selectedPeriod.id && (!c.universityId || c.universityId === enrollment.universityId)
+      );
+      if (cachedCourses.length > 0) {
+        setCourses(cachedCourses);
+      }
       fetchCourseOfferings(selectedPeriod.id, enrollment.universityId).then((crs) => {
         setCourses(crs);
       });
     } else {
       setCourses([]);
     }
-  }, [selectedPeriod, enrollment?.universityId]);
+  }, [selectedPeriod, enrollment?.universityId, studyPeriods]);
 
   const getUniversityName = (univId: string): string => {
     const found = universities.find(u => u.id === univId);
@@ -271,7 +350,7 @@ export default function StudentDashboard({
 
         <div className="flex flex-col sm:flex-row gap-2.5">
           <button
-            onClick={loadStudentData}
+            onClick={() => loadStudentData(true)}
             className="flex-1 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center justify-center gap-2 transition-colors shadow-lg shadow-teal-600/20"
           >
             <RefreshCw className="w-3.5 h-3.5" />
