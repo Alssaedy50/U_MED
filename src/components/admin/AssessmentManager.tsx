@@ -722,15 +722,28 @@ export default function AssessmentManager({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-sm font-bold text-slate-200">بنوك الأسئلة ({banks.length})</h3>
-              <button
-                onClick={() => setShowNewBankForm(true)}
-                className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1 transition-colors"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>بنك جديد</span>
-              </button>
+              <div className="flex items-center gap-1.5">
+                {selectedBank && (
+                  <button
+                    type="button"
+                    onClick={() => setShowBulkImportModal(true)}
+                    className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1 transition-colors shadow-md"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>استيراد دفعة أسئلة</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowNewBankForm(true)}
+                  className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1 transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>بنك جديد</span>
+                </button>
+              </div>
             </div>
 
             {showNewBankForm && (
@@ -801,6 +814,23 @@ export default function AssessmentManager({
                     </div>
                   </div>
                   {b.descriptionArabic && <div className="text-[11px] text-slate-400 mt-1">{b.descriptionArabic}</div>}
+
+                  <div
+                    className="mt-2.5 pt-2 border-t border-slate-800/70 flex flex-wrap items-center gap-1.5"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await handleSelectBank(b);
+                        setShowBulkImportModal(true);
+                      }}
+                      className="flex-1 py-1.5 px-2.5 rounded-lg bg-amber-600/90 hover:bg-amber-500 text-white text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>استيراد دفعة أسئلة (بدون إنترنت)</span>
+                    </button>
+                  </div>
 
                   {confirmDeleteBankId === b.id && (
                     <div
