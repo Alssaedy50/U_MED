@@ -41,7 +41,8 @@ import {
   Trash2,
   Archive,
   ShieldAlert,
-  GraduationCap
+  GraduationCap,
+  Bell
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext.tsx';
 import { UserRole, AuditLog, StudentEnrollment } from './types/umed.ts';
@@ -53,8 +54,11 @@ import {
 } from './lib/firebase.ts';
 import { fetchStudentEnrollment, subscribeToStudentEnrollment } from './services/enrollmentService.ts';
 import { getRoleLabelArabic } from './services/batchGovernanceService.ts';
+import { subscribeToAppNotifications } from './services/notificationService.ts';
 import StudentDashboard from './components/student/StudentDashboard.tsx';
 import StudentProfile from './components/student/StudentProfile.tsx';
+import GlobalNotificationWatcher from './components/notifications/GlobalNotificationWatcher.tsx';
+import NotificationCenterModal from './components/notifications/NotificationCenterModal.tsx';
 
 // Code-splitting admin heavy modules to minimize student initial bundle size
 const AcademicStructureManager = React.lazy(() => import('./components/admin/AcademicStructureManager.tsx'));
@@ -159,6 +163,17 @@ export default function App() {
   const [bootstrapMessage, setBootstrapMessage] = useState<string | null>(null);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [studentEnrollment, setStudentEnrollment] = useState<StudentEnrollment | null>(null);
+  const [isNotificationModalOpen, setIsNotificationModalOpen] = useState<boolean>(false);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState<number>(0);
+
+  useEffect(() => {
+    const unsub = subscribeToAppNotifications((list) => {
+      const unread = list.filter((n) => !n.read).length;
+      setUnreadNotificationCount(unread);
+    });
+    return () => unsub();
+  }, []);
+
   const [activeTab, setActiveTabState] = useState<ActiveTabType>(() => {
     try {
       const saved = sessionStorage.getItem('umed_active_tab') as ActiveTabType | null;
@@ -519,6 +534,7 @@ export default function App() {
       } transition-colors duration-200`}
       dir="rtl"
     >
+      <GlobalNotificationWatcher />
       {/* IF INITIALIZING AUTH SESSION ON RELOAD: DO NOT FLASH LOGIN FORM */}
       {loading ? (
         <div className="min-h-[100dvh] flex items-center justify-center p-4 overflow-y-auto">
@@ -1219,6 +1235,23 @@ export default function App() {
                   النظام والحساب
                 </div>
                 <button
+                  onClick={() => {
+                    setIsNotificationModalOpen(true);
+                    setSidebarOpen(false);
+                  }}
+                  className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all"
+                >
+                  <div className="flex items-center gap-3">
+                    <Bell className="w-4 h-4 text-sky-400 shrink-0" />
+                    <span>مركز التنبيهات والإشعارات</span>
+                  </div>
+                  {unreadNotificationCount > 0 && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500 text-white shadow">
+                      {unreadNotificationCount}
+                    </span>
+                  )}
+                </button>
+                <button
                   onClick={() => setActiveTab('auth')}
                   className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
                     activeTab === 'auth'
@@ -1318,6 +1351,19 @@ export default function App() {
                       )}
                     </button>
                   )}
+
+                  <button
+                    onClick={() => setIsNotificationModalOpen(true)}
+                    className="relative p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
+                    title="مركز التنبيهات والإشعارات الفورية"
+                  >
+                    <Bell className="w-4 h-4 text-sky-400" />
+                    {unreadNotificationCount > 0 && (
+                      <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[10px] font-bold text-white shadow-sm ring-2 ring-slate-900 animate-pulse">
+                        {unreadNotificationCount > 9 ? '+9' : unreadNotificationCount}
+                      </span>
+                    )}
+                  </button>
 
                   <button
                     onClick={() => toggleThemeMode(!isDarkMode)}
@@ -1853,6 +1899,17 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Global Real-Time Notification Center Modal */}
+      <NotificationCenterModal
+        isOpen={isNotificationModalOpen}
+        onClose={() => setIsNotificationModalOpen(false)}
+        onNavigateTab={(tab) => {
+          setActiveTab(tab as ActiveTabType);
+          setIsNotificationModalOpen(false);
+        }}
+        isDarkMode={isDarkMode}
+      />
     </div>
   );
 }

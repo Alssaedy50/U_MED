@@ -7,3 +7,5 @@ export * from './academicService.ts';
 export * from './assessmentService.ts';
 export * from './enrollmentService.ts';
 export * from './resourceService.ts';
+export * from './batchGovernanceService.ts';
+export * from './notificationService.ts';
