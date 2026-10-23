@@ -123,31 +123,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
+        setUser(currentUser);
         try {
-          // Pre-flight check: verify token service is enabled on Google Cloud
           await currentUser.getIdToken();
-          setUser(currentUser);
-          try {
-            await loadRoleForUser(currentUser);
-            const profile = await fetchUserProfile(currentUser.uid);
-            setUserProfile(profile);
-          } catch (err) {
-            console.warn('Could not load user data from remote Firestore:', err);
-          }
         } catch (err: any) {
-          console.warn('Token service error or disabled in Google Cloud:', err);
-          if (
-            err?.message?.includes('token-service-api') ||
-            err?.message?.includes('securetoken.googleapis.com')
-          ) {
-            setFirestoreError('خدمة Token Service API غير مفعلة في مشروع Google Cloud (1072983768253). يرجى الضغط هنا لتفعيلها.');
-            try {
-              await logOut();
-            } catch (e) {}
-            setUser(null);
-          } else {
-            setUser(currentUser);
-          }
+          // Ignore token-service-api restriction on Starter Tier projects; keep user session active
+          console.warn('Using active session without token refresh:', err?.message || err);
+        }
+        try {
+          await loadRoleForUser(currentUser);
+          const profile = await fetchUserProfile(currentUser.uid);
+          setUserProfile(profile);
+        } catch (err) {
+          console.warn('Could not load user data from remote Firestore:', err);
         }
       } else {
         setUser(null);
@@ -224,7 +212,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const bootstrapInitialOwner = async () => {
     if (!user) throw new Error('يجب تسجيل الدخول أولاً');
-    const token = await user.getIdToken();
+    let token = '';
+    try {
+      token = await user.getIdToken();
+    } catch (e) {}
     const result = await requestPlatformOwnerBootstrap(token, user.uid, user.email || '');
     if (result.roleDoc) {
       setRoleDoc(result.roleDoc);

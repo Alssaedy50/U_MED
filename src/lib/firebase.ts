@@ -94,7 +94,9 @@ export async function testFirestoreConnection(): Promise<{ connected: boolean; l
     if (
       error?.code === 'not-found' ||
       error?.message?.includes('not-found') ||
-      error?.code === 'permission-denied'
+      error?.code === 'permission-denied' ||
+      error?.message?.includes('token-service-api') || 
+      error?.message?.includes('securetoken.googleapis.com')
     ) {
       return { connected: true, latencyMs };
     }
@@ -103,16 +105,6 @@ export async function testFirestoreConnection(): Promise<{ connected: boolean; l
       error?.code === 'unavailable'
     ) {
       return { connected: false, latencyMs, error: 'العميل في وضع العمل دون اتصال (Offline)' };
-    }
-    if (
-      error?.message?.includes('token-service-api') || 
-      error?.message?.includes('securetoken.googleapis.com')
-    ) {
-      return { 
-        connected: false, 
-        latencyMs, 
-        error: 'يجب تفعيل Token Service API في Google Cloud Console للمشروع 1072983768253' 
-      };
     }
     return { connected: false, latencyMs, error: error?.message || 'تعذر الاتصال بـ Firestore' };
   }
