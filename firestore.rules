@@ -126,7 +126,7 @@ service cloud.firestore {
         (resource.data.uid == request.auth.uid || isAnyAdmin());
       allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid;
       allow update: if isAnyAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
-      allow delete: if isPlatformOwner();
+      allow delete: if isAnyAdmin();
     }
 
     match /academicChangeRequests/{requestId} {
@@ -134,7 +134,7 @@ service cloud.firestore {
         (resource.data.uid == request.auth.uid || isAnyAdmin());
       allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid;
       allow update: if isAnyAdmin();
-      allow delete: if isPlatformOwner();
+      allow delete: if isAnyAdmin();
     }
 
     // -------------------------------------------------------------------------
@@ -188,8 +188,8 @@ service cloud.firestore {
     // Assessment Results (Controlled Release)
     match /assessmentResults/{resultId} {
       allow read: if isAuthenticated() && 
-        (resource.data.uid == request.auth.uid || isAnyAdmin());
-      allow create, update: if isAuthenticated() && (request.resource.data.uid == request.auth.uid || isAnyAdmin());
+        ((resource.data.uid == request.auth.uid && resource.data.isReleased == true) || isAnyAdmin());
+      allow create, update: if isAnyAdmin();
       allow delete: if isPlatformOwner();
     }
 

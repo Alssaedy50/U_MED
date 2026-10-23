@@ -4,24 +4,26 @@
  * 
  * UMED Educational Resource Service
  * Manages low-bandwidth educational materials (PDFs, Histology Slides, Links)
+ * Full Dynamic CRUD with Hybrid Firestore + LocalStorage Synchronization
  */
 
 import { 
   collection, 
   doc, 
-  getDoc, 
   getDocs, 
   setDoc, 
   updateDoc, 
-  deleteDoc, 
-  query, 
-  where 
+  deleteDoc 
 } from 'firebase/firestore';
 import { db } from '../lib/firebase.ts';
-import { EducationalResource, ResourceType } from '../types/umed.ts';
+import { EducationalResource } from '../types/umed.ts';
+
+const RESOURCES_STORAGE_KEY = 'umed_educational_resources';
+const RESOURCES_INIT_KEY = 'umed_educational_resources_init';
+const RESOURCES_DELETED_KEY = 'umed_educational_resources_deleted';
 
 // Initial verified sample resources for Dar Al Salam University (Level 4 - CVS & RESP Blocks)
-const SAMPLE_EDUCATIONAL_RESOURCES: EducationalResource[] = [
+export const SAMPLE_EDUCATIONAL_RESOURCES: EducationalResource[] = [
   {
     id: 'res-cvs-anat-01',
     title: 'محاضرة تشريح القلب والأوعية الكبرى (Gross Anatomy of Heart)',
@@ -99,6 +101,68 @@ const SAMPLE_EDUCATIONAL_RESOURCES: EducationalResource[] = [
   }
 ];
 
+function getDeletedResourceIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(RESOURCES_DELETED_KEY);
+    if (raw) return new Set(JSON.parse(raw));
+  } catch (e) {}
+  return new Set();
+}
+
+function markResourceDeleted(id: string): void {
+  try {
+    const set = getDeletedResourceIds();
+    set.add(id);
+    localStorage.setItem(RESOURCES_DELETED_KEY, JSON.stringify(Array.from(set)));
+  } catch (e) {}
+}
+
+function unmarkResourceDeleted(id: string): void {
+  try {
+    const set = getDeletedResourceIds();
+    if (set.has(id)) {
+      set.delete(id);
+      localStorage.setItem(RESOURCES_DELETED_KEY, JSON.stringify(Array.from(set)));
+    }
+  } catch (e) {}
+}
+
+async function ensureResourcesInitialized(): Promise<EducationalResource[]> {
+  const deleted = getDeletedResourceIds();
+  const isInit = localStorage.getItem(RESOURCES_INIT_KEY) === 'true';
+
+  try {
+    const raw = localStorage.getItem(RESOURCES_STORAGE_KEY);
+    if (isInit && raw !== null) {
+      const parsed: EducationalResource[] = JSON.parse(raw);
+      return parsed.filter(r => !deleted.has(r.id));
+    }
+  } catch (e) {}
+
+  const mergedMap = new Map<string, EducationalResource>();
+  SAMPLE_EDUCATIONAL_RESOURCES.forEach(item => {
+    if (!deleted.has(item.id)) mergedMap.set(item.id, item);
+  });
+
+  try {
+    const snap = await getDocs(collection(db, 'educationalResources'));
+    snap.forEach(d => {
+      const data = d.data() as EducationalResource;
+      if (data && data.id && !deleted.has(data.id)) {
+        mergedMap.set(data.id, data);
+      }
+    });
+  } catch (e) {}
+
+  const list = Array.from(mergedMap.values());
+  try {
+    localStorage.setItem(RESOURCES_STORAGE_KEY, JSON.stringify(list));
+    localStorage.setItem(RESOURCES_INIT_KEY, 'true');
+  } catch (e) {}
+
+  return list;
+}
+
 export interface ResourceFilters {
   universityId?: string;
   programId?: string;
@@ -110,38 +174,40 @@ export interface ResourceFilters {
 }
 
 export async function fetchEducationalResources(filters: ResourceFilters = {}): Promise<EducationalResource[]> {
-  try {
-    let q = query(collection(db, 'educationalResources'));
-    if (filters.status) {
-      q = query(q, where('status', '==', filters.status));
-    }
-    if (filters.universityId) {
-      q = query(q, where('universityId', '==', filters.universityId));
-    }
-    if (filters.studyLevelId) {
-      q = query(q, where('studyLevelId', '==', filters.studyLevelId));
-    }
-    const snap = await getDocs(q);
-    const list: EducationalResource[] = [];
-    snap.forEach((d) => list.push(d.data() as EducationalResource));
+  const deleted = getDeletedResourceIds();
+  const localList = await ensureResourcesInitialized();
+  const mergedMap = new Map<string, EducationalResource>();
 
-    if (list.length > 0) {
-      return applyLocalFilters(list, filters);
-    }
+  localList.forEach(item => {
+    if (!deleted.has(item.id)) mergedMap.set(item.id, item);
+  });
+
+  try {
+    const snap = await getDocs(collection(db, 'educationalResources'));
+    snap.forEach((d) => {
+      const data = d.data() as EducationalResource;
+      if (data && data.id && !deleted.has(data.id)) {
+        // Keep local edits if newer
+        const existingLocal = mergedMap.get(data.id);
+        if (!existingLocal || (data.updatedAt && existingLocal.updatedAt && data.updatedAt >= existingLocal.updatedAt)) {
+          mergedMap.set(data.id, data);
+        }
+      }
+    });
   } catch (err) {
-    console.warn('Firestore fetchEducationalResources error, using default sample library:', err);
+    console.warn('Firestore fetchEducationalResources fallback to local cache:', err);
   }
 
-  // Fallback to sample library with local storage sync
+  const finalItems = Array.from(mergedMap.values()).sort(
+    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+  );
+
   try {
-    const cached = localStorage.getItem('umed_educational_resources');
-    if (cached) {
-      const parsed: EducationalResource[] = JSON.parse(cached);
-      return applyLocalFilters(parsed, filters);
-    }
+    localStorage.setItem(RESOURCES_STORAGE_KEY, JSON.stringify(finalItems));
+    localStorage.setItem(RESOURCES_INIT_KEY, 'true');
   } catch (e) {}
 
-  return applyLocalFilters(SAMPLE_EDUCATIONAL_RESOURCES, filters);
+  return applyLocalFilters(finalItems, filters);
 }
 
 function applyLocalFilters(list: EducationalResource[], filters: ResourceFilters): EducationalResource[] {
@@ -158,58 +224,68 @@ function applyLocalFilters(list: EducationalResource[], filters: ResourceFilters
 }
 
 export async function saveEducationalResource(resource: EducationalResource): Promise<void> {
-  try {
-    await setDoc(doc(db, 'educationalResources', resource.id), {
-      ...resource,
-      updatedAt: new Date().toISOString()
-    }, { merge: true });
-  } catch (err) {
-    console.warn('Firestore saveEducationalResource failed, syncing to local storage cache:', err);
+  unmarkResourceDeleted(resource.id);
+  const current = await ensureResourcesInitialized();
+  const updatedResource: EducationalResource = {
+    ...resource,
+    updatedAt: new Date().toISOString()
+  };
+
+  const index = current.findIndex(r => r.id === resource.id);
+  if (index >= 0) {
+    current[index] = updatedResource;
+  } else {
+    current.unshift(updatedResource);
   }
 
   try {
-    const existing: EducationalResource[] = JSON.parse(localStorage.getItem('umed_educational_resources') || '[]');
-    const index = existing.findIndex(r => r.id === resource.id);
-    if (index >= 0) {
-      existing[index] = resource;
-    } else {
-      existing.unshift(resource);
-    }
-    localStorage.setItem('umed_educational_resources', JSON.stringify(existing));
+    localStorage.setItem(RESOURCES_STORAGE_KEY, JSON.stringify(current));
+    localStorage.setItem(RESOURCES_INIT_KEY, 'true');
   } catch (e) {}
+
+  try {
+    await setDoc(doc(db, 'educationalResources', resource.id), updatedResource, { merge: true });
+  } catch (err) {
+    console.warn('Firestore saveEducationalResource fallback to localStorage:', err);
+  }
 }
 
+export const updateEducationalResource = saveEducationalResource;
+
 export async function toggleResourceStatus(resourceId: string, newStatus: 'published' | 'draft' | 'archived'): Promise<void> {
+  const current = await ensureResourcesInitialized();
+  const nowIso = new Date().toISOString();
+  const target = current.find(r => r.id === resourceId);
+  if (target) {
+    target.status = newStatus;
+    target.updatedAt = nowIso;
+    try {
+      localStorage.setItem(RESOURCES_STORAGE_KEY, JSON.stringify(current));
+    } catch (e) {}
+  }
+
   try {
     await updateDoc(doc(db, 'educationalResources', resourceId), {
       status: newStatus,
-      updatedAt: new Date().toISOString()
+      updatedAt: nowIso
     });
   } catch (err) {
     console.warn('Firestore toggleResourceStatus error:', err);
   }
-
-  try {
-    const existing: EducationalResource[] = JSON.parse(localStorage.getItem('umed_educational_resources') || '[]');
-    const target = existing.find(r => r.id === resourceId);
-    if (target) {
-      target.status = newStatus;
-      target.updatedAt = new Date().toISOString();
-      localStorage.setItem('umed_educational_resources', JSON.stringify(existing));
-    }
-  } catch (e) {}
 }
 
 export async function deleteEducationalResource(resourceId: string): Promise<void> {
+  const current = await ensureResourcesInitialized();
+  markResourceDeleted(resourceId);
+  const filtered = current.filter(r => r.id !== resourceId);
+
+  try {
+    localStorage.setItem(RESOURCES_STORAGE_KEY, JSON.stringify(filtered));
+  } catch (e) {}
+
   try {
     await deleteDoc(doc(db, 'educationalResources', resourceId));
   } catch (err) {
     console.warn('Firestore deleteEducationalResource error:', err);
   }
-
-  try {
-    const existing: EducationalResource[] = JSON.parse(localStorage.getItem('umed_educational_resources') || '[]');
-    const filtered = existing.filter(r => r.id !== resourceId);
-    localStorage.setItem('umed_educational_resources', JSON.stringify(filtered));
-  } catch (e) {}
 }

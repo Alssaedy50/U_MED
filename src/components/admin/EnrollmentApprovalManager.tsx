@@ -2,28 +2,40 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  * 
- * UMED Admin Student Enrollment Approval Queue
- * Enables University Admins to Review, Approve, or Reject Registrations
+ * UMED Admin Student Enrollment Approval Queue & Academic Change Requests Manager
+ * Enables Admins to Review, Approve, Reject, Edit, or Delete Enrollments & Change Requests
  */
 
 import React, { useState, useEffect } from 'react';
 import { 
-  UserCheck, 
   Clock, 
   CheckCircle2, 
   XCircle, 
   Search, 
-  Filter, 
   GraduationCap, 
-  Building2, 
   RefreshCw,
-  AlertCircle
+  AlertCircle,
+  Edit2,
+  Trash2,
+  FileEdit,
+  X
 } from 'lucide-react';
-import { StudentEnrollment, EnrollmentStatus } from '../../types/umed.ts';
+import { 
+  StudentEnrollment, 
+  EnrollmentStatus, 
+  AcademicChangeRequest,
+  StudyLevel,
+  DAR_AL_SALAM_SEED
+} from '../../types/umed.ts';
 import { 
   fetchEnrollmentsForAdmin, 
-  updateEnrollmentStatus 
+  updateEnrollmentStatus,
+  updateStudentEnrollment,
+  deleteEnrollment,
+  fetchAcademicChangeRequestsForAdmin,
+  reviewAcademicChangeRequest
 } from '../../services/enrollmentService.ts';
+import { fetchStudyLevels } from '../../services/academicService.ts';
 
 interface EnrollmentApprovalManagerProps {
   adminUid: string;
@@ -34,7 +46,11 @@ export default function EnrollmentApprovalManager({
   adminUid,
   assignedUniversityId
 }: EnrollmentApprovalManagerProps) {
+  const [activeView, setActiveView] = useState<'enrollments' | 'change_requests'>('enrollments');
   const [enrollments, setEnrollments] = useState<StudentEnrollment[]>([]);
+  const [changeRequests, setChangeRequests] = useState<AcademicChangeRequest[]>([]);
+  const [studyLevels, setStudyLevels] = useState<StudyLevel[]>(DAR_AL_SALAM_SEED.studyLevels);
+
   const [filterStatus, setFilterStatus] = useState<EnrollmentStatus | 'all'>('pending');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(true);
@@ -43,20 +59,32 @@ export default function EnrollmentApprovalManager({
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState<string>('');
 
-  const loadEnrollments = async () => {
+  // Direct Edit & Delete States
+  const [editingEnrollment, setEditingEnrollment] = useState<StudentEnrollment | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  const loadAll = async () => {
     setLoading(true);
     try {
-      const list = await fetchEnrollmentsForAdmin(assignedUniversityId);
-      setEnrollments(list);
+      const [enrList, reqList, lvlList] = await Promise.all([
+        fetchEnrollmentsForAdmin(assignedUniversityId),
+        fetchAcademicChangeRequestsForAdmin(assignedUniversityId),
+        fetchStudyLevels('prog-mbbs')
+      ]);
+      setEnrollments(enrList);
+      setChangeRequests(reqList);
+      if (lvlList && lvlList.length > 0) {
+        setStudyLevels(lvlList);
+      }
     } catch (err: any) {
-      setStatusMessage({ type: 'error', text: err.message || 'فشل جلب طلبات القيد' });
+      setStatusMessage({ type: 'error', text: err.message || 'فشل جلب طلبات القيد والتعديل الأكاديمي' });
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadEnrollments();
+    loadAll();
   }, [assignedUniversityId]);
 
   const handleApprove = async (enrollmentId: string) => {
@@ -64,7 +92,7 @@ export default function EnrollmentApprovalManager({
     setStatusMessage(null);
     try {
       await updateEnrollmentStatus(enrollmentId, 'approved', adminUid);
-      setEnrollments(enrollments.map(e => e.id === enrollmentId ? { ...e, status: 'approved' } : e));
+      setEnrollments(prev => prev.map(e => e.id === enrollmentId ? { ...e, status: 'approved' } : e));
       setStatusMessage({ type: 'success', text: 'تم اعتماد القيد الأكاديمي للطالب بنجاح وتفعيل وصوله للمقررات.' });
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: err.message || 'فشل اعتماد القيد' });
@@ -78,7 +106,7 @@ export default function EnrollmentApprovalManager({
     setStatusMessage(null);
     try {
       await updateEnrollmentStatus(enrollmentId, 'rejected', adminUid, rejectReason);
-      setEnrollments(enrollments.map(e => e.id === enrollmentId ? { ...e, status: 'rejected', rejectionReason: rejectReason } : e));
+      setEnrollments(prev => prev.map(e => e.id === enrollmentId ? { ...e, status: 'rejected', rejectionReason: rejectReason } : e));
       setRejectingId(null);
       setRejectReason('');
       setStatusMessage({ type: 'success', text: 'تم رفض طلب القيد وتسجيل سبب الرفض.' });
@@ -87,6 +115,82 @@ export default function EnrollmentApprovalManager({
     } finally {
       setActionLoading(null);
     }
+  };
+
+  const handleSaveEnrollmentEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingEnrollment) return;
+    setActionLoading(editingEnrollment.id);
+    setStatusMessage(null);
+
+    try {
+      const updated = await updateStudentEnrollment(editingEnrollment.id, {
+        currentStudyLevelId: editingEnrollment.currentStudyLevelId,
+        academicStudentNumber: (editingEnrollment.academicStudentNumber || '').trim(),
+        academicYear: (editingEnrollment.academicYear || '').trim(),
+        status: editingEnrollment.status
+      });
+      if (updated) {
+        setEnrollments(prev => prev.map(item => item.id === updated.id ? updated : item));
+      }
+      setEditingEnrollment(null);
+      setStatusMessage({ type: 'success', text: 'تم تحديث بيانات قيد الطالب والمستوى الدراسي بنجاح.' });
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || 'فشل تعديل بيانات القيد' });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleDeleteEnrollment = async (enrollmentId: string) => {
+    setActionLoading(enrollmentId);
+    setStatusMessage(null);
+    try {
+      await deleteEnrollment(enrollmentId);
+      setEnrollments(prev => prev.filter(e => e.id !== enrollmentId));
+      setConfirmDeleteId(null);
+      setStatusMessage({ type: 'success', text: 'تم حذف سجل القيد الأكاديمي نهائياً بنجاح.' });
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || 'فشل حذف سجل القيد' });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleReviewChangeRequest = async (req: AcademicChangeRequest, status: 'approved' | 'rejected') => {
+    setActionLoading(req.id);
+    setStatusMessage(null);
+    try {
+      const updatedReq = await reviewAcademicChangeRequest(req.id, status, adminUid);
+      if (updatedReq) {
+        setChangeRequests(prev => prev.map(r => r.id === req.id ? updatedReq : r));
+      }
+      if (status === 'approved') {
+        // Refresh enrollments list to reflect the updated studyLevelId & academicStudentNumber
+        const refreshedEnrollments = await fetchEnrollmentsForAdmin(assignedUniversityId);
+        setEnrollments(refreshedEnrollments);
+        setStatusMessage({
+          type: 'success',
+          text: 'تم قبول طلب التعديل الأكاديمي وتحديث المستوى الدراسي / الرقم الجامعي في سجل قيد الطالب تلقائياً ✓'
+        });
+      } else {
+        setStatusMessage({
+          type: 'success',
+          text: 'تم رفض طلب التعديل الأكاديمي.'
+        });
+      }
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || 'فشل معالجة طلب التعديل الأكاديمي' });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const getLevelLabel = (lvlId?: string) => {
+    if (!lvlId) return 'غير محدد';
+    const found = studyLevels.find(l => l.id === lvlId);
+    if (found) return found.titleArabic;
+    return lvlId === 'lvl-internship' ? 'سنة الامتياز (سريري)' : `المستوى ${lvlId.replace('lvl-', '')}`;
   };
 
   const filteredList = enrollments.filter(item => {
@@ -99,8 +203,10 @@ export default function EnrollmentApprovalManager({
     return matchesStatus && matchesSearch;
   });
 
+  const pendingChangeRequestsCount = changeRequests.filter(r => r.status === 'pending').length;
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" dir="rtl">
       
       {/* Top Banner */}
       <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-wrap items-center justify-between gap-4">
@@ -110,25 +216,57 @@ export default function EnrollmentApprovalManager({
               إدارة القبول والتسجيل الأكاديمي
             </span>
             <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-400 font-mono">
-              Enrollment Approval Queue
+              Enrollment & Change Requests
             </span>
           </div>
           <h2 className="text-lg sm:text-xl font-bold text-white">
-            مراجعة واعتماد طلبات قيد الطلاب في كليات الطب
+            مراجعة واعتماد قيود الطلاب وطلبات التعديل الأكاديمي
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
-            تفعيل وصول الطلاب للمناهج والمقررات والاختبارات بعد التحقق من الرقم الجامعي وصحة البيانات.
+            اعتماد وتعديل وحذف سجلات قيد الطلاب، ومراجعة طلبات ترقية المستوى الدراسي أو تصحيح الرقم الجامعي.
           </p>
         </div>
 
-        <button
-          onClick={loadEnrollments}
-          disabled={loading}
-          className="py-2 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition-colors border border-slate-700"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-          <span>تحديث القائمة</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
+            <button
+              onClick={() => setActiveView('enrollments')}
+              className={`px-3.5 py-2 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
+                activeView === 'enrollments'
+                  ? 'bg-teal-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <GraduationCap className="w-4 h-4" />
+              <span>سجلات القيد ({enrollments.length})</span>
+            </button>
+            <button
+              onClick={() => setActiveView('change_requests')}
+              className={`px-3.5 py-2 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
+                activeView === 'change_requests'
+                  ? 'bg-amber-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <FileEdit className="w-4 h-4" />
+              <span>طلبات التعديل الأكاديمي ({changeRequests.length})</span>
+              {pendingChangeRequestsCount > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-amber-400 text-slate-950 text-[10px] font-extrabold">
+                  {pendingChangeRequestsCount}
+                </span>
+              )}
+            </button>
+          </div>
+
+          <button
+            onClick={loadAll}
+            disabled={loading}
+            className="py-2 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition-colors border border-slate-700"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            <span>تحديث</span>
+          </button>
+        </div>
       </div>
 
       {statusMessage && (
@@ -140,193 +278,411 @@ export default function EnrollmentApprovalManager({
         </div>
       )}
 
-      {/* Filter & Search Bar */}
-      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
-        {/* Status Filters */}
-        <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800">
-          <button
-            onClick={() => setFilterStatus('pending')}
-            className={`px-3 py-1.5 rounded-lg transition-colors font-medium flex items-center gap-1.5 ${
-              filterStatus === 'pending' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <Clock className="w-3.5 h-3.5" />
-            <span>بانتظار الاعتماد ({enrollments.filter(e => e.status === 'pending').length})</span>
-          </button>
+      {/* VIEW 1: STUDENT ENROLLMENTS */}
+      {activeView === 'enrollments' && (
+        <>
+          {/* Filter & Search Bar */}
+          <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex flex-wrap bg-slate-950 p-1 rounded-xl border border-slate-800 gap-1">
+              <button
+                onClick={() => setFilterStatus('pending')}
+                className={`px-3 py-1.5 rounded-lg transition-colors font-medium flex items-center gap-1.5 ${
+                  filterStatus === 'pending' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5" />
+                <span>بانتظار الاعتماد ({enrollments.filter(e => e.status === 'pending').length})</span>
+              </button>
 
-          <button
-            onClick={() => setFilterStatus('approved')}
-            className={`px-3 py-1.5 rounded-lg transition-colors font-medium flex items-center gap-1.5 ${
-              filterStatus === 'approved' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <CheckCircle2 className="w-3.5 h-3.5" />
-            <span>المعتمدون ({enrollments.filter(e => e.status === 'approved').length})</span>
-          </button>
+              <button
+                onClick={() => setFilterStatus('approved')}
+                className={`px-3 py-1.5 rounded-lg transition-colors font-medium flex items-center gap-1.5 ${
+                  filterStatus === 'approved' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>المعتمدون ({enrollments.filter(e => e.status === 'approved').length})</span>
+              </button>
 
-          <button
-            onClick={() => setFilterStatus('rejected')}
-            className={`px-3 py-1.5 rounded-lg transition-colors font-medium flex items-center gap-1.5 ${
-              filterStatus === 'rejected' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <XCircle className="w-3.5 h-3.5" />
-            <span>المرفوضون ({enrollments.filter(e => e.status === 'rejected').length})</span>
-          </button>
+              <button
+                onClick={() => setFilterStatus('rejected')}
+                className={`px-3 py-1.5 rounded-lg transition-colors font-medium flex items-center gap-1.5 ${
+                  filterStatus === 'rejected' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <XCircle className="w-3.5 h-3.5" />
+                <span>المرفوضون ({enrollments.filter(e => e.status === 'rejected').length})</span>
+              </button>
 
-          <button
-            onClick={() => setFilterStatus('all')}
-            className={`px-3 py-1.5 rounded-lg transition-colors font-medium ${
-              filterStatus === 'all' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            الكل ({enrollments.length})
-          </button>
-        </div>
+              <button
+                onClick={() => setFilterStatus('all')}
+                className={`px-3 py-1.5 rounded-lg transition-colors font-medium ${
+                  filterStatus === 'all' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                الكل ({enrollments.length})
+              </button>
+            </div>
 
-        {/* Search */}
-        <div className="relative min-w-[240px]">
-          <Search className="w-3.5 h-3.5 absolute right-3 top-3 text-slate-500" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="بحث بالرقم الأكاديمي أو المعرف..."
-            className="w-full pl-3 pr-9 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-600 focus:outline-none focus:border-teal-500 font-mono"
-            dir="ltr"
-          />
-        </div>
-      </div>
-
-      {/* Enrollments Cards List */}
-      <div className="space-y-3">
-        {filteredList.length === 0 ? (
-          <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-10 text-center text-slate-500 text-xs">
-            لا توجد طلبات قيد مطابقة للفلتر المحدد حالياً.
+            <div className="relative min-w-[240px]">
+              <Search className="w-3.5 h-3.5 absolute right-3 top-3 text-slate-500" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="بحث بالرقم الأكاديمي أو المعرف..."
+                className="w-full pl-3 pr-9 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-600 focus:outline-none focus:border-teal-500 font-mono"
+                dir="ltr"
+              />
+            </div>
           </div>
-        ) : (
-          filteredList.map((item) => (
-            <div key={item.id} className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-lg text-xs space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-teal-500/10 text-teal-400 flex items-center justify-center font-bold">
-                    <GraduationCap className="w-5 h-5" />
-                  </div>
-                  <div>
+
+          {/* Enrollments Cards List */}
+          <div className="space-y-3">
+            {filteredList.length === 0 ? (
+              <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-10 text-center text-slate-500 text-xs">
+                لا توجد طلبات قيد مطابقة للفلتر المحدد حالياً.
+              </div>
+            ) : (
+              filteredList.map((item) => (
+                <div key={item.id} className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-lg text-xs space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-teal-500/10 text-teal-400 flex items-center justify-center font-bold">
+                        <GraduationCap className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-white text-sm">{item.studentNameArabic || 'طالب كلية الطب'}</span>
+                          <span className="font-mono text-teal-300 font-bold bg-teal-950/60 px-2 py-0.5 rounded border border-teal-800" dir="ltr">
+                            {item.academicStudentNumber}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-400 mt-0.5 font-mono" dir="ltr">
+                          UID: {item.uid}
+                        </div>
+                      </div>
+                    </div>
+
                     <div className="flex items-center gap-2">
-                      <span className="font-bold text-white text-sm">طالب كلية الطب</span>
-                      <span className="font-mono text-teal-300 font-bold bg-teal-950/60 px-2 py-0.5 rounded border border-teal-800" dir="ltr">
-                        {item.academicStudentNumber}
+                      {item.status === 'pending' && (
+                        <span className="px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold flex items-center gap-1">
+                          <Clock className="w-3.5 h-3.5" />
+                          <span>قيد المراجعة</span>
+                        </span>
+                      )}
+                      {item.status === 'approved' && (
+                        <span className="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>معتمد رسمياً</span>
+                        </span>
+                      )}
+                      {item.status === 'rejected' && (
+                        <span className="px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 font-bold flex items-center gap-1">
+                          <XCircle className="w-3.5 h-3.5" />
+                          <span>مرفوض</span>
+                        </span>
+                      )}
+
+                      <button
+                        onClick={() => setEditingEnrollment(item)}
+                        className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                        title="تعديل المستوى أو الرقم الجامعي"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => setConfirmDeleteId(item.id)}
+                        className="p-2 rounded-lg bg-rose-950/50 hover:bg-rose-900/70 text-rose-400 transition-colors"
+                        title="حذف القيد"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Academic Hierarchy Context */}
+                  <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800/80 grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+                    <div>
+                      <span className="text-slate-500 block">الجامعة:</span>
+                      <span className="text-slate-200 font-semibold">{item.universityId === 'univ-dar-al-salam' ? 'جامعة دار السلام' : item.universityId}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">المستوى الحالي:</span>
+                      <span className="text-teal-300 font-semibold">
+                        {getLevelLabel(item.currentStudyLevelId)}
                       </span>
                     </div>
-                    <div className="text-[11px] text-slate-400 mt-0.5 font-mono" dir="ltr">
-                      UID: {item.uid}
+                    <div>
+                      <span className="text-slate-500 block">العام الأكاديمي:</span>
+                      <span className="text-slate-200 font-mono" dir="ltr">{item.academicYear}</span>
                     </div>
+                    <div>
+                      <span className="text-slate-500 block">تاريخ التقديم:</span>
+                      <span className="text-slate-400 font-mono">{new Date(item.enrolledAt || item.requestedAt || Date.now()).toLocaleDateString('ar-YE')}</span>
+                    </div>
+                  </div>
+
+                  {item.rejectionReason && (
+                    <div className="p-2.5 rounded-lg bg-rose-950/30 border border-rose-800/40 text-rose-300 text-[11px]">
+                      <strong>سبب الرفض:</strong> {item.rejectionReason}
+                    </div>
+                  )}
+
+                  {confirmDeleteId === item.id && (
+                    <div className="p-3 rounded-xl bg-rose-950/70 border border-rose-800 flex items-center justify-between gap-2">
+                      <span className="text-rose-200 font-bold">هل أنت متأكد من حذف قيد الطالب ({item.academicStudentNumber}) نهائياً؟</span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleDeleteEnrollment(item.id)}
+                          disabled={actionLoading === item.id}
+                          className="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold"
+                        >
+                          تأكيد الحذف
+                        </button>
+                        <button
+                          onClick={() => setConfirmDeleteId(null)}
+                          className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300"
+                        >
+                          إلغاء
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Action Buttons */}
+                  <div className="pt-2 flex items-center justify-end gap-2">
+                    {rejectingId === item.id ? (
+                      <div className="w-full flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={rejectReason}
+                          onChange={(e) => setRejectReason(e.target.value)}
+                          placeholder="اكتب سبب الرفض (مثال: الرقم الجامعي غير صحيح)..."
+                          className="flex-1 px-3 py-1.5 rounded-lg bg-slate-950 border border-rose-800 text-white text-xs"
+                        />
+                        <button
+                          onClick={() => handleConfirmReject(item.id)}
+                          disabled={actionLoading === item.id}
+                          className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold"
+                        >
+                          تأكيد الرفض
+                        </button>
+                        <button
+                          onClick={() => setRejectingId(null)}
+                          className="px-2 py-1.5 rounded-lg bg-slate-800 text-slate-300"
+                        >
+                          إلغاء
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        {item.status !== 'rejected' && (
+                          <button
+                            onClick={() => setRejectingId(item.id)}
+                            disabled={actionLoading === item.id}
+                            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-rose-950/40 hover:text-rose-300 text-slate-400 border border-slate-700 font-medium transition-colors"
+                          >
+                            رفض الطلب
+                          </button>
+                        )}
+                        {item.status !== 'approved' && (
+                          <button
+                            onClick={() => handleApprove(item.id)}
+                            disabled={actionLoading === item.id}
+                            className="px-4 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-bold transition-colors shadow-md shadow-teal-600/20 flex items-center gap-1.5"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>اعتماد القيد الأكاديمي</span>
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </>
+      )}
+
+      {/* VIEW 2: ACADEMIC CHANGE REQUESTS */}
+      {activeView === 'change_requests' && (
+        <div className="space-y-4">
+          {changeRequests.length === 0 ? (
+            <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-10 text-center text-slate-500 text-xs">
+              لا توجد طلبات تعديل أكاديمي مرفوعة من الطلاب حالياً.
+            </div>
+          ) : (
+            changeRequests.map((req) => (
+              <div key={req.id} className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-lg text-xs space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center font-bold">
+                      <FileEdit className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="font-bold text-white text-sm">طلب تعديل بيانات القيد الأكاديمي</div>
+                      <div className="text-[11px] text-slate-400 font-mono" dir="ltr">
+                        UID: {req.uid} • Enrollment: {req.enrollmentId}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    {req.status === 'pending' && (
+                      <span className="px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold flex items-center gap-1">
+                        <Clock className="w-3.5 h-3.5" />
+                        <span>بانتظار المراجعة</span>
+                      </span>
+                    )}
+                    {req.status === 'approved' && (
+                      <span className="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>تم القبول وتحديث القيد ✓</span>
+                      </span>
+                    )}
+                    {req.status === 'rejected' && (
+                      <span className="px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 font-bold flex items-center gap-1">
+                        <XCircle className="w-3.5 h-3.5" />
+                        <span>مرفوض</span>
+                      </span>
+                    )}
                   </div>
                 </div>
 
-                {/* Status Badge */}
-                <div>
-                  {item.status === 'pending' && (
-                    <span className="px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold flex items-center gap-1">
-                      <Clock className="w-3.5 h-3.5" />
-                      <span>قيد المراجعة</span>
+                <div className="p-3.5 bg-slate-950/80 rounded-xl border border-slate-800/80 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <span className="text-slate-500 block">المستوى الدراسي المطلوب الانتقال إليه:</span>
+                    <span className="text-teal-300 font-bold text-sm">
+                      {req.requestedLevelId ? getLevelLabel(req.requestedLevelId) : 'بدون تغيير'}
                     </span>
-                  )}
-                  {item.status === 'approved' && (
-                    <span className="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>معتمد رسمياً</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block">الرقم الجامعي المطلوب:</span>
+                    <span className="text-amber-300 font-mono font-bold text-sm" dir="ltr">
+                      {req.requestedAcademicNumber || 'بدون تغيير'}
                     </span>
-                  )}
-                  {item.status === 'rejected' && (
-                    <span className="px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 font-bold flex items-center gap-1">
-                      <XCircle className="w-3.5 h-3.5" />
-                      <span>مرفوض</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block">تاريخ الطلب:</span>
+                    <span className="text-slate-300 font-mono">
+                      {new Date(req.createdAt || req.requestedAt || Date.now()).toLocaleString('ar-YE')}
                     </span>
-                  )}
+                  </div>
                 </div>
+
+                <div className="p-3 rounded-xl bg-slate-950/50 border border-slate-800/60 text-slate-300">
+                  <strong className="text-slate-400 block mb-1">سبب ومبررات الطلب:</strong>
+                  {req.reason}
+                </div>
+
+                {req.status === 'pending' && (
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+                    <button
+                      onClick={() => handleReviewChangeRequest(req, 'rejected')}
+                      disabled={actionLoading === req.id}
+                      className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-rose-950/60 hover:text-rose-300 text-slate-300 border border-slate-700 font-semibold transition-colors"
+                    >
+                      رفض
+                    </button>
+                    <button
+                      onClick={() => handleReviewChangeRequest(req, 'approved')}
+                      disabled={actionLoading === req.id}
+                      className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold transition-colors shadow-lg flex items-center gap-1.5"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>قبول وتحديث القيد</span>
+                    </button>
+                  </div>
+                )}
               </div>
+            ))
+          )}
+        </div>
+      )}
 
-              {/* Academic Hierarchy Context */}
-              <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800/80 grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
-                <div>
-                  <span className="text-slate-500 block">الجامعة:</span>
-                  <span className="text-slate-200 font-semibold">{item.universityId === 'univ-dar-al-salam' ? 'جامعة دار السلام' : item.universityId}</span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block">المستوى المطلوب:</span>
-                  <span className="text-teal-300 font-semibold">
-                    {item.currentStudyLevelId === 'lvl-internship' ? 'سنة الامتياز (سريري)' : `المستوى ${item.currentStudyLevelId.replace('lvl-', '')}`}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block">العام الأكاديمي:</span>
-                  <span className="text-slate-200 font-mono" dir="ltr">{item.academicYear}</span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block">تاريخ التقديم:</span>
-                  <span className="text-slate-400 font-mono">{new Date(item.enrolledAt || item.requestedAt || Date.now()).toLocaleDateString('ar-YE')}</span>
-                </div>
-              </div>
-
-              {item.rejectionReason && (
-                <div className="p-2.5 rounded-lg bg-rose-950/30 border border-rose-800/40 text-rose-300 text-[11px]">
-                  <strong>سبب الرفض:</strong> {item.rejectionReason}
-                </div>
-              )}
-
-              {/* Action Buttons for Pending Items */}
-              {item.status === 'pending' && (
-                <div className="pt-2 flex items-center justify-end gap-2">
-                  {rejectingId === item.id ? (
-                    <div className="w-full flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={rejectReason}
-                        onChange={(e) => setRejectReason(e.target.value)}
-                        placeholder="اكتب سبب الرفض (مثال: الرقم الجامعي غير صحيح)..."
-                        className="flex-1 px-3 py-1.5 rounded-lg bg-slate-950 border border-rose-800 text-white text-xs"
-                      />
-                      <button
-                        onClick={() => handleConfirmReject(item.id)}
-                        disabled={actionLoading === item.id}
-                        className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold"
-                      >
-                        تأكيد الرفض
-                      </button>
-                      <button
-                        onClick={() => setRejectingId(null)}
-                        className="px-2 py-1.5 rounded-lg bg-slate-800 text-slate-300"
-                      >
-                        إلغاء
-                      </button>
-                    </div>
-                  ) : (
-                    <>
-                      <button
-                        onClick={() => setRejectingId(item.id)}
-                        disabled={actionLoading === item.id}
-                        className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-rose-950/40 hover:text-rose-300 text-slate-400 border border-slate-700 font-medium transition-colors"
-                      >
-                        رفض الطلب
-                      </button>
-                      <button
-                        onClick={() => handleApprove(item.id)}
-                        disabled={actionLoading === item.id}
-                        className="px-4 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-bold transition-colors shadow-md shadow-teal-600/20 flex items-center gap-1.5"
-                      >
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>اعتماد القيد الأكاديمي</span>
-                      </button>
-                    </>
-                  )}
-                </div>
-              )}
+      {/* MODAL: DIRECT EDIT ENROLLMENT */}
+      {editingEnrollment && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4" dir="rtl">
+          <form onSubmit={handleSaveEnrollmentEdit} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="text-sm font-bold text-white">تعديل قيد الطالب مباشرة</h3>
+              <button type="button" onClick={() => setEditingEnrollment(null)} className="text-slate-400 hover:text-white">
+                <X className="w-4 h-4" />
+              </button>
             </div>
-          ))
-        )}
-      </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="text-slate-400 block mb-1">الرقم الجامعي / الأكاديمي</label>
+                <input
+                  type="text"
+                  value={editingEnrollment.academicStudentNumber}
+                  onChange={(e) => setEditingEnrollment({ ...editingEnrollment, academicStudentNumber: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                  dir="ltr"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-400 block mb-1">المستوى الدراسي الحالي</label>
+                <select
+                  value={editingEnrollment.currentStudyLevelId}
+                  onChange={(e) => setEditingEnrollment({ ...editingEnrollment, currentStudyLevelId: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                >
+                  {studyLevels.map(lvl => (
+                    <option key={lvl.id} value={lvl.id}>{lvl.titleArabic}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-slate-400 block mb-1">العام الأكاديمي</label>
+                <input
+                  type="text"
+                  value={editingEnrollment.academicYear}
+                  onChange={(e) => setEditingEnrollment({ ...editingEnrollment, academicYear: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                  dir="ltr"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-400 block mb-1">حالة القيد</label>
+                <select
+                  value={editingEnrollment.status}
+                  onChange={(e) => setEditingEnrollment({ ...editingEnrollment, status: e.target.value as EnrollmentStatus })}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-teal-300 font-bold"
+                >
+                  <option value="approved">معتمد (Approved)</option>
+                  <option value="pending">قيد المراجعة (Pending)</option>
+                  <option value="rejected">مرفوض (Rejected)</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setEditingEnrollment(null)}
+                className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold"
+              >
+                إلغاء
+              </button>
+              <button
+                type="submit"
+                disabled={actionLoading === editingEnrollment.id}
+                className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold"
+              >
+                حفظ التغييرات
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
     </div>
   );

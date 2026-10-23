@@ -341,7 +341,7 @@ app.post('/api/admin/enrollment-review', (req: Request, res: Response) => {
 // 9. Sync Admin Questions & Assessments to Server Store
 app.post('/api/admin/sync-assessment-questions', (req: Request, res: Response) => {
   try {
-    const { questions, assessment } = req.body;
+    const { questions, assessment, deletedQuestionIds, deletedAssessmentIds } = req.body;
     if (Array.isArray(questions)) {
       questions.forEach((q: QuestionItemFull) => {
         if (q && q.id) {
@@ -350,13 +350,39 @@ app.post('/api/admin/sync-assessment-questions', (req: Request, res: Response) =
       });
       saveJsonSafe(QUESTIONS_FILE, questionsStore);
     }
+    if (Array.isArray(deletedQuestionIds)) {
+      deletedQuestionIds.forEach((id: string) => {
+        delete questionsStore[id];
+      });
+      saveJsonSafe(QUESTIONS_FILE, questionsStore);
+    }
     if (assessment && assessment.id) {
       assessmentsStore[assessment.id] = assessment;
+      saveJsonSafe(ASSESSMENTS_FILE, assessmentsStore);
+    }
+    if (Array.isArray(deletedAssessmentIds)) {
+      deletedAssessmentIds.forEach((id: string) => {
+        delete assessmentsStore[id];
+      });
       saveJsonSafe(ASSESSMENTS_FILE, assessmentsStore);
     }
     res.json({ success: true, questionsCount: Object.keys(questionsStore).length });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'فشل مزامنة الأسئلة' });
+  }
+});
+
+// 9b. Get Admin Questions (Server-side protected answer keys for Admin Console)
+app.get('/api/admin/questions', (req: Request, res: Response) => {
+  try {
+    const { bankId } = req.query;
+    let list = Object.values(questionsStore);
+    if (bankId) {
+      list = list.filter((q) => q.bankId === bankId);
+    }
+    res.json({ questions: list });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'فشل جلب الأسئلة' });
   }
 });
 
@@ -381,6 +407,11 @@ app.post('/api/assessments/start-attempt', (req: Request, res: Response) => {
     const expiresAt = new Date(now.getTime() + durationMinutes * 60 * 1000).toISOString();
     const attemptId = `att-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
 
+    const targetIds: string[] =
+      (Array.isArray(questionIds) && questionIds.length > 0 ? questionIds : null) ||
+      (storedAssessment?.questionIds?.length ? storedAssessment.questionIds : null) ||
+      ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
+
     const attempt = {
       id: attemptId,
       assessmentId,
@@ -389,18 +420,13 @@ app.post('/api/assessments/start-attempt', (req: Request, res: Response) => {
       expiresAt,
       status: 'in_progress',
       answers: {},
+      questionIds: targetIds,
       lastSavedAt: now.toISOString(),
       attemptNumber: 1
     };
 
     attemptsStore[attemptId] = attempt;
     saveJsonSafe(ATTEMPTS_FILE, attemptsStore);
-
-    // Resolve questions for this assessment (strip correctOptionId before sending to client!)
-    const targetIds: string[] =
-      (Array.isArray(questionIds) && questionIds.length > 0 ? questionIds : null) ||
-      (storedAssessment?.questionIds?.length ? storedAssessment.questionIds : null) ||
-      ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
 
     const resolvedQuestions = targetIds
       .map((id) => questionsStore[id])
@@ -473,7 +499,7 @@ app.post('/api/assessments/submit-attempt', (req: Request, res: Response) => {
       }
     }
 
-    const { attemptId, assessmentId, answers, studentNameArabic, resultReleasePolicy, questionKeysOverride } = req.body;
+    const { attemptId, assessmentId, answers, studentNameArabic, resultReleasePolicy, questionIds, questionKeysOverride } = req.body;
     if (!attemptId) return res.status(400).json({ error: 'معرف المحاولة مطلوب' });
 
     // Idempotency check
@@ -505,7 +531,7 @@ app.post('/api/assessments/submit-attempt', (req: Request, res: Response) => {
       answerKeyMap[q.id] = { correctOptionId: q.correctOptionId, points: Number(q.points) || 5 };
     });
 
-    // If Firestore keys were passed from service layer, only accept keys for questions that don't already have an authoritative server key
+    // If Firestore keys were passed from service layer, accept keys for questions not yet in server store
     if (Array.isArray(questionKeysOverride)) {
       questionKeysOverride.forEach((k: any) => {
         if (k && k.questionId && k.correctOptionId && !answerKeyMap[k.questionId]) {
@@ -519,6 +545,8 @@ app.post('/api/assessments/submit-attempt', (req: Request, res: Response) => {
 
     // Determine which questions belong to this attempt
     const targetQuestionIds: string[] =
+      (Array.isArray(questionIds) && questionIds.length > 0 ? questionIds : null) ||
+      (Array.isArray(attempt.questionIds) && attempt.questionIds.length > 0 ? attempt.questionIds : null) ||
       (Array.isArray(questionKeysOverride) && questionKeysOverride.length > 0
         ? questionKeysOverride.map((k: any) => k.questionId)
         : null) ||
