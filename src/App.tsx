@@ -34,11 +34,14 @@ import {
   Menu,
   X,
   Phone,
-  Mail
+  Mail,
+  Hash,
+  KeyRound,
+  Send
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext.tsx';
 import { UserRole, UserRoleDoc, AuditLog, StudentEnrollment } from './types/umed.ts';
-import { fetchMergedAuditLogs, fetchAllUserRoles, assignUserRole, formatUserIdentifier } from './lib/firebase.ts';
+import { fetchMergedAuditLogs, fetchAllUserRoles, assignUserRole, formatUserIdentifier, checkIdentifierUniqueness } from './lib/firebase.ts';
 import { fetchStudentEnrollment, subscribeToStudentEnrollment } from './services/enrollmentService.ts';
 import StudentDashboard from './components/student/StudentDashboard.tsx';
 import StudentProfile from './components/student/StudentProfile.tsx';
@@ -84,7 +87,11 @@ export default function App() {
     checkConnectivity,
     activeRole,
     setActiveRole,
-    isAuthorizedAdmin
+    isAuthorizedAdmin,
+    pendingVerification,
+    verifyCurrentAccount,
+    resendVerification,
+    startAccountVerification
   } = useAuth();
 
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
@@ -108,10 +115,24 @@ export default function App() {
   const [authMethod, setAuthMethod] = useState<'phone' | 'email'>('phone');
   const [emailInput, setEmailInput] = useState<string>('');
   const [phoneInput, setPhoneInput] = useState<string>('');
+  const [academicIdInput, setAcademicIdInput] = useState<string>('');
   const [passwordInput, setPasswordInput] = useState<string>('');
   const [displayNameInput, setDisplayNameInput] = useState<string>('');
   const [authError, setAuthError] = useState<string | null>(null);
   const [authSuccess, setAuthSuccess] = useState<string | null>(null);
+  const [uniquenessStatus, setUniquenessStatus] = useState<{
+    checking: boolean;
+    available: boolean | null;
+    reason?: string;
+  }>({ checking: false, available: null });
+
+  // Phone & Email Verification OTP states
+  const [phoneOtpInput, setPhoneOtpInput] = useState<string>('');
+  const [emailOtpInput, setEmailOtpInput] = useState<string>('');
+  const [verifyLoading, setVerifyLoading] = useState<boolean>(false);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+  const [verifySuccess, setVerifySuccess] = useState<string | null>(null);
+
   const [bootstrapLoading, setBootstrapLoading] = useState<boolean>(false);
   const [bootstrapMessage, setBootstrapMessage] = useState<string | null>(null);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
@@ -211,6 +232,44 @@ export default function App() {
     }
   }, [isAdminMode, isOwnerMode, activeTab, studentEnrollment?.status]);
 
+  // Live debounced uniqueness check during registration for Email, Phone, and Academic ID
+  useEffect(() => {
+    if (authTab !== 'register') {
+      setUniquenessStatus({ checking: false, available: null });
+      return;
+    }
+    const emailCandidate = emailInput.trim();
+    const phoneCandidate = phoneInput.trim();
+    const acadCandidate = academicIdInput.trim();
+
+    if (!emailCandidate && !phoneCandidate && !acadCandidate) {
+      setUniquenessStatus({ checking: false, available: null });
+      return;
+    }
+
+    let cancelled = false;
+    setUniquenessStatus(prev => ({ ...prev, checking: true }));
+    const timer = setTimeout(async () => {
+      const check = await checkIdentifierUniqueness({
+        email: emailCandidate || undefined,
+        phone: phoneCandidate || undefined,
+        academicStudentNumber: acadCandidate || undefined
+      });
+      if (!cancelled) {
+        setUniquenessStatus({
+          checking: false,
+          available: check.isUnique,
+          reason: check.message
+        });
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [authTab, emailInput, phoneInput, academicIdInput]);
+
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
@@ -237,20 +296,40 @@ export default function App() {
           setAuthError('يرجى إدخال الاسم الرباعي بالعربية');
           return;
         }
+        if (!academicIdInput.trim() || academicIdInput.trim().length < 3) {
+          setAuthError('يرجى إدخال رقم القيد الجامعي / الأكاديمي الخاص بك لمنع تكرار الحسابات');
+          return;
+        }
         if (authMethod === 'phone') {
           if (!phoneInput.trim()) {
             setAuthError('يرجى إدخال رقم الهاتف اليمني (مثال: 771234567)');
             return;
           }
-          await registerPhone(phoneInput, passwordInput, displayNameInput);
-          setAuthSuccess('تم إنشاء الحساب برقم الهاتف وتسجيل الدخول بنجاح');
+          await registerPhone(
+            phoneInput,
+            passwordInput,
+            displayNameInput,
+            academicIdInput.trim(),
+            emailInput.trim() || undefined
+          );
+          setAuthSuccess('تم إنشاء الحساب بنجاح — يرجى إدخال رمز التحقق لتفعيل رقم الهاتف والبريد');
         } else {
           if (!emailInput.trim()) {
             setAuthError('يرجى إدخال البريد الإلكتروني');
             return;
           }
-          await registerEmail(emailInput, passwordInput, displayNameInput, phoneInput);
-          setAuthSuccess('تم إنشاء الحساب وتسجيل الدخول بنجاح');
+          if (!phoneInput.trim()) {
+            setAuthError('يرجى إدخال رقم الهاتف اليمني للتحقق منه ومنع تكرار الحسابات (مثال: 771234567)');
+            return;
+          }
+          await registerEmail(
+            emailInput,
+            passwordInput,
+            displayNameInput,
+            phoneInput,
+            academicIdInput.trim()
+          );
+          setAuthSuccess('تم إنشاء الحساب بنجاح — يرجى إكمال التحقق من البريد الإلكتروني ورقم الهاتف');
         }
         setActiveTab('student_dashboard');
       }
@@ -258,7 +337,9 @@ export default function App() {
     } catch (err: any) {
       let msg = err.message || 'حدث خطأ أثناء المصادقة';
       if (msg.includes('INVALID_PHONE_NUMBER')) {
-        msg = 'يرجى إدخال رقم هاتف يمني صحيح مكوّن من 9 أرقام يبدأ بـ 7 (مثال: 771234567)';
+        msg = 'يرجى إدخال رقم هاتف يمني صحيح مكوّن من 9 أرقام يبدأ بـ 70 أو 71 أو 73 أو 77 أو 78 (مثال: 771234567)';
+      } else if (msg.includes('INVALID_EMAIL_FORMAT')) {
+        msg = 'يرجى إدخال بريد إلكتروني صحيح (مثال: student@umed.edu.ye)';
       } else if (msg.includes('user-not-found') || msg.includes('invalid-credential')) {
         msg = authMethod === 'phone'
           ? 'رقم الهاتف أو كلمة المرور غير صحيحة (إذا كنت طالباً جديداً اضغط على "إنشاء حساب طالب جديد" أولاً)'
@@ -267,12 +348,51 @@ export default function App() {
         msg = 'كلمة المرور غير صحيحة';
       } else if (msg.includes('email-already-in-use')) {
         msg = authMethod === 'phone'
-          ? 'رقم الهاتف مسجل مسبقاً، يرجى التبديل إلى "تسجيل الدخول" والدخول به'
-          : 'البريد الإلكتروني مسجل مسبقاً، يرجى تسجيل الدخول به';
+          ? 'رقم الهاتف مسجل مسبقاً في حساب آخر، لا يُسمح بتكرار الحسابات بنفس الرقم'
+          : 'البريد الإلكتروني مسجل مسبقاً في حساب آخر، لا يُسمح بتكرار الحسابات بنفس البريد';
       } else if (msg.includes('weak-password')) {
         msg = 'كلمة المرور ضعيفة (يجب أن تكون 6 أحرف أو أرقام على الأقل)';
       }
       setAuthError(msg);
+    }
+  };
+
+  const handleVerifyAccountSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setVerifyError(null);
+    setVerifySuccess(null);
+    setVerifyLoading(true);
+    try {
+      const res = await verifyCurrentAccount({
+        phoneCodeInput: phoneOtpInput.trim() || undefined,
+        emailCodeInput: emailOtpInput.trim() || undefined,
+        checkFirebaseEmailLink: true
+      });
+      setVerifySuccess(res.message);
+      if (res.verified) {
+        setPhoneOtpInput('');
+        setEmailOtpInput('');
+      }
+    } catch (err: any) {
+      setVerifyError(err.message || 'تعذر التحقق من الرمز المدخل');
+    } finally {
+      setVerifyLoading(false);
+    }
+  };
+
+  const handleResendVerificationCodes = async () => {
+    setVerifyError(null);
+    setVerifySuccess(null);
+    setVerifyLoading(true);
+    try {
+      const ch = await resendVerification();
+      if (ch) {
+        setVerifySuccess('تم إصدار وإرسال رموز تحقق جديدة للبريد الإلكتروني ورقم الهاتف بنجاح');
+      }
+    } catch (err: any) {
+      setVerifyError(err.message || 'تعذر إعادة إرسال رمز التحقق');
+    } finally {
+      setVerifyLoading(false);
     }
   };
 
@@ -471,45 +591,80 @@ export default function App() {
 
             <form onSubmit={handleAuthSubmit} className="space-y-3.5 text-xs">
               {authTab === 'register' && (
-                <div>
-                  <label className="block text-slate-300 mb-1 font-semibold">الاسم الرباعي بالعربية:</label>
-                  <input
-                    type="text"
-                    required
-                    value={displayNameInput}
-                    onChange={(e) => setDisplayNameInput(e.target.value)}
-                    placeholder="أدخل اسمك الرباعي كما في البطاقة الجامعية"
-                    className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-teal-500"
-                  />
-                </div>
-              )}
-
-              {authMethod === 'phone' ? (
-                <div>
-                  <label className="block text-slate-300 mb-1 font-semibold">رقم الهاتف اليمني:</label>
-                  <div className="flex items-center gap-2" dir="ltr">
-                    <span className="px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-teal-400 font-mono font-bold select-none shrink-0">
-                      +967
-                    </span>
+                <>
+                  <div>
+                    <label className="block text-slate-300 mb-1 font-semibold">الاسم الرباعي بالعربية:</label>
                     <input
-                      type="tel"
+                      type="text"
                       required
-                      value={phoneInput}
-                      onChange={(e) => setPhoneInput(e.target.value)}
-                      placeholder="771234567"
+                      value={displayNameInput}
+                      onChange={(e) => setDisplayNameInput(e.target.value)}
+                      placeholder="أدخل اسمك الرباعي كما في البطاقة الجامعية"
+                      className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-teal-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 mb-1 font-semibold flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <Hash className="w-3.5 h-3.5 text-teal-400" />
+                        <span>رقم القيد الجامعي / الأكاديمي (فريد لكل طالب):</span>
+                      </span>
+                      <span className="text-[10px] text-teal-400 font-normal">يمنع تكرار القيد</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={academicIdInput}
+                      onChange={(e) => setAcademicIdInput(e.target.value)}
+                      placeholder="مثال: 20241055 أو MED-2025-104"
                       className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono focus:outline-none focus:border-teal-500"
                       dir="ltr"
                     />
                   </div>
-                  <p className="text-[10px] text-slate-500 mt-1">
-                    يدعم جميع شبكات الاتصالات اليمنية (يمن موبايل 77/78، سبأفون 71، YOU 73، واي 70)
-                  </p>
-                </div>
+                </>
+              )}
+
+              {authMethod === 'phone' ? (
+                <>
+                  <div>
+                    <label className="block text-slate-300 mb-1 font-semibold">رقم الهاتف اليمني (فريد لكل حساب):</label>
+                    <div className="flex items-center gap-2" dir="ltr">
+                      <span className="px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-teal-400 font-mono font-bold select-none shrink-0">
+                        +967
+                      </span>
+                      <input
+                        type="tel"
+                        required
+                        value={phoneInput}
+                        onChange={(e) => setPhoneInput(e.target.value)}
+                        placeholder="771234567"
+                        className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono focus:outline-none focus:border-teal-500"
+                        dir="ltr"
+                      />
+                    </div>
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      يدعم جميع شبكات الاتصالات اليمنية (يمن موبايل 77/78، سبأفون 71، YOU 73، واي 70)
+                    </p>
+                  </div>
+                  {authTab === 'register' && (
+                    <div>
+                      <label className="block text-slate-300 mb-1 font-semibold">البريد الإلكتروني (اختياري للتحقق الإضافي):</label>
+                      <input
+                        type="email"
+                        value={emailInput}
+                        onChange={(e) => setEmailInput(e.target.value)}
+                        placeholder="student@example.com"
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono focus:outline-none focus:border-teal-500"
+                        dir="ltr"
+                      />
+                    </div>
+                  )}
+                </>
               ) : (
                 <>
                   <div>
                     <label className="block text-slate-300 mb-1 font-semibold">
-                      {authTab === 'login' ? 'البريد الإلكتروني (أو رقم الهاتف):' : 'البريد الإلكتروني:'}
+                      {authTab === 'login' ? 'البريد الإلكتروني (أو رقم الهاتف):' : 'البريد الإلكتروني الرسمي (فريد لكل حساب):'}
                     </label>
                     <input
                       type={authTab === 'login' ? 'text' : 'email'}
@@ -523,18 +678,54 @@ export default function App() {
                   </div>
                   {authTab === 'register' && (
                     <div>
-                      <label className="block text-slate-300 mb-1 font-semibold">رقم الهاتف اليمني (اختياري):</label>
-                      <input
-                        type="tel"
-                        value={phoneInput}
-                        onChange={(e) => setPhoneInput(e.target.value)}
-                        placeholder="+967 77XXXXXXX"
-                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono focus:outline-none focus:border-teal-500"
-                        dir="ltr"
-                      />
+                      <label className="block text-slate-300 mb-1 font-semibold">رقم الهاتف اليمني (إلزامي للتحقق ومنع التكرار):</label>
+                      <div className="flex items-center gap-2" dir="ltr">
+                        <span className="px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-teal-400 font-mono font-bold select-none shrink-0">
+                          +967
+                        </span>
+                        <input
+                          type="tel"
+                          required
+                          value={phoneInput}
+                          onChange={(e) => setPhoneInput(e.target.value)}
+                          placeholder="771234567"
+                          className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono focus:outline-none focus:border-teal-500"
+                          dir="ltr"
+                        />
+                      </div>
                     </div>
                   )}
                 </>
+              )}
+
+              {/* Live Uniqueness Check Indicator during Registration */}
+              {authTab === 'register' && (uniquenessStatus.checking || uniquenessStatus.available !== null) && (
+                <div
+                  className={`p-2.5 rounded-xl border text-[11px] flex items-center gap-2 ${
+                    uniquenessStatus.checking
+                      ? 'bg-slate-950 border-slate-800 text-slate-400'
+                      : uniquenessStatus.available
+                      ? 'bg-emerald-950/30 border-emerald-800/60 text-emerald-300'
+                      : 'bg-rose-950/50 border-rose-800/80 text-rose-300'
+                  }`}
+                >
+                  {uniquenessStatus.checking ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-teal-400 shrink-0" />
+                      <span>جارٍ فحص عدم تكرار البريد الإلكتروني ورقم الهاتف ورقم القيد...</span>
+                    </>
+                  ) : uniquenessStatus.available ? (
+                    <>
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                      <span>بيانات الحساب فريدة ومتاحة للتسجيل (لا يوجد أي حساب مكرر) ✓</span>
+                    </>
+                  ) : (
+                    <>
+                      <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                      <span>{uniquenessStatus.reason}</span>
+                    </>
+                  )}
+                </div>
               )}
 
               <div>
@@ -552,11 +743,11 @@ export default function App() {
 
               <button
                 type="submit"
-                disabled={loading}
-                className="w-full py-3 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors shadow-lg shadow-teal-600/20"
+                disabled={loading || (authTab === 'register' && uniquenessStatus.available === false)}
+                className="w-full py-3 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors shadow-lg shadow-teal-600/20"
               >
                 <LogIn className="w-4 h-4" />
-                <span>{authTab === 'login' ? 'تسجيل الدخول للمنصة' : 'إنشاء الحساب والمتابعة لتسجيل القيد'}</span>
+                <span>{authTab === 'login' ? 'تسجيل الدخول للمنصة' : 'إنشاء الحساب وإرسال رمز التحقق'}</span>
               </button>
             </form>
 
@@ -578,6 +769,196 @@ export default function App() {
               </svg>
               <span>الدخول بحساب Google</span>
             </button>
+          </div>
+        </div>
+      ) : pendingVerification ? (
+        /* ACCOUNT VERIFICATION GATE (تحقق رقم الهاتف والبريد الإلكتروني عند إنشاء الحساب) */
+        <div className="min-h-screen flex flex-col justify-center py-10 px-4 sm:px-6">
+          <div className="max-w-lg w-full mx-auto bg-slate-900/95 border border-teal-500/40 rounded-2xl p-6 sm:p-8 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-teal-500/20 border border-teal-500/40 flex items-center justify-center text-teal-400 shrink-0">
+                  <KeyRound className="w-6 h-6" />
+                </div>
+                <div>
+                  <h1 className="text-base font-bold text-white">تأكيد وتفعيل الحساب الأكاديمي</h1>
+                  <p className="text-xs text-slate-400">
+                    التحقق الإلزامي من رقم الهاتف والبريد الإلكتروني لضمان تفرد الحساب وأمانه
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={logout}
+                className="text-xs text-slate-400 hover:text-rose-400 flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>خروج</span>
+              </button>
+            </div>
+
+            {/* Summary of Reserved Unique Identifiers */}
+            <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
+              <div className="text-[11px] font-bold text-teal-400 flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4" />
+                <span>المعرفات المحجوزة حصرياً لحسابك (لا يمكن لأي حساب آخر استخدامها):</span>
+              </div>
+              {pendingVerification.phone && (
+                <div className="flex items-center justify-between text-slate-300 pt-1 border-t border-slate-900">
+                  <span>رقم الهاتف اليمني:</span>
+                  <span className="font-mono text-white flex items-center gap-1.5" dir="ltr">
+                    {pendingVerification.phone}
+                    {pendingVerification.phoneVerified ? (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">موثق ✓</span>
+                    ) : (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">بانتظار الرمز</span>
+                    )}
+                  </span>
+                </div>
+              )}
+              {pendingVerification.email && (
+                <div className="flex items-center justify-between text-slate-300 pt-1 border-t border-slate-900">
+                  <span>البريد الإلكتروني:</span>
+                  <span className="font-mono text-white flex items-center gap-1.5" dir="ltr">
+                    {pendingVerification.email}
+                    {pendingVerification.emailVerified ? (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">موثق ✓</span>
+                    ) : (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">بانتظار التفعيل</span>
+                    )}
+                  </span>
+                </div>
+              )}
+              {userProfile?.academicStudentNumber && (
+                <div className="flex items-center justify-between text-slate-300 pt-1 border-t border-slate-900">
+                  <span>رقم القيد الجامعي المحجوز:</span>
+                  <span className="font-mono text-teal-300 font-bold" dir="ltr">
+                    {userProfile.academicStudentNumber}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Instant Smart Dispatch Notification Banner (SMS / Email OTP Codes) */}
+            <div className="p-3.5 rounded-xl bg-teal-950/40 border border-teal-700/50 space-y-2 text-xs">
+              <div className="font-bold text-teal-300 flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <Send className="w-3.5 h-3.5" />
+                  <span>إشعار رموز التحقق الفورية (OTP) المرسلة لحسابك:</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (pendingVerification.phoneCode && !pendingVerification.phoneVerified) {
+                      setPhoneOtpInput(pendingVerification.phoneCode);
+                    }
+                    if (pendingVerification.emailCode && !pendingVerification.emailVerified) {
+                      setEmailOtpInput(pendingVerification.emailCode);
+                    }
+                  }}
+                  className="text-[11px] px-2 py-0.5 rounded bg-teal-600 hover:bg-teal-500 text-white font-semibold transition-colors"
+                >
+                  تعبئة تلقائية للرموز
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-300 leading-relaxed">
+                تم إرسال رابط التفعيل الرسمي عبر Firebase للبريد الإلكتروني، كما تم إصدار رموز التحقق الرقمية (OTP) التالية لتفعيل رقم الهاتف اليمني والبريد فوراً:
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                {pendingVerification.phone && !pendingVerification.phoneVerified && (
+                  <div className="p-2 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-between">
+                    <span className="text-[11px] text-slate-400">رمز الهاتف (SMS OTP):</span>
+                    <strong className="font-mono text-sm text-amber-300 tracking-widest" dir="ltr">
+                      {pendingVerification.phoneCode}
+                    </strong>
+                  </div>
+                )}
+                {pendingVerification.email && !pendingVerification.emailVerified && (
+                  <div className="p-2 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-between">
+                    <span className="text-[11px] text-slate-400">رمز البريد (Email OTP):</span>
+                    <strong className="font-mono text-sm text-teal-300 tracking-widest" dir="ltr">
+                      {pendingVerification.emailCode}
+                    </strong>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {verifyError && (
+              <div className="p-3 bg-rose-950/50 border border-rose-800 rounded-xl text-rose-300 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{verifyError}</span>
+              </div>
+            )}
+
+            {verifySuccess && (
+              <div className="p-3 bg-emerald-950/50 border border-emerald-800 rounded-xl text-emerald-300 text-xs flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>{verifySuccess}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleVerifyAccountSubmit} className="space-y-4 text-xs">
+              {pendingVerification.phone && !pendingVerification.phoneVerified && (
+                <div>
+                  <label className="block text-slate-300 mb-1.5 font-semibold flex items-center gap-1.5">
+                    <Phone className="w-3.5 h-3.5 text-teal-400" />
+                    <span>رمز التحقق من رقم الهاتف ({pendingVerification.phone}):</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={6}
+                    value={phoneOtpInput}
+                    onChange={(e) => setPhoneOtpInput(e.target.value.replace(/\D/g, ''))}
+                    placeholder="أدخل الرمز المكون من 6 أرقام"
+                    className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-center text-base tracking-widest focus:outline-none focus:border-teal-500"
+                    dir="ltr"
+                  />
+                </div>
+              )}
+
+              {pendingVerification.email && !pendingVerification.emailVerified && (
+                <div>
+                  <label className="block text-slate-300 mb-1.5 font-semibold flex items-center gap-1.5">
+                    <Mail className="w-3.5 h-3.5 text-teal-400" />
+                    <span>رمز التحقق من البريد الإلكتروني ({pendingVerification.email}):</span>
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={6}
+                    value={emailOtpInput}
+                    onChange={(e) => setEmailOtpInput(e.target.value.replace(/\D/g, ''))}
+                    placeholder="أدخل رمز البريد (6 أرقام) أو اضغط على الرابط المرسل لبريدك"
+                    className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-center text-base tracking-widest focus:outline-none focus:border-teal-500"
+                    dir="ltr"
+                  />
+                </div>
+              )}
+
+              <div className="flex flex-col sm:flex-row gap-2.5 pt-1">
+                <button
+                  type="submit"
+                  disabled={verifyLoading}
+                  className="flex-1 py-3 px-4 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors shadow-lg shadow-teal-600/20"
+                >
+                  {verifyLoading ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="w-4 h-4" />
+                  )}
+                  <span>تأكيد الرموز وتفعيل الحساب الآن</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={verifyLoading}
+                  onClick={handleResendVerificationCodes}
+                  className="py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>إعادة إرسال الرمز</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       ) : (
@@ -1330,10 +1711,38 @@ export default function App() {
                       </div>
                       {userProfile?.phone && !user.email?.startsWith('phone_') && (
                         <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-slate-800/80">
-                          <span className="text-slate-400">رقم الهاتف المرتبط:</span>
+                          <span className="text-slate-400">رقم الهاتف المرتبط (فريد):</span>
                           <span className="font-mono text-emerald-300" dir="ltr">{userProfile.phone}</span>
                         </div>
                       )}
+                      {(userProfile?.academicStudentNumber || studentEnrollment?.academicStudentNumber) && (
+                        <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-slate-800/80">
+                          <span className="text-slate-400">رقم القيد الأكاديمي المحجوز:</span>
+                          <span className="font-mono text-teal-300 font-bold" dir="ltr">
+                            {userProfile?.academicStudentNumber || studentEnrollment?.academicStudentNumber}
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-slate-800/80">
+                        <span className="text-slate-400">حالة التحقق من الهوية:</span>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className={`text-[11px] px-2 py-0.5 rounded border ${userProfile?.phoneVerified ? 'bg-emerald-950/60 border-emerald-700 text-emerald-300' : 'bg-slate-900 border-slate-700 text-slate-400'}`}>
+                            الهاتف: {userProfile?.phoneVerified ? 'موثق ✓' : 'مرتبط'}
+                          </span>
+                          <span className={`text-[11px] px-2 py-0.5 rounded border ${userProfile?.emailVerified || user.emailVerified ? 'bg-emerald-950/60 border-emerald-700 text-emerald-300' : 'bg-slate-900 border-slate-700 text-slate-400'}`}>
+                            البريد: {userProfile?.emailVerified || user.emailVerified ? 'موثق ✓' : 'مرتبط'}
+                          </span>
+                          {(!userProfile?.isVerified) && (
+                            <button
+                              type="button"
+                              onClick={() => startAccountVerification()}
+                              className="text-[11px] px-2 py-0.5 rounded bg-teal-600 hover:bg-teal-500 text-white font-semibold"
+                            >
+                              تفعيل الآن
+                            </button>
+                          )}
+                        </div>
+                      </div>
                       <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-slate-800/80">
                         <span className="text-slate-400">معرف المستخدم (UID):</span>
                         <span className="font-mono text-slate-400 text-[11px] break-all" dir="ltr">{user.uid}</span>

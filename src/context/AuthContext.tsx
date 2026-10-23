@@ -20,6 +20,13 @@ import {
   signInWithPhone,
   signUpWithPhone,
   normalizeYemenPhone,
+  normalizeEmail,
+  normalizeAcademicId,
+  checkIdentifierUniqueness,
+  reserveUniqueIdentifiers,
+  issueVerificationChallenge,
+  getVerificationChallenge,
+  verifyAccountChallenge,
   logOut, 
   fetchUserRole, 
   fetchUserProfile,
@@ -27,12 +34,13 @@ import {
   requestPlatformOwnerBootstrap,
   testFirestoreConnection
 } from '../lib/firebase.ts';
-import { UserRole, UserRoleDoc, UserProfile } from '../types/umed.ts';
+import { UserRole, UserRoleDoc, UserProfile, VerificationChallenge } from '../types/umed.ts';
 
 interface AuthContextType {
   user: User | null;
   roleDoc: UserRoleDoc | null;
   userProfile: UserProfile | null;
+  pendingVerification: VerificationChallenge | null;
   loading: boolean;
   isOnline: boolean;
   firestoreConnected: boolean;
@@ -40,9 +48,28 @@ interface AuthContextType {
   firestoreError: string | null;
   loginGoogle: () => Promise<void>;
   loginEmail: (email: string, pass: string) => Promise<void>;
-  registerEmail: (email: string, pass: string, nameArabic: string, phoneOptional?: string) => Promise<void>;
+  registerEmail: (
+    email: string,
+    pass: string,
+    nameArabic: string,
+    phoneRequired?: string,
+    academicStudentNumber?: string
+  ) => Promise<void>;
   loginPhone: (phone: string, pass: string) => Promise<void>;
-  registerPhone: (phone: string, pass: string, nameArabic: string) => Promise<void>;
+  registerPhone: (
+    phone: string,
+    pass: string,
+    nameArabic: string,
+    emailOptional?: string,
+    academicStudentNumber?: string
+  ) => Promise<void>;
+  verifyCurrentAccount: (params: {
+    phoneCodeInput?: string;
+    emailCodeInput?: string;
+    checkFirebaseEmailLink?: boolean;
+  }) => Promise<{ verified: boolean; message: string }>;
+  resendVerification: () => Promise<VerificationChallenge | null>;
+  startAccountVerification: () => Promise<VerificationChallenge | null>;
   logout: () => Promise<void>;
   bootstrapInitialOwner: () => Promise<{ success: boolean; message: string }>;
   checkConnectivity: () => Promise<void>;
@@ -58,6 +85,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [roleDoc, setRoleDoc] = useState<UserRoleDoc | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [pendingVerification, setPendingVerification] = useState<VerificationChallenge | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [firestoreConnected, setFirestoreConnected] = useState<boolean>(false);
@@ -159,6 +187,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         } catch (e) {}
 
+        // Hydrate active verification challenge if account is newly created and unverified
+        if (!isInitialOwnerEmail(currentUser.email)) {
+          getVerificationChallenge(currentUser.uid).then((ch) => {
+            if (ch && (!ch.emailVerified || !ch.phoneVerified)) {
+              setPendingVerification(ch);
+            } else {
+              setPendingVerification(null);
+            }
+          }).catch(() => {});
+        } else {
+          setPendingVerification(null);
+        }
+
         try {
           await currentUser.getIdToken();
         } catch (err: any) {
@@ -203,6 +244,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUser(null);
         setRoleDoc(null);
         setUserProfile(null);
+        setPendingVerification(null);
         setActiveRoleOverride(null);
       }
       setLoading(false);
@@ -221,14 +263,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const u = await signInWithGoogle();
       const existing = await fetchUserProfile(u.uid);
       if (!existing) {
+        // Verify Google email isn't conflicting with another UID
+        const uniqueCheck = await checkIdentifierUniqueness({
+          email: u.email || undefined,
+          excludeUid: u.uid
+        });
+        if (!uniqueCheck.isUnique) {
+          await logOut();
+          throw new Error(uniqueCheck.message || 'هذا البريد مسجل مسبقاً لحساب آخر');
+        }
+        const nowIso = new Date().toISOString();
         const newProf: UserProfile = {
           uid: u.uid,
-          email: u.email || '',
+          email: u.email ? normalizeEmail(u.email) : '',
           displayNameArabic: u.displayName || 'طالب طب بشري',
           avatarUrl: u.photoURL || undefined,
           isActive: true,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
+          emailVerified: true,
+          phoneVerified: true,
+          isVerified: true,
+          verifiedAt: nowIso,
+          createdAt: nowIso,
+          updatedAt: nowIso
         };
         await saveUserProfile(newProf);
         setUserProfile(newProf);
@@ -249,20 +305,69 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const registerEmail = async (email: string, pass: string, nameArabic: string, phoneOptional?: string) => {
+  const registerEmail = async (
+    email: string,
+    pass: string,
+    nameArabic: string,
+    phoneRequired?: string,
+    academicStudentNumber?: string
+  ) => {
     setLoading(true);
     try {
-      const u = await signUpWithEmail(email, pass);
-      const normalizedPhone = phoneOptional ? normalizeYemenPhone(phoneOptional) : undefined;
+      const normEmail = normalizeEmail(email);
+      const normPhone = phoneRequired && phoneRequired.trim() ? normalizeYemenPhone(phoneRequired) : undefined;
+      const normAcad = academicStudentNumber && academicStudentNumber.trim()
+        ? normalizeAcademicId(academicStudentNumber)
+        : undefined;
+
+      // 1. Pre-Creation Uniqueness Validation (Email + Phone + Academic Student Number)
+      const uniqueness = await checkIdentifierUniqueness({
+        email: normEmail,
+        phone: normPhone,
+        academicStudentNumber: normAcad
+      });
+      if (!uniqueness.isUnique) {
+        throw new Error(uniqueness.message || 'البيانات المدخلة مسجلة مسبقاً لحساب آخر في المنصة.');
+      }
+
+      // 2. Create Firebase Auth Account
+      const u = await signUpWithEmail(normEmail, pass);
+      const isOwner = isInitialOwnerEmail(normEmail);
+      const nowIso = new Date().toISOString();
+
+      // 3. Reserve Unique Identifiers in Cloud Firestore
+      await reserveUniqueIdentifiers({
+        uid: u.uid,
+        email: normEmail,
+        phone: normPhone,
+        academicStudentNumber: normAcad
+      });
+
+      // 4. Issue Verification Challenge (Real Firebase Email Link + 6-Digit OTP for Email & Phone)
+      let challenge: VerificationChallenge | null = null;
+      if (!isOwner) {
+        challenge = await issueVerificationChallenge(u, {
+          email: normEmail,
+          phone: normPhone
+        });
+        setPendingVerification(challenge);
+      }
+
       const newProf: UserProfile = {
         uid: u.uid,
-        email: u.email || email,
+        email: normEmail,
         displayNameArabic: nameArabic.trim(),
-        ...(normalizedPhone ? { phone: normalizedPhone } : {}),
+        ...(normPhone ? { phone: normPhone } : {}),
+        ...(normAcad ? { academicStudentNumber: normAcad } : {}),
         isActive: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        emailVerified: isOwner ? true : Boolean(challenge?.emailVerified),
+        phoneVerified: isOwner ? true : Boolean(challenge?.phoneVerified),
+        isVerified: isOwner ? true : Boolean(challenge?.emailVerified && challenge?.phoneVerified),
+        ...(isOwner ? { verifiedAt: nowIso } : {}),
+        createdAt: nowIso,
+        updatedAt: nowIso
       };
+
       await saveUserProfile(newProf);
       setUserProfile(newProf);
       try {
@@ -284,19 +389,67 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const registerPhone = async (phone: string, pass: string, nameArabic: string) => {
+  const registerPhone = async (
+    phone: string,
+    pass: string,
+    nameArabic: string,
+    emailOptional?: string,
+    academicStudentNumber?: string
+  ) => {
     setLoading(true);
     try {
-      const { user: u, normalizedPhone } = await signUpWithPhone(phone, pass);
+      const normPhone = normalizeYemenPhone(phone);
+      if (!normPhone) {
+        throw new Error('INVALID_PHONE_NUMBER');
+      }
+      const normEmail = emailOptional && emailOptional.trim() ? normalizeEmail(emailOptional) : undefined;
+      const normAcad = academicStudentNumber && academicStudentNumber.trim()
+        ? normalizeAcademicId(academicStudentNumber)
+        : undefined;
+
+      // 1. Pre-Creation Uniqueness Validation (Phone + Optional Email + Academic Student Number)
+      const uniqueness = await checkIdentifierUniqueness({
+        phone: normPhone,
+        email: normEmail,
+        academicStudentNumber: normAcad
+      });
+      if (!uniqueness.isUnique) {
+        throw new Error(uniqueness.message || 'البيانات المدخلة مسجلة مسبقاً لحساب آخر في المنصة.');
+      }
+
+      // 2. Create Firebase Auth Account for Phone
+      const { user: u, normalizedPhone } = await signUpWithPhone(normPhone, pass);
+      const nowIso = new Date().toISOString();
+
+      // 3. Reserve Unique Identifiers in Cloud Firestore
+      await reserveUniqueIdentifiers({
+        uid: u.uid,
+        phone: normalizedPhone,
+        email: normEmail,
+        academicStudentNumber: normAcad
+      });
+
+      // 4. Issue Verification Challenge for Phone (and Email if provided)
+      const challenge = await issueVerificationChallenge(u, {
+        phone: normalizedPhone,
+        email: normEmail
+      });
+      setPendingVerification(challenge);
+
       const newProf: UserProfile = {
         uid: u.uid,
-        email: u.email || '',
+        email: normEmail || u.email || '',
         phone: normalizedPhone,
+        ...(normAcad ? { academicStudentNumber: normAcad } : {}),
         displayNameArabic: nameArabic.trim(),
         isActive: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        emailVerified: Boolean(challenge.emailVerified),
+        phoneVerified: Boolean(challenge.phoneVerified),
+        isVerified: Boolean(challenge.emailVerified && challenge.phoneVerified),
+        createdAt: nowIso,
+        updatedAt: nowIso
       };
+
       await saveUserProfile(newProf);
       setUserProfile(newProf);
       try {
@@ -308,10 +461,60 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const verifyCurrentAccount = async (params: {
+    phoneCodeInput?: string;
+    emailCodeInput?: string;
+    checkFirebaseEmailLink?: boolean;
+  }): Promise<{ verified: boolean; message: string }> => {
+    if (!user) throw new Error('يجب تسجيل الدخول أولاً');
+    const res = await verifyAccountChallenge(user, params);
+    setPendingVerification(res.challenge);
+
+    if (userProfile) {
+      const nowIso = new Date().toISOString();
+      const updatedProf: UserProfile = {
+        ...userProfile,
+        emailVerified: res.emailVerified,
+        phoneVerified: res.phoneVerified,
+        isVerified: res.verified,
+        ...(res.verified ? { verifiedAt: nowIso } : {}),
+        updatedAt: nowIso
+      };
+      await saveUserProfile(updatedProf);
+      setUserProfile(updatedProf);
+      try {
+        localStorage.setItem(`umed_cached_profile_${user.uid}`, JSON.stringify(updatedProf));
+      } catch (e) {}
+    }
+
+    return { verified: res.verified, message: res.message };
+  };
+
+  const resendVerification = async (): Promise<VerificationChallenge | null> => {
+    if (!user) return null;
+    const realEmail =
+      userProfile?.email && !userProfile.email.startsWith('phone_')
+        ? userProfile.email
+        : user.email && !user.email.startsWith('phone_')
+        ? user.email
+        : undefined;
+    const ch = await issueVerificationChallenge(user, {
+      email: realEmail,
+      phone: userProfile?.phone
+    });
+    setPendingVerification(ch);
+    return ch;
+  };
+
+  const startAccountVerification = async (): Promise<VerificationChallenge | null> => {
+    return resendVerification();
+  };
+
   const logout = async () => {
     await logOut();
     setRoleDoc(null);
     setUserProfile(null);
+    setPendingVerification(null);
     setActiveRoleOverride(null);
   };
 
@@ -367,6 +570,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               }
             : null),
         userProfile,
+        pendingVerification,
         loading,
         isOnline,
         firestoreConnected,
@@ -377,6 +581,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         registerEmail,
         loginPhone,
         registerPhone,
+        verifyCurrentAccount,
+        resendVerification,
+        startAccountVerification,
         logout,
         bootstrapInitialOwner,
         checkConnectivity,

@@ -35,7 +35,8 @@ import {
   fetchPrograms, 
   fetchStudyLevels 
 } from '../../services/academicService.ts';
-import { submitEnrollmentRequest } from '../../services/enrollmentService.ts';
+import { submitEnrollmentRequest, verifyAcademicStudentNumberAvailable } from '../../services/enrollmentService.ts';
+import { useAuth } from '../../context/AuthContext.tsx';
 
 interface RegisterEnrollmentProps {
   uid: string;
@@ -48,6 +49,8 @@ export default function RegisterEnrollment({
   studentNameArabic, 
   onEnrollmentComplete 
 }: RegisterEnrollmentProps) {
+  const { userProfile, user } = useAuth();
+
   // Cascading Selection State
   const [countries, setCountries] = useState<Country[]>([]);
   const [selectedCountryId, setSelectedCountryId] = useState<string>('YE');
@@ -64,13 +67,57 @@ export default function RegisterEnrollment({
   const [studyLevels, setStudyLevels] = useState<StudyLevel[]>([]);
   const [selectedLevelId, setSelectedLevelId] = useState<string>('');
 
-  const [academicNumber, setAcademicNumber] = useState<string>('');
+  const [academicNumber, setAcademicNumber] = useState<string>(
+    userProfile?.academicStudentNumber || ''
+  );
   const [academicYear, setAcademicYear] = useState<string>('2025/2026');
+  const [academicNumberStatus, setAcademicNumberStatus] = useState<{
+    checking: boolean;
+    available?: boolean;
+    message?: string;
+  }>({ checking: false });
 
   // UI State
   const [loading, setLoading] = useState<boolean>(true);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (userProfile?.academicStudentNumber && !academicNumber) {
+      setAcademicNumber(userProfile.academicStudentNumber);
+    }
+  }, [userProfile?.academicStudentNumber]);
+
+  useEffect(() => {
+    const trimmed = academicNumber.trim();
+    if (!trimmed || trimmed.length < 3) {
+      setAcademicNumberStatus({ checking: false });
+      return;
+    }
+    let cancelled = false;
+    setAcademicNumberStatus({ checking: true });
+    const timer = setTimeout(async () => {
+      try {
+        const res = await verifyAcademicStudentNumberAvailable(trimmed, uid);
+        if (!cancelled) {
+          setAcademicNumberStatus({
+            checking: false,
+            available: res.available,
+            message: res.available
+              ? `رقم القيد (${res.normalized}) متاح وموثق لحسابك ✓`
+              : res.message
+          });
+        }
+      } catch {
+        if (!cancelled) setAcademicNumberStatus({ checking: false });
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [academicNumber, uid]);
 
   // 1. Initial Load: Countries and Universities
   useEffect(() => {
@@ -179,12 +226,19 @@ export default function RegisterEnrollment({
       return;
     }
 
+    if (academicNumberStatus.available === false) {
+      setErrorMessage(academicNumberStatus.message || 'رقم القيد الأكاديمي مسجل مسبقاً لطالب آخر');
+      return;
+    }
+
     setSubmitting(true);
     try {
       const policy = selectedUniversity?.enrollmentPolicy || 'approval_required';
       const enrollment = await submitEnrollmentRequest({
         uid,
         studentNameArabic,
+        studentEmail: userProfile?.email || user?.email || undefined,
+        studentPhone: userProfile?.phone || undefined,
         universityId: selectedUniversityId,
         collegeId: selectedCollegeId,
         programId: selectedProgramId,
@@ -326,16 +380,34 @@ export default function RegisterEnrollment({
         {/* 6. Academic Number & Year */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
-            <label className="block text-slate-300 font-semibold mb-1">الرقم الجامعي / الأكاديمي للطالب:</label>
+            <label className="block text-slate-300 font-semibold mb-1">الرقم الجامعي / رقم القيد الأكاديمي (فريد لكل طالب):</label>
             <input
               type="text"
               required
               value={academicNumber}
               onChange={(e) => setAcademicNumber(e.target.value)}
               placeholder="مثال: MED-2023-0182"
-              className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-600 focus:outline-none focus:border-teal-500 font-mono text-left"
+              className={`w-full px-3 py-2.5 rounded-xl bg-slate-950 border text-white placeholder-slate-600 focus:outline-none font-mono text-left ${
+                academicNumberStatus.available === false
+                  ? 'border-rose-500 focus:border-rose-400'
+                  : academicNumberStatus.available === true
+                  ? 'border-emerald-500/70 focus:border-emerald-400'
+                  : 'border-slate-800 focus:border-teal-500'
+              }`}
               dir="ltr"
             />
+            {academicNumberStatus.checking && (
+              <p className="text-[10px] text-slate-400 mt-1">جارٍ التحقق من عدم تكرار رقم القيد...</p>
+            )}
+            {!academicNumberStatus.checking && academicNumberStatus.message && (
+              <p
+                className={`text-[10px] mt-1 font-semibold ${
+                  academicNumberStatus.available ? 'text-emerald-400' : 'text-rose-400'
+                }`}
+              >
+                {academicNumberStatus.message}
+              </p>
+            )}
           </div>
 
           <div>
@@ -376,7 +448,7 @@ export default function RegisterEnrollment({
         {/* Submit Action Button */}
         <button
           type="submit"
-          disabled={submitting || !selectedUniversityId}
+          disabled={submitting || !selectedUniversityId || academicNumberStatus.available === false}
           className="w-full py-3 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-400 hover:to-emerald-500 text-white font-bold text-xs transition-all shadow-lg shadow-teal-500/20 flex items-center justify-center gap-2 disabled:opacity-50"
         >
           <UserCheck className="w-4 h-4" />

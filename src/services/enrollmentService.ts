@@ -17,7 +17,15 @@ import {
   where,
   onSnapshot
 } from 'firebase/firestore';
-import { db, cleanFirestoreData } from '../lib/firebase.ts';
+import { 
+  db, 
+  cleanFirestoreData,
+  checkIdentifierUniqueness,
+  reserveUniqueIdentifiers,
+  releaseAcademicIdentifier,
+  normalizeAcademicId,
+  getAcademicIdDocKey
+} from '../lib/firebase.ts';
 import { 
   StudentEnrollment, 
   EnrollmentStatus, 
@@ -226,9 +234,58 @@ export async function fetchStudentEnrollment(uid: string): Promise<StudentEnroll
   return winner;
 }
 
+export async function verifyAcademicStudentNumberAvailable(
+  academicStudentNumber: string,
+  excludeUid?: string
+): Promise<{ available: boolean; normalized: string; message?: string }> {
+  const normalized = normalizeAcademicId(academicStudentNumber);
+  if (!normalized || normalized.length < 3) {
+    return {
+      available: false,
+      normalized,
+      message: 'يرجى إدخال رقم قيد أكاديمي / جامعي صحيح (3 خانات على الأقل).'
+    };
+  }
+
+  // 1. Check via Global Uniqueness Registry (Firestore uniqueIdentifiers + userProfiles + studentEnrollments)
+  const check = await checkIdentifierUniqueness({
+    academicStudentNumber: normalized,
+    excludeUid
+  });
+  if (!check.isUnique) {
+    return {
+      available: false,
+      normalized,
+      message: check.message || `رقم القيد الأكاديمي (${normalized}) مسجل مسبقاً لطالب آخر في المنصة.`
+    };
+  }
+
+  // 2. Also cross-check against all fetched enrollments in admin/local list
+  const allEnrollments = await fetchEnrollmentsForAdmin();
+  const targetKey = getAcademicIdDocKey(normalized);
+  const conflicting = allEnrollments.find(
+    (e) =>
+      e.uid !== excludeUid &&
+      e.academicStudentNumber &&
+      getAcademicIdDocKey(e.academicStudentNumber) === targetKey
+  );
+
+  if (conflicting) {
+    return {
+      available: false,
+      normalized,
+      message: `رقم القيد الأكاديمي (${normalized}) مسجل مسبقاً لحساب طالب آخر (${conflicting.studentNameArabic || 'حساب مسجل'}). لا يُسمح بتكرار رقم القيد.`
+    };
+  }
+
+  return { available: true, normalized };
+}
+
 export async function submitEnrollmentRequest(params: {
   uid: string;
   studentNameArabic?: string;
+  studentEmail?: string;
+  studentPhone?: string;
   universityId: string;
   collegeId: string;
   programId: string;
@@ -238,6 +295,13 @@ export async function submitEnrollmentRequest(params: {
   academicYear: string;
   policy: 'immediate' | 'approval_required';
 }): Promise<StudentEnrollment> {
+  // 1. Strict Uniqueness Check on Academic Registration Number (رقم القيد)
+  const availability = await verifyAcademicStudentNumberAvailable(params.academicStudentNumber, params.uid);
+  if (!availability.available) {
+    throw new Error(availability.message || 'رقم القيد الأكاديمي مسجل مسبقاً لحساب آخر');
+  }
+  const normalizedAcadNumber = availability.normalized;
+
   // Deterministic ID per student UID prevents duplicate pending records
   const enrollmentId = `enr-${params.uid}`;
   unmarkEnrollmentDeleted(enrollmentId);
@@ -248,12 +312,14 @@ export async function submitEnrollmentRequest(params: {
     id: enrollmentId,
     uid: params.uid,
     studentNameArabic: params.studentNameArabic?.trim() || 'طالب كلية الطب البشري',
+    ...(params.studentEmail ? { studentEmail: params.studentEmail.trim().toLowerCase() } : {}),
+    ...(params.studentPhone ? { studentPhone: params.studentPhone.trim() } : {}),
     universityId: params.universityId,
     collegeId: params.collegeId,
     programId: params.programId,
     curriculumVersionId: params.curriculumVersionId,
     currentStudyLevelId: params.currentStudyLevelId,
-    academicStudentNumber: params.academicStudentNumber.trim(),
+    academicStudentNumber: normalizedAcadNumber,
     academicYear: params.academicYear,
     status,
     enrolledAt: nowIso,
@@ -269,6 +335,15 @@ export async function submitEnrollmentRequest(params: {
       ...currentAll.filter(e => e.id !== enrollmentId && e.uid !== params.uid)
     ]);
   } catch (e) {}
+
+  // Reserve unique identifiers in Cloud Firestore
+  await reserveUniqueIdentifiers({
+    uid: params.uid,
+    email: params.studentEmail,
+    phone: params.studentPhone,
+    academicStudentNumber: normalizedAcadNumber,
+    universityId: params.universityId
+  });
 
   try {
     await setDoc(doc(db, 'studentEnrollments', enrollmentId), cleanFirestoreData(enrollment), { merge: true });
@@ -468,12 +543,40 @@ export async function updateStudentEnrollment(
   const target = existing.find(e => e.id === enrollmentId);
   if (!target) return null;
 
+  const nextUpdates = { ...updates };
+  if (nextUpdates.academicStudentNumber && nextUpdates.academicStudentNumber.trim()) {
+    const availability = await verifyAcademicStudentNumberAvailable(
+      nextUpdates.academicStudentNumber,
+      target.uid
+    );
+    if (!availability.available) {
+      throw new Error(availability.message || 'رقم القيد الأكاديمي مسجل مسبقاً لطالب آخر');
+    }
+    nextUpdates.academicStudentNumber = availability.normalized;
+  }
+
   const updatedEnrollment: StudentEnrollment = cleanFirestoreData({
     ...target,
-    ...updates,
+    ...nextUpdates,
     id: enrollmentId,
     updatedAt: nowIso
   });
+
+  if (
+    target.academicStudentNumber &&
+    updatedEnrollment.academicStudentNumber &&
+    getAcademicIdDocKey(target.academicStudentNumber) !== getAcademicIdDocKey(updatedEnrollment.academicStudentNumber)
+  ) {
+    await releaseAcademicIdentifier(target.academicStudentNumber);
+  }
+
+  if (updatedEnrollment.academicStudentNumber && updatedEnrollment.uid) {
+    await reserveUniqueIdentifiers({
+      uid: updatedEnrollment.uid,
+      academicStudentNumber: updatedEnrollment.academicStudentNumber,
+      universityId: updatedEnrollment.universityId
+    });
+  }
 
   saveLocalEnrollments(existing.map(e => e.id === enrollmentId ? updatedEnrollment : e));
   if (updatedEnrollment.uid) {
@@ -504,6 +607,10 @@ export async function deleteEnrollment(enrollmentId: string): Promise<void> {
   const existing = await fetchEnrollmentsForAdmin();
   const target = existing.find(e => e.id === enrollmentId);
   markEnrollmentDeleted(enrollmentId);
+
+  if (target?.academicStudentNumber) {
+    await releaseAcademicIdentifier(target.academicStudentNumber);
+  }
 
   const filtered = existing.filter(e => e.id !== enrollmentId);
   saveLocalEnrollments(filtered);
@@ -595,6 +702,15 @@ export async function submitAcademicChangeRequest(params: {
   requestedAcademicNumber?: string;
   reason: string;
 }): Promise<AcademicChangeRequest> {
+  let cleanRequestedAcademicNumber: string | undefined;
+  if (params.requestedAcademicNumber && params.requestedAcademicNumber.trim()) {
+    const availability = await verifyAcademicStudentNumberAvailable(params.requestedAcademicNumber, params.uid);
+    if (!availability.available) {
+      throw new Error(availability.message || 'رقم القيد الأكاديمي المطلوب مسجل مسبقاً لطالب آخر.');
+    }
+    cleanRequestedAcademicNumber = availability.normalized;
+  }
+
   const existing = await fetchAcademicChangeRequestsForAdmin();
   const reqId = `req-${Date.now().toString(36)}`;
   const changeReq: AcademicChangeRequest = cleanFirestoreData({
@@ -603,7 +719,7 @@ export async function submitAcademicChangeRequest(params: {
     enrollmentId: params.enrollmentId,
     universityId: params.universityId,
     ...(params.requestedLevelId ? { requestedLevelId: params.requestedLevelId } : {}),
-    ...(params.requestedAcademicNumber ? { requestedAcademicNumber: params.requestedAcademicNumber } : {}),
+    ...(cleanRequestedAcademicNumber ? { requestedAcademicNumber: cleanRequestedAcademicNumber } : {}),
     reason: params.reason,
     status: 'pending',
     createdAt: new Date().toISOString()

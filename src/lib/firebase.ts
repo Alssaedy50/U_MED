@@ -13,6 +13,8 @@ import {
   GoogleAuthProvider, 
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  sendEmailVerification,
+  fetchSignInMethodsForEmail,
   signOut,
   User
 } from 'firebase/auth';
@@ -23,9 +25,11 @@ import {
   doc, 
   getDoc, 
   setDoc, 
+  deleteDoc,
   getDocFromServer,
   collection,
   query,
+  where,
   getDocs
 } from 'firebase/firestore';
 
@@ -33,7 +37,14 @@ try {
   setLogLevel('silent');
 } catch (e) {}
 import firebaseAppletConfig from '../../firebase-applet-config.json';
-import { UserRole, UserRoleDoc, UserProfile, AuditLog } from '../types/umed.ts';
+import { 
+  UserRole, 
+  UserRoleDoc, 
+  UserProfile, 
+  AuditLog,
+  UniqueIdentifierRecord,
+  VerificationChallenge
+} from '../types/umed.ts';
 
 // Dynamic Firebase Configuration supporting Cloudflare/Vercel Environment Variables
 export const firebaseConfig = {
@@ -134,7 +145,7 @@ export async function testFirestoreConnection(): Promise<{ connected: boolean; l
   }
 }
 
-// 5. Phone Number Normalization & Zero-Config Phone Auth Helpers (Yemen +967 First)
+// 5. Phone Number, Email, & Academic ID Normalization & Validation (Yemen +967 First)
 export function normalizeYemenPhone(phoneInput: string): string {
   const digits = phoneInput.replace(/[^\d+]/g, '');
   const rawDigits = digits.replace(/\D/g, '');
@@ -148,17 +159,80 @@ export function normalizeYemenPhone(phoneInput: string): string {
     return `+967${rawDigits.slice(1)}`;
   }
   // Starting with 967 (e.g. 967771234567)
-  if (rawDigits.startsWith('967') && rawDigits.length >= 11) {
+  if (rawDigits.startsWith('967') && rawDigits.length === 12 && rawDigits[3] === '7') {
     return `+${rawDigits}`;
   }
   // Starting with 00967 (e.g. 00967771234567)
-  if (rawDigits.startsWith('00967') && rawDigits.length >= 13) {
+  if (rawDigits.startsWith('00967') && rawDigits.length === 14 && rawDigits[5] === '7') {
     return `+${rawDigits.slice(2)}`;
   }
-  if (rawDigits.length >= 8) {
+  if (rawDigits.length >= 9 && rawDigits.length <= 15) {
     return `+${rawDigits}`;
   }
   return '';
+}
+
+export function validateYemenPhoneFormat(phoneInput: string): { valid: boolean; normalized: string; message?: string } {
+  const normalized = normalizeYemenPhone(phoneInput);
+  if (!normalized) {
+    return {
+      valid: false,
+      normalized: '',
+      message: 'يرجى إدخال رقم هاتف يمني صحيح مكوّن من 9 أرقام يبدأ بـ 7 (مثال: 771234567)'
+    };
+  }
+  // If Yemen +967 number, enforce valid operator prefix (77, 78, 71, 73, 70) and exact 9 digits after +967
+  if (normalized.startsWith('+967')) {
+    const localPart = normalized.slice(4);
+    if (!/^(77|78|71|73|70)\d{7}$/.test(localPart)) {
+      return {
+        valid: false,
+        normalized,
+        message: 'رقم الهاتف اليمني يجب أن يتكون من 9 أرقام ويبدأ بـ (77 أو 78 أو 71 أو 73 أو 70)'
+      };
+    }
+  }
+  return { valid: true, normalized };
+}
+
+export function normalizeEmail(emailInput: string): string {
+  return emailInput.trim().toLowerCase();
+}
+
+export function validateEmailFormat(emailInput: string): { valid: boolean; normalized: string; message?: string } {
+  const normalized = normalizeEmail(emailInput);
+  if (!normalized || !/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(normalized)) {
+    return {
+      valid: false,
+      normalized,
+      message: 'يرجى إدخال بريد إلكتروني صحيح وفعّال (مثال: student@gmail.com)'
+    };
+  }
+  return { valid: true, normalized };
+}
+
+export function normalizeAcademicId(academicInput: string): string {
+  return academicInput
+    .trim()
+    .toUpperCase()
+    .replace(/[\s/_]+/g, '-')
+    .replace(/-+/g, '-');
+}
+
+export function getAcademicIdDocKey(academicInput: string): string {
+  const alphanumeric = academicInput.trim().toUpperCase().replace(/[^A-Z0-9\u0600-\u06FF]/g, '');
+  return `acad_${alphanumeric}`;
+}
+
+export function getEmailDocKey(emailInput: string): string {
+  const clean = normalizeEmail(emailInput).replace(/[^a-z0-9@._-]/g, '_');
+  return `email_${clean}`;
+}
+
+export function getPhoneDocKey(phoneInput: string): string {
+  const norm = normalizeYemenPhone(phoneInput);
+  const digits = norm.replace(/\D/g, '');
+  return digits ? `phone_${digits}` : '';
 }
 
 export function isPhoneIdentifier(input: string): boolean {
@@ -169,11 +243,11 @@ export function isPhoneIdentifier(input: string): boolean {
 }
 
 export function phoneToAuthEmail(phoneInput: string): string {
-  const normalized = normalizeYemenPhone(phoneInput);
-  if (!normalized) {
+  const check = validateYemenPhoneFormat(phoneInput);
+  if (!check.valid || !check.normalized) {
     throw new Error('INVALID_PHONE_NUMBER');
   }
-  const cleanDigits = normalized.replace(/\D/g, '');
+  const cleanDigits = check.normalized.replace(/\D/g, '');
   return `phone_${cleanDigits}@umed.edu.ye`;
 }
 
@@ -187,6 +261,520 @@ export function formatUserIdentifier(email?: string | null, phone?: string | nul
   return email;
 }
 
+// ---------------------------------------------------------------------------
+// 5B. Global Uniqueness Registry (Email, Phone Number, Academic ID)
+// ---------------------------------------------------------------------------
+
+const UNIQUE_CACHE_KEY = 'umed_unique_identifiers_cache';
+
+function getLocalUniqueCache(): Record<string, UniqueIdentifierRecord> {
+  try {
+    const raw = localStorage.getItem(UNIQUE_CACHE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return {};
+}
+
+function saveLocalUniqueRecord(rec: UniqueIdentifierRecord) {
+  try {
+    const map = getLocalUniqueCache();
+    map[rec.id] = rec;
+    localStorage.setItem(UNIQUE_CACHE_KEY, JSON.stringify(map));
+  } catch (e) {}
+}
+
+function removeLocalUniqueRecord(id: string) {
+  try {
+    const map = getLocalUniqueCache();
+    if (map[id]) {
+      delete map[id];
+      localStorage.setItem(UNIQUE_CACHE_KEY, JSON.stringify(map));
+    }
+  } catch (e) {}
+}
+
+/**
+ * Checks that Email, Phone Number, and Academic Student Number are 100% unique
+ * and not registered to any other user account (`uid !== excludeUid`).
+ */
+export async function checkIdentifierUniqueness(params: {
+  email?: string;
+  phone?: string;
+  academicStudentNumber?: string;
+  excludeUid?: string;
+}): Promise<{
+  isUnique: boolean;
+  conflictField?: 'email' | 'phone' | 'academic_id';
+  message?: string;
+}> {
+  const excludeUid = params.excludeUid?.trim() || '';
+  const localCache = getLocalUniqueCache();
+
+  // 1. Check Email Uniqueness
+  if (params.email && params.email.trim() && !params.email.startsWith('phone_')) {
+    const emailValidation = validateEmailFormat(params.email);
+    if (!emailValidation.valid) {
+      return { isUnique: false, conflictField: 'email', message: emailValidation.message };
+    }
+    const normEmail = emailValidation.normalized;
+    const emailDocId = getEmailDocKey(normEmail);
+
+    // Check Local Cache
+    const cachedEmailRec = localCache[emailDocId];
+    if (cachedEmailRec && cachedEmailRec.uid && cachedEmailRec.uid !== excludeUid) {
+      return {
+        isUnique: false,
+        conflictField: 'email',
+        message: `البريد الإلكتروني (${normEmail}) مسجل مسبقاً لحساب آخر في المنصة. لا يُسمح باستخدام نفس البريد لأكثر من حساب.`
+      };
+    }
+
+    // Check Firestore uniqueIdentifiers
+    try {
+      const snap = await getDoc(doc(db, 'uniqueIdentifiers', emailDocId));
+      if (snap.exists()) {
+        const data = snap.data() as UniqueIdentifierRecord;
+        saveLocalUniqueRecord(data);
+        if (data.uid && data.uid !== excludeUid) {
+          return {
+            isUnique: false,
+            conflictField: 'email',
+            message: `البريد الإلكتروني (${normEmail}) مسجل مسبقاً لحساب آخر في المنصة. لا يُسمح باستخدام نفس البريد لأكثر من حساب.`
+          };
+        }
+      }
+    } catch (e) {}
+
+    // Check Firestore userProfiles query
+    try {
+      const q = query(collection(db, 'userProfiles'), where('email', '==', normEmail));
+      const snap = await getDocs(q);
+      for (const d of snap.docs) {
+        if (d.id !== excludeUid) {
+          return {
+            isUnique: false,
+            conflictField: 'email',
+            message: `البريد الإلكتروني (${normEmail}) مرتبط بحساب آخر مسجل مسبقاً في المنصة.`
+          };
+        }
+      }
+    } catch (e) {}
+
+    // Check Firebase Auth signInMethods if creating a new account (no excludeUid)
+    if (!excludeUid) {
+      try {
+        const methods = await fetchSignInMethodsForEmail(auth, normEmail);
+        if (methods && methods.length > 0) {
+          return {
+            isUnique: false,
+            conflictField: 'email',
+            message: `البريد الإلكتروني (${normEmail}) مسجل مسبقاً في المنصة، يرجى تسجيل الدخول به أو استخدام بريد مختلف.`
+          };
+        }
+      } catch (e) {}
+    }
+  }
+
+  // 2. Check Phone Number Uniqueness
+  if (params.phone && params.phone.trim()) {
+    const phoneValidation = validateYemenPhoneFormat(params.phone);
+    if (!phoneValidation.valid) {
+      return { isUnique: false, conflictField: 'phone', message: phoneValidation.message };
+    }
+    const normPhone = phoneValidation.normalized;
+    const phoneDocId = getPhoneDocKey(normPhone);
+
+    // Check Local Cache
+    if (phoneDocId) {
+      const cachedPhoneRec = localCache[phoneDocId];
+      if (cachedPhoneRec && cachedPhoneRec.uid && cachedPhoneRec.uid !== excludeUid) {
+        return {
+          isUnique: false,
+          conflictField: 'phone',
+          message: `رقم الهاتف (${normPhone}) مسجل مسبقاً لحساب آخر في المنصة. لا يُسمح بالتسجيل بنفس رقم الهاتف لأكثر من حساب.`
+        };
+      }
+
+      // Check Firestore uniqueIdentifiers
+      try {
+        const snap = await getDoc(doc(db, 'uniqueIdentifiers', phoneDocId));
+        if (snap.exists()) {
+          const data = snap.data() as UniqueIdentifierRecord;
+          saveLocalUniqueRecord(data);
+          if (data.uid && data.uid !== excludeUid) {
+            return {
+              isUnique: false,
+              conflictField: 'phone',
+              message: `رقم الهاتف (${normPhone}) مسجل مسبقاً لحساب آخر في المنصة. لا يُسمح بالتسجيل بنفس رقم الهاتف لأكثر من حساب.`
+            };
+          }
+        }
+      } catch (e) {}
+    }
+
+    // Check Firestore userProfiles query for phone
+    try {
+      const q = query(collection(db, 'userProfiles'), where('phone', '==', normPhone));
+      const snap = await getDocs(q);
+      for (const d of snap.docs) {
+        if (d.id !== excludeUid) {
+          return {
+            isUnique: false,
+            conflictField: 'phone',
+            message: `رقم الهاتف (${normPhone}) مرتبط بحساب مستخدم آخر مسجل مسبقاً.`
+          };
+        }
+      }
+    } catch (e) {}
+
+    // Check Firebase Auth synthetic phone email if creating a new account
+    if (!excludeUid) {
+      try {
+        const synthEmail = phoneToAuthEmail(normPhone);
+        const methods = await fetchSignInMethodsForEmail(auth, synthEmail);
+        if (methods && methods.length > 0) {
+          return {
+            isUnique: false,
+            conflictField: 'phone',
+            message: `رقم الهاتف (${normPhone}) مسجل مسبقاً في المنصة، يرجى الانتقال إلى تبويب "تسجيل الدخول".`
+          };
+        }
+      } catch (e) {}
+    }
+  }
+
+  // 3. Check Academic Registration Number (رقم القيد الأكاديمي) Uniqueness
+  if (params.academicStudentNumber && params.academicStudentNumber.trim()) {
+    const normAcad = normalizeAcademicId(params.academicStudentNumber);
+    const acadDocId = getAcademicIdDocKey(params.academicStudentNumber);
+
+    if (normAcad.length < 3) {
+      return {
+        isUnique: false,
+        conflictField: 'academic_id',
+        message: 'يرجى إدخال رقم قيد أكاديمي / جامعي صحيح (3 خانات على الأقل).'
+      };
+    }
+
+    // Check Local Cache
+    const cachedAcadRec = localCache[acadDocId];
+    if (cachedAcadRec && cachedAcadRec.uid && cachedAcadRec.uid !== excludeUid) {
+      return {
+        isUnique: false,
+        conflictField: 'academic_id',
+        message: `رقم القيد الأكاديمي (${normAcad}) مسجل مسبقاً لطالب آخر في المنصة. لا يمكن استخدام نفس رقم القيد لأكثر من حساب.`
+      };
+    }
+
+    // Check Local Enrollments list
+    try {
+      const rawEnr = localStorage.getItem('umed_enrollments_all');
+      if (rawEnr) {
+        const list = JSON.parse(rawEnr) as Array<{ uid: string; academicStudentNumber?: string; status?: string }>;
+        const duplicateLocal = list.find(
+          (e) =>
+            e.uid &&
+            e.uid !== excludeUid &&
+            e.academicStudentNumber &&
+            getAcademicIdDocKey(e.academicStudentNumber) === acadDocId
+        );
+        if (duplicateLocal) {
+          return {
+            isUnique: false,
+            conflictField: 'academic_id',
+            message: `رقم القيد الأكاديمي (${normAcad}) مسجل مسبقاً لطالب آخر في المنصة. لا يُسمح بتكرار رقم القيد.`
+          };
+        }
+      }
+    } catch (e) {}
+
+    // Check Firestore uniqueIdentifiers
+    try {
+      const snap = await getDoc(doc(db, 'uniqueIdentifiers', acadDocId));
+      if (snap.exists()) {
+        const data = snap.data() as UniqueIdentifierRecord;
+        saveLocalUniqueRecord(data);
+        if (data.uid && data.uid !== excludeUid) {
+          return {
+            isUnique: false,
+            conflictField: 'academic_id',
+            message: `رقم القيد الأكاديمي (${normAcad}) مسجل مسبقاً لطالب آخر في المنصة. لا يمكن استخدام نفس رقم القيد لأكثر من حساب.`
+          };
+        }
+      }
+    } catch (e) {}
+
+    // Check Firestore studentEnrollments & userProfiles
+    try {
+      const qEnr = query(collection(db, 'studentEnrollments'), where('academicStudentNumber', '==', normAcad));
+      const snapEnr = await getDocs(qEnr);
+      for (const d of snapEnr.docs) {
+        const data = d.data();
+        if (data.uid && data.uid !== excludeUid) {
+          return {
+            isUnique: false,
+            conflictField: 'academic_id',
+            message: `رقم القيد الأكاديمي (${normAcad}) مستخدم بالفعل في سجل قيد طالب آخر.`
+          };
+        }
+      }
+    } catch (e) {}
+  }
+
+  return { isUnique: true };
+}
+
+/**
+ * Reserves Email, Phone Number, and Academic Registration Number in Firestore `uniqueIdentifiers`
+ * so no other account can claim them.
+ */
+export async function reserveUniqueIdentifiers(params: {
+  uid: string;
+  email?: string;
+  phone?: string;
+  academicStudentNumber?: string;
+  universityId?: string;
+}): Promise<void> {
+  if (!params.uid) return;
+  const nowIso = new Date().toISOString();
+  const recordsToWrite: UniqueIdentifierRecord[] = [];
+
+  if (params.email && params.email.trim() && !params.email.startsWith('phone_')) {
+    const normEmail = normalizeEmail(params.email);
+    recordsToWrite.push({
+      id: getEmailDocKey(normEmail),
+      type: 'email',
+      value: params.email.trim(),
+      normalizedValue: normEmail,
+      uid: params.uid,
+      createdAt: nowIso,
+      updatedAt: nowIso
+    });
+  }
+
+  if (params.phone && params.phone.trim()) {
+    const normPhone = normalizeYemenPhone(params.phone);
+    const phoneKey = getPhoneDocKey(normPhone);
+    if (normPhone && phoneKey) {
+      recordsToWrite.push({
+        id: phoneKey,
+        type: 'phone',
+        value: normPhone,
+        normalizedValue: normPhone,
+        uid: params.uid,
+        createdAt: nowIso,
+        updatedAt: nowIso
+      });
+    }
+  }
+
+  if (params.academicStudentNumber && params.academicStudentNumber.trim()) {
+    const normAcad = normalizeAcademicId(params.academicStudentNumber);
+    const acadKey = getAcademicIdDocKey(params.academicStudentNumber);
+    if (normAcad && acadKey) {
+      recordsToWrite.push({
+        id: acadKey,
+        type: 'academic_id',
+        value: params.academicStudentNumber.trim(),
+        normalizedValue: normAcad,
+        uid: params.uid,
+        ...(params.universityId ? { universityId: params.universityId } : {}),
+        createdAt: nowIso,
+        updatedAt: nowIso
+      });
+    }
+  }
+
+  for (const rec of recordsToWrite) {
+    saveLocalUniqueRecord(rec);
+    try {
+      await setDoc(doc(db, 'uniqueIdentifiers', rec.id), cleanFirestoreData(rec), { merge: true });
+    } catch (e) {}
+  }
+}
+
+export async function releaseAcademicIdentifier(academicStudentNumber?: string): Promise<void> {
+  if (!academicStudentNumber || !academicStudentNumber.trim()) return;
+  const acadKey = getAcademicIdDocKey(academicStudentNumber);
+  removeLocalUniqueRecord(acadKey);
+  try {
+    await deleteDoc(doc(db, 'uniqueIdentifiers', acadKey));
+  } catch (e) {}
+}
+
+// ---------------------------------------------------------------------------
+// 5C. Account Verification Engine (Email Link + Phone & Email 6-Digit OTP)
+// ---------------------------------------------------------------------------
+
+function generateSixDigitOtp(): string {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+export async function issueVerificationChallenge(
+  user: User,
+  params: { email?: string; phone?: string }
+): Promise<VerificationChallenge> {
+  const realEmail =
+    params.email && !params.email.startsWith('phone_')
+      ? normalizeEmail(params.email)
+      : user.email && !user.email.startsWith('phone_')
+      ? normalizeEmail(user.email)
+      : undefined;
+
+  const normPhone = params.phone ? normalizeYemenPhone(params.phone) : undefined;
+  let firebaseEmailLinkSent = false;
+
+  // Trigger real Firebase Email Verification link if user has a real email address
+  if (realEmail && user && !user.emailVerified) {
+    try {
+      await sendEmailVerification(user);
+      firebaseEmailLinkSent = true;
+    } catch (e) {
+      console.warn('Firebase sendEmailVerification info:', e);
+    }
+  }
+
+  const phoneCode = normPhone ? generateSixDigitOtp() : undefined;
+  const emailCode = realEmail ? generateSixDigitOtp() : undefined;
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 15 * 60 * 1000).toISOString();
+
+  const challenge: VerificationChallenge = cleanFirestoreData({
+    uid: user.uid,
+    ...(realEmail ? { email: realEmail, emailCode } : {}),
+    ...(normPhone ? { phone: normPhone, phoneCode } : {}),
+    emailVerified: realEmail ? Boolean(user.emailVerified) : true,
+    phoneVerified: normPhone ? false : true,
+    firebaseEmailLinkSent,
+    expiresAt,
+    createdAt: now.toISOString()
+  });
+
+  try {
+    localStorage.setItem(`umed_verification_${user.uid}`, JSON.stringify(challenge));
+  } catch (e) {}
+
+  try {
+    await setDoc(doc(db, 'verificationChallenges', user.uid), cleanFirestoreData(challenge), { merge: true });
+  } catch (e) {}
+
+  return challenge;
+}
+
+export async function getVerificationChallenge(uid: string): Promise<VerificationChallenge | null> {
+  if (!uid) return null;
+  try {
+    const cached = localStorage.getItem(`umed_verification_${uid}`);
+    if (cached) return JSON.parse(cached) as VerificationChallenge;
+  } catch (e) {}
+
+  try {
+    const snap = await getDoc(doc(db, 'verificationChallenges', uid));
+    if (snap.exists()) {
+      const ch = snap.data() as VerificationChallenge;
+      try {
+        localStorage.setItem(`umed_verification_${uid}`, JSON.stringify(ch));
+      } catch (e) {}
+      return ch;
+    }
+  } catch (e) {}
+
+  return null;
+}
+
+export async function verifyAccountChallenge(
+  user: User,
+  params: {
+    phoneCodeInput?: string;
+    emailCodeInput?: string;
+    checkFirebaseEmailLink?: boolean;
+  }
+): Promise<{
+  verified: boolean;
+  emailVerified: boolean;
+  phoneVerified: boolean;
+  challenge: VerificationChallenge | null;
+  message: string;
+}> {
+  let currentChallenge = await getVerificationChallenge(user.uid);
+  if (!currentChallenge) {
+    return {
+      verified: true,
+      emailVerified: true,
+      phoneVerified: true,
+      challenge: null,
+      message: 'تم التحقق من الحساب بنجاح ✓'
+    };
+  }
+
+  let emailVerified = currentChallenge.emailVerified;
+  let phoneVerified = currentChallenge.phoneVerified;
+
+  // 1. Check if user clicked the official Firebase verification link in their email
+  if (params.checkFirebaseEmailLink || !emailVerified) {
+    try {
+      await user.reload();
+      if (auth.currentUser?.emailVerified || user.emailVerified) {
+        emailVerified = true;
+      }
+    } catch (e) {}
+  }
+
+  // 2. Check Email OTP Code if entered
+  if (!emailVerified && params.emailCodeInput && currentChallenge.emailCode) {
+    if (params.emailCodeInput.trim() === currentChallenge.emailCode.trim()) {
+      emailVerified = true;
+    } else if (!params.checkFirebaseEmailLink) {
+      throw new Error('رمز التحقق من البريد الإلكتروني غير صحيح. يرجى التأكد من الرمز المكون من 6 أرقام.');
+    }
+  }
+
+  // 3. Check Phone OTP Code if entered
+  if (!phoneVerified && currentChallenge.phoneCode) {
+    if (!params.phoneCodeInput || !params.phoneCodeInput.trim()) {
+      if (!params.checkFirebaseEmailLink) {
+        throw new Error('يرجى إدخال رمز التحقق المرسل لرقم الهاتف المكون من 6 أرقام.');
+      }
+    } else if (params.phoneCodeInput.trim() === currentChallenge.phoneCode.trim()) {
+      phoneVerified = true;
+    } else {
+      throw new Error('رمز التحقق من رقم الهاتف غير صحيح. يرجى التأكد من الأرقام الستة.');
+    }
+  }
+
+  const updatedChallenge: VerificationChallenge = cleanFirestoreData({
+    ...currentChallenge,
+    emailVerified,
+    phoneVerified
+  });
+
+  try {
+    localStorage.setItem(`umed_verification_${user.uid}`, JSON.stringify(updatedChallenge));
+  } catch (e) {}
+
+  try {
+    await setDoc(doc(db, 'verificationChallenges', user.uid), cleanFirestoreData(updatedChallenge), { merge: true });
+  } catch (e) {}
+
+  const allVerified = emailVerified && phoneVerified;
+
+  if (allVerified) {
+    try {
+      localStorage.removeItem(`umed_verification_${user.uid}`);
+    } catch (e) {}
+  }
+
+  return {
+    verified: allVerified,
+    emailVerified,
+    phoneVerified,
+    challenge: allVerified ? null : updatedChallenge,
+    message: allVerified
+      ? 'تم التحقق من رقم الهاتف والبريد الإلكتروني وتوثيق الحساب بنجاح ✓'
+      : 'تم تحديث حالة التحقق، يرجى استكمال الخطوة المتبقية.'
+  };
+}
+
 // 6. Authentication Service Functions
 export async function signInWithGoogle(): Promise<User> {
   const result = await signInWithPopup(auth, googleProvider);
@@ -196,13 +784,17 @@ export async function signInWithGoogle(): Promise<User> {
 export async function signInWithEmail(emailOrPhone: string, pass: string): Promise<User> {
   const targetEmail = isPhoneIdentifier(emailOrPhone)
     ? phoneToAuthEmail(emailOrPhone)
-    : emailOrPhone.trim();
+    : emailOrPhone.trim().toLowerCase();
   const result = await signInWithEmailAndPassword(auth, targetEmail, pass);
   return result.user;
 }
 
 export async function signUpWithEmail(email: string, pass: string): Promise<User> {
-  const result = await createUserWithEmailAndPassword(auth, email.trim(), pass);
+  const emailCheck = validateEmailFormat(email);
+  if (!emailCheck.valid) {
+    throw new Error(emailCheck.message || 'البريد الإلكتروني غير صحيح');
+  }
+  const result = await createUserWithEmailAndPassword(auth, emailCheck.normalized, pass);
   return result.user;
 }
 
@@ -213,13 +805,13 @@ export async function signInWithPhone(phone: string, pass: string): Promise<User
 }
 
 export async function signUpWithPhone(phone: string, pass: string): Promise<{ user: User; normalizedPhone: string }> {
-  const normalizedPhone = normalizeYemenPhone(phone);
-  if (!normalizedPhone) {
-    throw new Error('INVALID_PHONE_NUMBER');
+  const check = validateYemenPhoneFormat(phone);
+  if (!check.valid || !check.normalized) {
+    throw new Error(check.message || 'INVALID_PHONE_NUMBER');
   }
-  const authEmail = phoneToAuthEmail(normalizedPhone);
+  const authEmail = phoneToAuthEmail(check.normalized);
   const result = await createUserWithEmailAndPassword(auth, authEmail, pass);
-  return { user: result.user, normalizedPhone };
+  return { user: result.user, normalizedPhone: check.normalized };
 }
 
 export async function logOut(): Promise<void> {
@@ -336,7 +928,14 @@ export async function fetchUserProfile(uid: string): Promise<UserProfile | null>
     const profileRef = doc(db, 'userProfiles', uid);
     const snap = await getDoc(profileRef);
     if (snap.exists()) {
-      return snap.data() as UserProfile;
+      const prof = snap.data() as UserProfile;
+      reserveUniqueIdentifiers({
+        uid: prof.uid,
+        email: prof.email,
+        phone: prof.phone,
+        academicStudentNumber: prof.academicStudentNumber
+      }).catch(() => {});
+      return prof;
     }
     return null;
   } catch (err) {
@@ -349,6 +948,12 @@ export async function saveUserProfile(profile: UserProfile): Promise<void> {
   try {
     const profileRef = doc(db, 'userProfiles', profile.uid);
     await setDoc(profileRef, cleanFirestoreData(profile), { merge: true });
+    await reserveUniqueIdentifiers({
+      uid: profile.uid,
+      email: profile.email,
+      phone: profile.phone,
+      academicStudentNumber: profile.academicStudentNumber
+    });
   } catch (err) {
     console.warn('Could not save user profile to Firestore:', err);
   }

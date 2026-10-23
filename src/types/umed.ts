@@ -27,10 +27,39 @@ export interface UserProfile {
   displayNameArabic: string;
   displayNameEnglish?: string;
   phone?: string;
+  academicStudentNumber?: string;
   avatarUrl?: string;
   isActive: boolean;
+  emailVerified?: boolean;
+  phoneVerified?: boolean;
+  isVerified?: boolean;
+  verifiedAt?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface UniqueIdentifierRecord {
+  id: string; // e.g. 'email_...', 'phone_...', 'acad_...'
+  type: 'email' | 'phone' | 'academic_id';
+  value: string;
+  normalizedValue: string;
+  uid: string;
+  universityId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface VerificationChallenge {
+  uid: string;
+  email?: string;
+  phone?: string;
+  emailCode?: string;
+  phoneCode?: string;
+  emailVerified: boolean;
+  phoneVerified: boolean;
+  firebaseEmailLinkSent?: boolean;
+  expiresAt: string;
+  createdAt: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -169,6 +198,7 @@ export interface StudentEnrollment {
   id: string;
   uid: string;
   studentEmail?: string;
+  studentPhone?: string;
   studentNameArabic?: string;
   studentNameEnglish?: string;
   academicStudentNumber?: string;
