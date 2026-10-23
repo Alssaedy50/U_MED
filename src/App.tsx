@@ -35,6 +35,7 @@ import { useAuth } from './context/AuthContext.tsx';
 import { UserRole, UserRoleDoc, AuditLog } from './types/umed.ts';
 import { fetchMergedAuditLogs, fetchAllUserRoles, assignUserRole } from './lib/firebase.ts';
 import StudentDashboard from './components/student/StudentDashboard.tsx';
+import StudentProfile from './components/student/StudentProfile.tsx';
 
 // Code-splitting admin heavy modules to minimize student initial bundle size
 const AcademicStructureManager = React.lazy(() => import('./components/admin/AcademicStructureManager.tsx'));
@@ -45,6 +46,7 @@ const BackupRestoreConsole = React.lazy(() => import('./components/admin/BackupR
 
 type ActiveTabType =
   | 'student_dashboard'
+  | 'student_profile'
   | 'academic'
   | 'content_manager'
   | 'assessments_manager'
@@ -117,7 +119,7 @@ export default function App() {
 
   // Ensure students cannot stay on an admin tab
   useEffect(() => {
-    if (!isAuthorizedAdmin && activeTab !== 'student_dashboard' && activeTab !== 'auth') {
+    if (!isAuthorizedAdmin && activeTab !== 'student_dashboard' && activeTab !== 'student_profile' && activeTab !== 'auth') {
       setActiveTab('student_dashboard');
     }
   }, [isAuthorizedAdmin, activeTab]);
@@ -360,6 +362,19 @@ export default function App() {
                 <span>{isAuthorizedAdmin ? 'معاينة لوحة الطالب' : 'لوحة الطالب الطبية'}</span>
               </button>
 
+              {/* Student Profile & Progress Toggle in Navigation Bar */}
+              <button
+                onClick={() => setActiveTab('student_profile')}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+                  activeTab === 'student_profile'
+                    ? 'bg-gradient-to-r from-teal-600 to-emerald-600 text-white shadow-md'
+                    : 'text-slate-300 hover:text-white bg-slate-800/60'
+                }`}
+              >
+                <UserCheck className="w-3.5 h-3.5" />
+                <span>الملف الأكاديمي والتقدم</span>
+              </button>
+
               {/* ADMIN-ONLY TABS */}
               {isAuthorizedAdmin && (
                 <>
@@ -588,6 +603,15 @@ export default function App() {
                 uid={user.uid}
                 userEmail={user.email || ''}
                 displayNameArabic={userProfile?.displayNameArabic || user.displayName || 'طالب كلية الطب البشري'}
+              />
+            )}
+
+            {activeTab === 'student_profile' && (
+              <StudentProfile
+                uid={user.uid}
+                userEmail={user.email || ''}
+                displayNameArabic={userProfile?.displayNameArabic || user.displayName || 'طالب كلية الطب البشري'}
+                onNavigateTab={() => setActiveTab('student_dashboard')}
               />
             )}
 

@@ -39,6 +39,7 @@ import {
 import RegisterEnrollment from './RegisterEnrollment.tsx';
 import StudentMedicalLibrary from '../library/StudentMedicalLibrary.tsx';
 import StudentAssessmentList from '../assessment/StudentAssessmentList.tsx';
+import StudentProfile from './StudentProfile.tsx';
 
 interface StudentDashboardProps {
   uid: string;
@@ -480,117 +481,13 @@ export default function StudentDashboard({
 
       {/* TAB: STUDENT PROFILE & ACADEMIC CHANGE REQUEST */}
       {activeTab === 'profile' && (
-        <div className="max-w-2xl mx-auto bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6 text-xs">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-            <h3 className="font-bold text-white text-base flex items-center gap-2">
-              <User className="w-4 h-4 text-teal-400" />
-              <span>الملف الأكاديمي للطالب</span>
-            </h3>
-            <button
-              onClick={() => setActiveTab('study')}
-              className="text-teal-400 hover:text-teal-300 flex items-center gap-1 font-semibold"
-            >
-              <span>العودة للمقررات</span>
-              <ChevronRight className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          <div className="space-y-3 bg-slate-950 p-4 rounded-xl border border-slate-800">
-            <div className="flex justify-between items-center pb-2 border-b border-slate-800/80">
-              <span className="text-slate-400">الاسم الكامل:</span>
-              <strong className="text-white">{displayNameArabic}</strong>
-            </div>
-            <div className="flex justify-between items-center pb-2 border-b border-slate-800/80">
-              <span className="text-slate-400">البريد الإلكتروني:</span>
-              <span className="font-mono text-teal-300" dir="ltr">{userEmail}</span>
-            </div>
-            <div className="flex justify-between items-center pb-2 border-b border-slate-800/80">
-              <span className="text-slate-400">الرقم الأكاديمي الجامعي:</span>
-              <span className="font-mono text-white font-bold" dir="ltr">{enrollment.academicStudentNumber}</span>
-            </div>
-            <div className="flex justify-between items-center pb-2 border-b border-slate-800/80">
-              <span className="text-slate-400">المستوى الدراسي المقيد به:</span>
-              <span className="text-amber-400 font-bold">
-                {isInternship ? 'سنة الامتياز (تدريب سريري)' : `المستوى ${enrollment.currentStudyLevelId.replace('lvl-', '')}`}
-              </span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-slate-400">العام الأكاديمي:</span>
-              <span className="font-mono text-slate-300" dir="ltr">{enrollment.academicYear}</span>
-            </div>
-          </div>
-
-          <div className="p-4 bg-slate-950 rounded-xl border border-amber-500/30 space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <h4 className="font-bold text-amber-300 text-sm">طلب تعديل بيانات أكاديمية</h4>
-                <p className="text-slate-400 text-[11px] mt-0.5">
-                  في حال ترفيع مستواك الدراسي أو تصحيح الرقم الجامعي، يمكنك رفع طلب رسمي للإدارة.
-                </p>
-              </div>
-              <button
-                onClick={() => setShowChangeModal(!showChangeModal)}
-                className="px-3 py-1.5 rounded-lg bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 border border-amber-500/40 font-semibold"
-              >
-                {showChangeModal ? 'إلغاء' : 'تقديم طلب تعديل'}
-              </button>
-            </div>
-
-            {showChangeModal && (
-              <form onSubmit={handleAcademicChangeSubmit} className="pt-3 border-t border-slate-800/80 space-y-3">
-                <div>
-                  <label className="block text-slate-300 mb-1 font-semibold">المستوى المطلوب الترفيع إليه:</label>
-                  <select
-                    value={requestedLevelId}
-                    onChange={(e) => setRequestedLevelId(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white"
-                  >
-                    <option value="">-- اختر المستوى إن وجد --</option>
-                    {studyLevels.map((lvl) => (
-                      <option key={lvl.id} value={lvl.id}>
-                        {lvl.stageType === 'internship' ? 'سنة الامتياز' : lvl.titleArabic}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-slate-300 mb-1 font-semibold">الرقم الأكاديمي المصحح (اختياري):</label>
-                  <input
-                    type="text"
-                    value={requestedNumber}
-                    onChange={(e) => setRequestedNumber(e.target.value)}
-                    placeholder="مثال: MED-2022-0451"
-                    className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white font-mono text-left"
-                    dir="ltr"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-slate-300 mb-1 font-semibold">مبرر وسبب طلب التعديل:</label>
-                  <textarea
-                    required
-                    rows={2}
-                    value={changeReason}
-                    onChange={(e) => setChangeReason(e.target.value)}
-                    placeholder="مثال: اجتياز المستوى بنجاح والانتقال للمستوى التالي..."
-                    className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={changeLoading}
-                  className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold transition-colors flex items-center justify-center gap-1.5"
-                >
-                  <Send className="w-3.5 h-3.5" />
-                  <span>{changeLoading ? 'جارٍ الإرسال...' : 'إرسال طلب التعديل للإدارة'}</span>
-                </button>
-              </form>
-            )}
-          </div>
-
-        </div>
+        <StudentProfile
+          uid={uid}
+          userEmail={userEmail}
+          displayNameArabic={displayNameArabic}
+          initialEnrollment={enrollment}
+          onNavigateTab={(tab) => setActiveTab(tab)}
+        />
       )}
 
     </div>
