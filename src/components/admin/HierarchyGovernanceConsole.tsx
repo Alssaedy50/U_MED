@@ -1476,10 +1476,24 @@ export default function HierarchyGovernanceConsole({
                             type="button"
                             onClick={async () => {
                               try {
-                                const resolved = await resolveResourceFileUrl(n.attachmentUrl!);
-                                if (resolved) {
+                                const resolved = await resolveResourceFileUrl({
+                                  id: n.id,
+                                  title: n.attachmentLabel || n.title,
+                                  resourceType: n.attachmentType || 'pdf',
+                                  url: n.attachmentUrl!,
+                                  universityId: n.universityId,
+                                  programId: 'prog-mbbs',
+                                  curriculumVersionId: 'cur-dar-2024',
+                                  studyLevelId: n.studyLevelId,
+                                  sectionType: 'general',
+                                  status: 'published',
+                                  createdBy: n.authorUid,
+                                  createdAt: n.createdAt,
+                                  updatedAt: n.createdAt
+                                });
+                                if (resolved?.downloadUrl) {
                                   const a = document.createElement('a');
-                                  a.href = resolved;
+                                  a.href = resolved.downloadUrl;
                                   a.download = n.attachmentLabel || 'umed-attachment';
                                   a.target = '_blank';
                                   document.body.appendChild(a);

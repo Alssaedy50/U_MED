@@ -1,23 +1,23 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * UMED PWA Service Worker - Caching App Shell and Offline Handling
+ * UMED PWA Service Worker - Network-First with Offline Fallback
  */
 
-const CACHE_NAME = 'umed-v1.0.0';
-const ASSETS_TO_CACHE = [
+const CACHE_NAME = 'umed-v2.1.0';
+const STATIC_SHELL = [
   '/',
   '/index.html',
   '/manifest.json'
 ];
 
 self.addEventListener('install', (event) => {
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS_TO_CACHE);
+      return cache.addAll(STATIC_SHELL).catch(() => {});
     })
   );
-  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
@@ -30,36 +30,48 @@ self.addEventListener('activate', (event) => {
           }
         })
       );
-    })
+    }).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
 self.addEventListener('fetch', (event) => {
-  // Skip non-GET and API calls from service worker cache
-  if (event.request.method !== 'GET' || event.request.url.includes('/api/')) {
+  const req = event.request;
+  const url = new URL(req.url);
+
+  // Skip non-GET requests, external APIs, Firebase/Firestore, and Vite dev server internals
+  if (
+    req.method !== 'GET' ||
+    url.origin !== self.location.origin ||
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/src/') ||
+    url.pathname.startsWith('/node_modules/') ||
+    url.pathname.startsWith('/@')
+  ) {
     return;
   }
 
+  // Network-First strategy: Always fetch latest version when online, fallback to cache only when offline
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        // Fetch fresh copy in background to update cache
-        fetch(event.request).then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            const responseClone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseClone));
-          }
-        }).catch(() => {});
-        return cachedResponse;
-      }
-
-      return fetch(event.request).catch(() => {
-        // Fallback for document requests when offline
-        if (event.request.mode === 'navigate') {
-          return caches.match('/index.html');
+    fetch(req)
+      .then((networkResponse) => {
+        if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
+          const responseClone = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(req, responseClone).catch(() => {});
+          });
         }
-      });
-    })
+        return networkResponse;
+      })
+      .catch(() => {
+        return caches.match(req).then((cachedResponse) => {
+          if (cachedResponse) {
+            return cachedResponse;
+          }
+          if (req.mode === 'navigate') {
+            return caches.match('/index.html');
+          }
+          return new Response('', { status: 504, statusText: 'Offline' });
+        });
+      })
   );
 });

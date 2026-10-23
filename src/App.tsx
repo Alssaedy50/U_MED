@@ -40,7 +40,8 @@ import {
   Send,
   Trash2,
   Archive,
-  ShieldAlert
+  ShieldAlert,
+  GraduationCap
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext.tsx';
 import { UserRole, AuditLog, StudentEnrollment } from './types/umed.ts';

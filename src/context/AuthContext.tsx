@@ -128,7 +128,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           email: currentUser.email || '',
           role: 'platform_owner',
           assignedBy: 'SYSTEM_BOOTSTRAP',
-          updatedAt: new Date().toISOString()
+          assignedAt: new Date().toISOString()
         });
       }
     } catch (e) {}
@@ -196,7 +196,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               email: currentUser.email || '',
               role: 'platform_owner',
               assignedBy: 'SYSTEM_BOOTSTRAP',
-              updatedAt: new Date().toISOString()
+              assignedAt: new Date().toISOString()
             });
           }
         } catch (e) {}
@@ -589,13 +589,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         : undefined;
     const method: 'email' | 'phone' | 'both' =
       pendingVerification?.verificationMethod ||
-      userProfile?.registrationMethod === 'phone'
+      (userProfile?.registrationMethod === 'phone'
         ? 'phone'
         : userProfile?.registrationMethod === 'email'
         ? 'email'
         : userProfile?.phone && !realEmail
         ? 'phone'
-        : 'email';
+        : 'email');
 
     const ch = await issueVerificationChallenge(user, {
       email: method === 'email' || method === 'both' ? realEmail : undefined,
