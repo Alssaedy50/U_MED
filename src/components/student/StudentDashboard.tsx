@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  * 
- * UMED Mobile-First Student Dashboard & Academic Profile
+ * UMED Mobile-First Student Dashboard
  * Optimized for common Android phone viewports (360px–412px) with Arabic RTL
  */
 
@@ -10,48 +10,44 @@ import React, { useState, useEffect } from 'react';
 import { 
   BookOpen, 
   Clock, 
-  CheckCircle2, 
   AlertCircle, 
   FileText, 
   ChevronRight, 
   Sparkles,
   RefreshCw,
-  User,
   Stethoscope,
-  Send,
   Trophy
 } from 'lucide-react';
 import { 
   StudentEnrollment, 
   StudyPeriod, 
-  CourseOffering, 
-  StudyLevel 
+  CourseOffering
 } from '../../types/umed.ts';
 import { 
-  fetchStudentEnrollment, 
-  submitAcademicChangeRequest 
+  fetchStudentEnrollment
 } from '../../services/enrollmentService.ts';
 import { 
   fetchStudyPeriods, 
-  fetchCourseOfferings, 
-  fetchStudyLevels
+  fetchCourseOfferings
 } from '../../services/academicService.ts';
 import RegisterEnrollment from './RegisterEnrollment.tsx';
 import StudentMedicalLibrary from '../library/StudentMedicalLibrary.tsx';
 import StudentAssessmentList from '../assessment/StudentAssessmentList.tsx';
-import StudentProfile from './StudentProfile.tsx';
 
 interface StudentDashboardProps {
   uid: string;
   userEmail: string;
   displayNameArabic: string;
+  activeSection?: 'study' | 'library' | 'assessments';
+  onSelectSection?: (section: 'study' | 'library' | 'assessments' | 'profile') => void;
   onEnrollmentStatusChange?: (enr: StudentEnrollment | null) => void;
 }
 
 export default function StudentDashboard({
   uid,
-  userEmail,
   displayNameArabic,
+  activeSection = 'study',
+  onSelectSection,
   onEnrollmentStatusChange
 }: StudentDashboardProps) {
   const [enrollment, setEnrollment] = useState<StudentEnrollment | null>(() => {
@@ -62,21 +58,24 @@ export default function StudentDashboard({
     return null;
   });
   const [loading, setLoading] = useState<boolean>(true);
-  const [activeTab, setActiveTab] = useState<'study' | 'library' | 'assessments' | 'profile'>('study');
+  const [internalTab, setInternalTab] = useState<'study' | 'library' | 'assessments'>(activeSection);
+
+  useEffect(() => {
+    setInternalTab(activeSection);
+  }, [activeSection]);
+
+  const switchSection = (sec: 'study' | 'library' | 'assessments' | 'profile') => {
+    if (onSelectSection) {
+      onSelectSection(sec);
+    } else if (sec !== 'profile') {
+      setInternalTab(sec);
+    }
+  };
 
   // Academic Content State
   const [studyPeriods, setStudyPeriods] = useState<StudyPeriod[]>([]);
   const [selectedPeriod, setSelectedPeriod] = useState<StudyPeriod | null>(null);
   const [courses, setCourses] = useState<CourseOffering[]>([]);
-  const [studyLevels, setStudyLevels] = useState<StudyLevel[]>([]);
-
-  // Academic Change Request Form State
-  const [showChangeModal, setShowChangeModal] = useState<boolean>(false);
-  const [requestedLevelId, setRequestedLevelId] = useState<string>('');
-  const [requestedNumber, setRequestedNumber] = useState<string>('');
-  const [changeReason, setChangeReason] = useState<string>('');
-  const [changeSuccess, setChangeSuccess] = useState<string | null>(null);
-  const [changeLoading, setChangeLoading] = useState<boolean>(false);
 
   const loadStudentData = async () => {
     setLoading(true);
@@ -88,9 +87,6 @@ export default function StudentDashboard({
       }
 
       if (enr && enr.status === 'approved') {
-        const lvls = await fetchStudyLevels(enr.programId);
-        setStudyLevels(lvls);
-
         const periods = await fetchStudyPeriods(enr.currentStudyLevelId);
         setStudyPeriods(periods);
         if (periods.length > 0) {
@@ -117,30 +113,6 @@ export default function StudentDashboard({
       setCourses([]);
     }
   }, [selectedPeriod]);
-
-  const handleAcademicChangeSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!enrollment) return;
-    setChangeLoading(true);
-    setChangeSuccess(null);
-    try {
-      await submitAcademicChangeRequest({
-        uid,
-        enrollmentId: enrollment.id,
-        universityId: enrollment.universityId,
-        requestedLevelId: requestedLevelId || undefined,
-        requestedAcademicNumber: requestedNumber || undefined,
-        reason: changeReason
-      });
-      setChangeSuccess('تم إرسال طلب التعديل بنجاح لإدارة الكلية.');
-      setShowChangeModal(false);
-      setChangeReason('');
-    } catch (err: any) {
-      console.warn('Change request failed:', err);
-    } finally {
-      setChangeLoading(false);
-    }
-  };
 
   if (loading) {
     return (
@@ -248,16 +220,16 @@ export default function StudentDashboard({
   return (
     <div className="space-y-5">
       
-      {/* 1. Academic Header Badge */}
-      <div className="bg-gradient-to-r from-teal-950/80 via-slate-900 to-indigo-950/80 border border-teal-500/30 rounded-2xl p-4 sm:p-6 shadow-xl">
+      {/* 1. Academic Summary Banner (No duplicate navigation tabs) */}
+      <div className="bg-gradient-to-r from-teal-950/80 via-slate-900 to-indigo-950/80 border border-teal-500/30 rounded-2xl p-4 sm:p-5 shadow-xl">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center text-white shadow-lg shadow-teal-500/20 font-black text-xl flex-shrink-0">
-              <Stethoscope className="w-6 h-6" />
+            <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center text-white shadow-lg shadow-teal-500/20 font-black text-xl flex-shrink-0">
+              <Stethoscope className="w-5 h-5" />
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="font-extrabold text-base sm:text-lg text-white">
+                <h2 className="font-extrabold text-sm sm:text-base text-white">
                   د. {displayNameArabic}
                 </h2>
                 <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
@@ -284,60 +256,10 @@ export default function StudentDashboard({
             </div>
           </div>
         </div>
-
-        {/* Student Navigation Pill Bar */}
-        <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center gap-2 overflow-x-auto no-scrollbar">
-          <button
-            onClick={() => setActiveTab('study')}
-            className={`py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
-              activeTab === 'study' ? 'bg-teal-600 text-white font-bold' : 'text-slate-400 hover:text-white bg-slate-900'
-            }`}
-          >
-            <BookOpen className="w-3.5 h-3.5" />
-            <span>المقررات والبلوكات</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('library')}
-            className={`py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
-              activeTab === 'library' ? 'bg-teal-600 text-white font-bold' : 'text-slate-400 hover:text-white bg-slate-900'
-            }`}
-          >
-            <FileText className="w-3.5 h-3.5" />
-            <span>المكتبة الطبية والشرائح</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('assessments')}
-            className={`py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
-              activeTab === 'assessments' ? 'bg-teal-600 text-white font-bold' : 'text-slate-400 hover:text-white bg-slate-900'
-            }`}
-          >
-            <Trophy className="w-3.5 h-3.5" />
-            <span>الاختبارات والمسابقات</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('profile')}
-            className={`py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
-              activeTab === 'profile' ? 'bg-teal-600 text-white font-bold' : 'text-slate-400 hover:text-white bg-slate-900'
-            }`}
-          >
-            <User className="w-3.5 h-3.5" />
-            <span>الملف الأكاديمي وطلب التعديل</span>
-          </button>
-        </div>
       </div>
 
-      {changeSuccess && (
-        <div className="p-3 bg-emerald-950/40 border border-emerald-800/60 rounded-xl text-emerald-300 text-xs flex items-center gap-2">
-          <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
-          <span>{changeSuccess}</span>
-        </div>
-      )}
-
-      {/* TAB: MEDICAL LIBRARY */}
-      {activeTab === 'library' && (
+      {/* SECTION: MEDICAL LIBRARY */}
+      {internalTab === 'library' && (
         <StudentMedicalLibrary
           universityId={enrollment.universityId}
           programId={enrollment.programId}
@@ -346,8 +268,8 @@ export default function StudentDashboard({
         />
       )}
 
-      {/* TAB: ASSESSMENTS & COMPETITIONS */}
-      {activeTab === 'assessments' && (
+      {/* SECTION: ASSESSMENTS & COMPETITIONS */}
+      {internalTab === 'assessments' && (
         <StudentAssessmentList
           universityId={enrollment.universityId}
           studyLevelId={enrollment.currentStudyLevelId}
@@ -356,8 +278,8 @@ export default function StudentDashboard({
         />
       )}
 
-      {/* TAB: STUDY DASHBOARD (Blocks & Courses) */}
-      {activeTab === 'study' && (
+      {/* SECTION: STUDY DASHBOARD (Blocks & Courses) */}
+      {internalTab === 'study' && (
         <div className="space-y-5">
           
           {studyPeriods.length > 0 && (
@@ -409,7 +331,7 @@ export default function StudentDashboard({
                 </p>
               </div>
               <button
-                onClick={() => setActiveTab('library')}
+                onClick={() => switchSection('library')}
                 className="px-3 py-1.5 rounded-xl bg-teal-600/20 hover:bg-teal-600/30 text-teal-300 border border-teal-500/30 text-xs font-bold transition-colors"
               >
                 فتح المكتبة الرقمية
@@ -420,7 +342,7 @@ export default function StudentDashboard({
               <div className="text-center py-8 text-slate-400 text-xs space-y-3">
                 <p>يمكنك الوصول مباشرة إلى جميع محاضرات وشرائح هذا البلوك عبر المكتبة الطبية الرقمية.</p>
                 <button
-                  onClick={() => setActiveTab('library')}
+                  onClick={() => switchSection('library')}
                   className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold inline-flex items-center gap-1.5"
                 >
                   <FileText className="w-3.5 h-3.5" />
@@ -432,7 +354,7 @@ export default function StudentDashboard({
                 {courses.map((course) => (
                   <div
                     key={course.id}
-                    onClick={() => setActiveTab('library')}
+                    onClick={() => switchSection('library')}
                     className="cursor-pointer p-4 bg-slate-950 rounded-xl border border-slate-800 text-xs space-y-2 hover:border-teal-500/50 transition-colors"
                   >
                     <div className="flex items-center justify-between">
@@ -480,7 +402,7 @@ export default function StudentDashboard({
               </p>
             </div>
             <button
-              onClick={() => setActiveTab('assessments')}
+              onClick={() => switchSection('assessments')}
               className="px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-xs transition-colors shadow-lg"
             >
               الدخول لمركز الاختبارات
@@ -488,17 +410,6 @@ export default function StudentDashboard({
           </div>
 
         </div>
-      )}
-
-      {/* TAB: STUDENT PROFILE & ACADEMIC CHANGE REQUEST */}
-      {activeTab === 'profile' && (
-        <StudentProfile
-          uid={uid}
-          userEmail={userEmail}
-          displayNameArabic={displayNameArabic}
-          initialEnrollment={enrollment}
-          onNavigateTab={(tab) => setActiveTab(tab)}
-        />
       )}
 
     </div>

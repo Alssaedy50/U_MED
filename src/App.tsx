@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  * 
  * UMED — Yemen-First Medical Education Platform
- * Production Application Entry & Role-Isolated Console
+ * Production Application Entry & Role-Isolated Console with RTL Sidebar Navigation
  */
 
 import React, { useState, useEffect } from 'react';
@@ -29,7 +29,10 @@ import {
   Trophy,
   HardDrive,
   Plus,
-  ExternalLink
+  ExternalLink,
+  Settings,
+  Menu,
+  X
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext.tsx';
 import { UserRole, UserRoleDoc, AuditLog, StudentEnrollment } from './types/umed.ts';
@@ -47,6 +50,8 @@ const BackupRestoreConsole = React.lazy(() => import('./components/admin/BackupR
 
 type ActiveTabType =
   | 'student_dashboard'
+  | 'student_library'
+  | 'student_assessments'
   | 'student_profile'
   | 'academic'
   | 'content_manager'
@@ -78,7 +83,23 @@ export default function App() {
     isAuthorizedAdmin
   } = useAuth();
 
-  const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    try {
+      const savedTheme = localStorage.getItem('umed_theme_mode');
+      if (savedTheme === 'light') return false;
+      if (savedTheme === 'dark') return true;
+    } catch (e) {}
+    return true;
+  });
+
+  const toggleThemeMode = (dark: boolean) => {
+    setIsDarkMode(dark);
+    try {
+      localStorage.setItem('umed_theme_mode', dark ? 'dark' : 'light');
+    } catch (e) {}
+  };
+
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
   const [authTab, setAuthTab] = useState<'login' | 'register'>('login');
   const [emailInput, setEmailInput] = useState<string>('');
   const [passwordInput, setPasswordInput] = useState<string>('');
@@ -100,6 +121,7 @@ export default function App() {
 
   const setActiveTab = (tab: ActiveTabType) => {
     setActiveTabState(tab);
+    setSidebarOpen(false);
     try {
       sessionStorage.setItem('umed_active_tab', tab);
     } catch (e) {}
@@ -149,18 +171,30 @@ export default function App() {
     });
   }, [user?.uid, activeTab]);
 
+  const isStudentApproved = studentEnrollment?.status === 'approved';
+
   // Strict Workspace Isolation:
   // 1) When in Student Mode (!isAdminMode), block access to all admin tabs
-  // 2) When in Admin Mode (isAdminMode), default to 'enrollment_queue' if currently on a student tab
+  // 2) Gate approved-only student tabs until enrollment is approved
+  // 3) When in Admin Mode (isAdminMode), default to 'enrollment_queue' if currently on a student tab
   useEffect(() => {
+    const studentTabs: ActiveTabType[] = [
+      'student_dashboard',
+      'student_library',
+      'student_assessments',
+      'student_profile'
+    ];
     if (!isAdminMode) {
-      if (activeTab !== 'student_dashboard' && activeTab !== 'student_profile' && activeTab !== 'auth') {
+      if (!studentTabs.includes(activeTab) && activeTab !== 'auth') {
+        setActiveTab('student_dashboard');
+      } else if (
+        (activeTab === 'student_profile' || activeTab === 'student_library' || activeTab === 'student_assessments') &&
+        studentEnrollment &&
+        studentEnrollment.status !== 'approved'
+      ) {
         setActiveTab('student_dashboard');
       }
-      if (activeTab === 'student_profile' && studentEnrollment && studentEnrollment.status !== 'approved') {
-        setActiveTab('student_dashboard');
-      }
-    } else if (activeTab === 'student_dashboard' || activeTab === 'student_profile') {
+    } else if (studentTabs.includes(activeTab)) {
       setActiveTab('enrollment_queue');
     } else if (!isOwnerMode && (activeTab === 'roles' || activeTab === 'backup_restore')) {
       setActiveTab('enrollment_queue');
@@ -253,122 +287,49 @@ export default function App() {
     }
   };
 
+  // Active Page Title Lookup for Contextual Top Header
+  const getPageTitleInfo = (): { title: string; subtitle: string } => {
+    switch (activeTab) {
+      case 'student_dashboard':
+        return { title: 'المقررات والبلوكات الدراسية', subtitle: 'استعراض البلوكات والمقررات المخصصة لمستواك الأكاديمي' };
+      case 'student_library':
+        return { title: 'المكتبة الطبية والشرائح', subtitle: 'المحاضرات، المراجع، والشرائح السريرية منخفضة الاستهلاك' };
+      case 'student_assessments':
+        return { title: 'الاختبارات والمسابقات السريرية', subtitle: 'الاختبارات الدورية والمسابقات التفاعلية مع التصحيح الفوري' };
+      case 'student_profile':
+        return { title: 'الملف الأكاديمي والتقدم', subtitle: 'البيانات الأكاديمية، نسبة إنجاز البلوكات، والنشاط الأخير' };
+      case 'enrollment_queue':
+        return { title: 'اعتماد طلبات القيد الأكاديمي', subtitle: 'مراجعة واعتماد قيد الطلاب الجدد وطلبات تعديل البيانات' };
+      case 'academic':
+        return { title: 'الهيكل الأكاديمي والجامعات', subtitle: 'إدارة الكليات، المستويات، البلوكات، والمقررات الدراسية' };
+      case 'content_manager':
+        return { title: 'إدارة المحتوى والمكتبة الرقمية', subtitle: 'رفع وتنظيم المحاضرات والمراجع الطبية حسب البلوك والمقرر' };
+      case 'assessments_manager':
+        return { title: 'إدارة الاختبارات والمسابقات', subtitle: 'إنشاء بنوك الأسئلة، جدولة الاختبارات، وإعلان النتائج' };
+      case 'backup_restore':
+        return { title: 'النسخ الاحتياطي والاستعادة', subtitle: 'تصدير واستيراد قواعد البيانات الأكاديمية المعتمدة' };
+      case 'roles':
+        return { title: 'إدارة المشرفين والصلاحيات', subtitle: 'تعيين مشرفي الجامعات وضبط صلاحيات الوصول (RBAC)' };
+      case 'audit':
+        return { title: 'سجل التدقيق السحابي', subtitle: 'توثيق العمليات الإدارية والأكاديمية غير القابل للتعديل' };
+      case 'auth':
+        return { title: 'الإعدادات والحساب', subtitle: 'إعدادات المظهر (الوضع الليلي/النهاري)، حالة السحابة، وبيانات الجلسة' };
+      default:
+        return { title: 'منصة UMED الطبية', subtitle: 'التعليم الطبي الموحد لكليات الطب البشري' };
+    }
+  };
+
+  const pageInfo = getPageTitleInfo();
+
   return (
-    <div className={`min-h-screen ${isDarkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900'} transition-colors duration-200`} dir="rtl">
-      
-      {/* 1. Global Connectivity & Theme Status Bar */}
-      <div className="bg-slate-900 border-b border-slate-800 text-xs px-4 py-2 sm:px-6">
-        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1.5">
-              {isOnline ? (
-                <span className="flex items-center gap-1 text-emerald-400 font-medium">
-                  <Wifi className="w-3.5 h-3.5" />
-                  <span>متصل</span>
-                </span>
-              ) : (
-                <span className="flex items-center gap-1 text-rose-400 font-medium animate-pulse">
-                  <WifiOff className="w-3.5 h-3.5" />
-                  <span>وضع عدم الاتصال</span>
-                </span>
-              )}
-            </div>
-
-            <span className="text-slate-700">|</span>
-
-            <div className="flex items-center gap-1.5">
-              <Database className="w-3.5 h-3.5 text-teal-400" />
-              <span className="hidden sm:inline text-slate-400">السحابة:</span>
-              {firestoreConnected ? (
-                <span className="text-teal-300 font-semibold flex items-center gap-1">
-                  <span>متصلة</span>
-                  {firestoreLatency !== null && (
-                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-teal-950 border border-teal-800 text-teal-400 font-mono">
-                      {firestoreLatency}ms
-                    </span>
-                  )}
-                </span>
-              ) : (
-                <span className="text-amber-400 font-semibold">جاري الفحص...</span>
-              )}
-              <button 
-                onClick={checkConnectivity}
-                className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors"
-                title="إعادة فحص الاتصال"
-              >
-                <RefreshCw className="w-3 h-3" />
-              </button>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setIsDarkMode(!isDarkMode)}
-              className="flex items-center gap-1 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
-            >
-              {isDarkMode ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5 text-indigo-400" />}
-              <span>{isDarkMode ? 'وضع نهاري' : 'وضع ليلي'}</span>
-            </button>
-
-            {user && (
-              <div className="flex items-center gap-1.5">
-                {isAuthorizedAdmin ? (
-                  <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-700 text-[11px]">
-                    <button
-                      onClick={() => {
-                        setActiveRole('platform_owner');
-                        setActiveTab('enrollment_queue');
-                      }}
-                      className={`px-2 py-0.5 rounded-md font-bold flex items-center gap-1 transition-colors ${
-                        activeRole === 'platform_owner'
-                          ? 'bg-amber-500 text-slate-950'
-                          : 'text-slate-400 hover:text-white'
-                      }`}
-                      title="بوابة مالك المنصة الكاملة"
-                    >
-                      <Crown className="w-3 h-3" />
-                      <span>مالك المنصة</span>
-                    </button>
-                    <button
-                      onClick={() => {
-                        setActiveRole('university_admin');
-                        setActiveTab('enrollment_queue');
-                      }}
-                      className={`px-2 py-0.5 rounded-md font-bold transition-colors ${
-                        activeRole === 'university_admin'
-                          ? 'bg-teal-500 text-slate-950'
-                          : 'text-slate-400 hover:text-white'
-                      }`}
-                      title="بوابة مشرف الجامعة"
-                    >
-                      <span>مشرف جامعة</span>
-                    </button>
-                    <button
-                      onClick={() => {
-                        setActiveRole('student');
-                        setActiveTab('student_dashboard');
-                      }}
-                      className={`px-2 py-0.5 rounded-md font-bold transition-colors ${
-                        activeRole === 'student'
-                          ? 'bg-indigo-500 text-white'
-                          : 'text-slate-400 hover:text-white'
-                      }`}
-                      title="معاينة واجهة الطالب المعزولة تماماً عن الإدارة"
-                    >
-                      <span>معاينة كطالب</span>
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-xs">
-                    <span className="font-bold text-indigo-400">طالب طب</span>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
+    <div
+      className={`min-h-screen ${
+        isDarkMode
+          ? 'theme-dark bg-slate-950 text-slate-100'
+          : 'theme-light bg-slate-50 text-slate-900'
+      } transition-colors duration-200`}
+      dir="rtl"
+    >
       {firestoreError && (
         <div className="bg-amber-950/90 border-b border-amber-600/60 px-4 py-2.5 text-amber-200 text-xs flex flex-wrap items-center justify-between gap-3 shadow-md">
           <div className="flex items-center gap-2">
@@ -387,211 +348,24 @@ export default function App() {
         </div>
       )}
 
-      {/* 2. Platform Main Header */}
-      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 py-3 sm:px-6 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center shadow-lg shadow-teal-500/20 text-white font-black text-xl">
-              U
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="font-bold text-base sm:text-lg text-white">UMED — منصة التعليم الطبي اليمنية</h1>
-                <span className="hidden sm:inline-block text-[11px] px-2.5 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30 font-semibold">
-                  كليات الطب البشري • نظام البلوكات
-                </span>
-              </div>
-              <p className="text-xs text-slate-400">
-                المقررات الدراسية، المكتبة الطبية منخفضة الاستهلاك، والاختبارات والمسابقات السريرية
-              </p>
-            </div>
-          </div>
-
-          {/* User Profile Mini Bar */}
-          {user && (
-            <div className="flex items-center gap-3 bg-slate-800/80 px-3 py-1.5 rounded-xl border border-slate-700">
-              <div className="text-right">
-                <div className="text-xs font-bold text-white">
-                  {userProfile?.displayNameArabic || user.displayName || user.email}
-                </div>
-                <div className="text-[10px] text-slate-400 font-mono" dir="ltr">
-                  {user.email}
-                </div>
-              </div>
-              <button
-                onClick={logout}
-                className="p-1.5 text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 rounded-lg transition-colors"
-                title="تسجيل الخروج"
-              >
-                <LogOut className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Navigation Bar: Strictly separated between Student Mode (!isAdminMode) and Admin Mode (isAdminMode) */}
-        {user && (
-          <div className="max-w-7xl mx-auto px-4 sm:px-6">
-            <nav className="flex space-x-reverse space-x-2 border-t border-slate-800/60 py-2 overflow-x-auto no-scrollbar">
-              
-              {/* STUDENT WORKSPACE TABS (Only shown when in Student Mode) */}
-              {!isAdminMode && (
-                <>
-                  <button
-                    onClick={() => setActiveTab('student_dashboard')}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-                      activeTab === 'student_dashboard'
-                        ? 'bg-gradient-to-r from-teal-600 to-emerald-600 text-white shadow-md'
-                        : 'text-slate-300 hover:text-white bg-slate-800/60'
-                    }`}
-                  >
-                    <Stethoscope className="w-3.5 h-3.5" />
-                    <span>لوحة الطالب الطبية</span>
-                  </button>
-
-                  {/* Student Profile & Progress Toggle — Only unlocked after enrollment is approved */}
-                  {studentEnrollment?.status === 'approved' && (
-                    <button
-                      onClick={() => setActiveTab('student_profile')}
-                      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-                        activeTab === 'student_profile'
-                          ? 'bg-gradient-to-r from-teal-600 to-emerald-600 text-white shadow-md'
-                          : 'text-slate-300 hover:text-white bg-slate-800/60'
-                      }`}
-                    >
-                      <UserCheck className="w-3.5 h-3.5" />
-                      <span>الملف الأكاديمي والتقدم</span>
-                    </button>
-                  )}
-                </>
-              )}
-
-              {/* ADMIN & OWNER WORKSPACE TABS (Strictly isolated to isAdminMode) */}
-              {isAdminMode && (
-                <>
-                  <button
-                    onClick={() => setActiveTab('enrollment_queue')}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-                      activeTab === 'enrollment_queue'
-                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <Users className="w-3.5 h-3.5" />
-                    <span>اعتماد طلبات القيد</span>
-                  </button>
-
-                  <button
-                    onClick={() => setActiveTab('academic')}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-                      activeTab === 'academic'
-                        ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30 font-bold'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <Building2 className="w-3.5 h-3.5" />
-                    <span>الهيكل الأكاديمي والجامعات</span>
-                  </button>
-
-                  <button
-                    onClick={() => setActiveTab('content_manager')}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-                      activeTab === 'content_manager'
-                        ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30 font-bold'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <BookOpen className="w-3.5 h-3.5" />
-                    <span>إدارة المحتوى والمكتبة</span>
-                  </button>
-
-                  <button
-                    onClick={() => setActiveTab('assessments_manager')}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-                      activeTab === 'assessments_manager'
-                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <Trophy className="w-3.5 h-3.5 text-amber-400" />
-                    <span>إدارة الاختبارات والمسابقات</span>
-                  </button>
-
-                  {isOwnerMode && (
-                    <>
-                      <button
-                        onClick={() => setActiveTab('backup_restore')}
-                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-                          activeTab === 'backup_restore'
-                            ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30 font-bold'
-                            : 'text-slate-400 hover:text-slate-200'
-                        }`}
-                      >
-                        <HardDrive className="w-3.5 h-3.5 text-teal-400" />
-                        <span>النسخ الاحتياطي</span>
-                      </button>
-
-                      <button
-                        onClick={() => setActiveTab('roles')}
-                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-                          activeTab === 'roles'
-                            ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30 font-bold'
-                            : 'text-slate-400 hover:text-slate-200'
-                        }`}
-                      >
-                        <ShieldCheck className="w-3.5 h-3.5" />
-                        <span>إدارة المشرفين والصلاحيات</span>
-                      </button>
-                    </>
-                  )}
-
-                  <button
-                    onClick={() => setActiveTab('audit')}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-                      activeTab === 'audit'
-                        ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30 font-bold'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <FileText className="w-3.5 h-3.5" />
-                    <span>سجل التدقيق</span>
-                  </button>
-                </>
-              )}
-
-              <button
-                onClick={() => setActiveTab('auth')}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-                  activeTab === 'auth'
-                    ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <UserCheck className="w-3.5 h-3.5" />
-                <span>حسابي</span>
-              </button>
-            </nav>
-          </div>
-        )}
-      </header>
-
-      {/* 3. Main Body */}
-      <main className="max-w-7xl mx-auto px-4 py-6 sm:px-6">
-        
-        {/* IF INITIALIZING AUTH SESSION ON RELOAD: DO NOT FLASH LOGIN FORM */}
-        {loading ? (
-          <div className="max-w-md mx-auto my-12 bg-slate-900/80 border border-slate-800 rounded-2xl p-10 text-center space-y-3 shadow-2xl">
+      {/* IF INITIALIZING AUTH SESSION ON RELOAD: DO NOT FLASH LOGIN FORM */}
+      {loading ? (
+        <div className="min-h-screen flex items-center justify-center p-4">
+          <div className="max-w-md w-full bg-slate-900/80 border border-slate-800 rounded-2xl p-10 text-center space-y-3 shadow-2xl">
             <RefreshCw className="w-8 h-8 animate-spin text-teal-400 mx-auto" />
             <h2 className="text-sm font-bold text-white">جارٍ استعادة جلستك النشطة في منصة UMED...</h2>
             <p className="text-xs text-slate-400">يرجى الانتظار لحظة ريثما يتم التحقق من بيانات الحساب والقيد الأكاديمي</p>
           </div>
-        ) : !user ? (
-          <div className="max-w-md mx-auto my-6 bg-slate-900/90 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-2xl space-y-5">
+        </div>
+      ) : !user ? (
+        /* UNAUTHENTICATED LOGIN / REGISTER VIEW */
+        <div className="min-h-screen flex flex-col justify-center py-10 px-4 sm:px-6">
+          <div className="max-w-md w-full mx-auto bg-slate-900/90 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-2xl space-y-5">
             <div className="text-center space-y-2">
               <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center mx-auto text-white font-black text-2xl shadow-lg shadow-teal-500/20">
                 U
               </div>
-              <h2 className="text-lg font-bold text-white">مرحباً بك في منصة UMED الطبية</h2>
+              <h1 className="text-lg font-bold text-white">UMED — منصة التعليم الطبي اليمنية</h1>
               <p className="text-xs text-slate-400">
                 سجّل دخولك أو أنشئ حسابك الأكاديمي للوصول إلى محاضرات البلوكات والاختبارات والمسابقات الطبية
               </p>
@@ -685,7 +459,7 @@ export default function App() {
             <button
               onClick={handleGoogleAuth}
               disabled={loading}
-              className="w-full py-2.5 px-4 rounded-xl bg-white hover:bg-slate-100 text-slate-900 font-bold text-xs flex items-center justify-center gap-2 transition-colors shadow"
+              className="w-full py-2.5 px-4 rounded-xl bg-white hover:bg-slate-100 text-slate-900 font-bold text-xs flex items-center justify-center gap-2 transition-colors shadow border border-slate-300"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24">
                 <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.66v3.05h3.87c2.26-2.09 3.67-5.17 3.67-9.15z"/>
@@ -696,328 +470,783 @@ export default function App() {
               <span>الدخول بحساب Google</span>
             </button>
           </div>
-        ) : (
-          /* AUTHENTICATED USER VIEWS */
-          <>
-            {!isAdminMode && activeTab === 'student_dashboard' && (
-              <StudentDashboard
-                uid={user.uid}
-                userEmail={user.email || ''}
-                displayNameArabic={userProfile?.displayNameArabic || user.displayName || 'طالب كلية الطب البشري'}
-                onEnrollmentStatusChange={(enr) => setStudentEnrollment(enr)}
-              />
-            )}
+        </div>
+      ) : (
+        /* AUTHENTICATED WORKSPACE WITH RTL SIDEBAR NAVIGATION */
+        <div className="min-h-screen flex">
+          
+          {/* Mobile Sidebar Backdrop */}
+          {sidebarOpen && (
+            <div
+              onClick={() => setSidebarOpen(false)}
+              className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-40 lg:hidden"
+            />
+          )}
 
-            {!isAdminMode && activeTab === 'student_profile' && (
-              <StudentProfile
-                uid={user.uid}
-                userEmail={user.email || ''}
-                displayNameArabic={userProfile?.displayNameArabic || user.displayName || 'طالب كلية الطب البشري'}
-                initialEnrollment={studentEnrollment}
-                onNavigateTab={() => setActiveTab('student_dashboard')}
-              />
-            )}
-
-            <React.Suspense
-              fallback={
-                <div className="flex flex-col items-center justify-center p-12 text-slate-400 space-y-3">
-                  <RefreshCw className="w-8 h-8 animate-spin text-teal-400" />
-                  <span className="text-xs font-semibold">جارٍ تحميل واجهة الإدارة المحسّنة...</span>
+          {/* RTL SIDEBAR MENU (قائمة جانبية) */}
+          <aside
+            className={`fixed lg:sticky top-0 right-0 z-50 h-screen w-68 bg-slate-900 border-l border-slate-800 flex flex-col justify-between transition-transform duration-200 ease-in-out shrink-0 ${
+              sidebarOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'
+            }`}
+          >
+            {/* Top Brand Header inside Sidebar */}
+            <div className="p-4 border-b border-slate-800 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center shadow-lg shadow-teal-500/20 text-white font-black text-xl shrink-0">
+                  U
                 </div>
-              }
-            >
-              {isAdminMode && activeTab === 'academic' && (
-                <AcademicStructureManager />
+                <div>
+                  <div className="font-bold text-sm text-white leading-tight">منصة UMED الطبية</div>
+                  <div className="text-[11px] text-teal-400 font-semibold mt-0.5">
+                    {isOwnerMode
+                      ? 'بوابة مالك المنصة'
+                      : isAdminMode
+                      ? 'بوابة مشرف الجامعة'
+                      : 'بوابة طالب الطب البشري'}
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => setSidebarOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 lg:hidden"
+                title="إغلاق القائمة"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Main Page Links inside Sidebar */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-5">
+              
+              {/* STUDENT NAVIGATION ITEMS */}
+              {!isAdminMode && (
+                <div className="space-y-1">
+                  <div className="px-3 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    الأقسام الأكاديمية للطالب
+                  </div>
+
+                  <button
+                    onClick={() => setActiveTab('student_dashboard')}
+                    className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                      activeTab === 'student_dashboard'
+                        ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
+                        : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                    }`}
+                  >
+                    <Stethoscope className="w-4 h-4 shrink-0" />
+                    <span>المقررات والبلوكات الدراسية</span>
+                  </button>
+
+                  {isStudentApproved && (
+                    <>
+                      <button
+                        onClick={() => setActiveTab('student_library')}
+                        className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                          activeTab === 'student_library'
+                            ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
+                            : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                        }`}
+                      >
+                        <BookOpen className="w-4 h-4 shrink-0" />
+                        <span>المكتبة الطبية والشرائح</span>
+                      </button>
+
+                      <button
+                        onClick={() => setActiveTab('student_assessments')}
+                        className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                          activeTab === 'student_assessments'
+                            ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
+                            : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                        }`}
+                      >
+                        <Trophy className="w-4 h-4 shrink-0" />
+                        <span>الاختبارات والمسابقات</span>
+                      </button>
+
+                      <button
+                        onClick={() => setActiveTab('student_profile')}
+                        className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                          activeTab === 'student_profile'
+                            ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
+                            : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                        }`}
+                      >
+                        <UserCheck className="w-4 h-4 shrink-0" />
+                        <span>الملف الأكاديمي والتقدم</span>
+                      </button>
+                    </>
+                  )}
+                </div>
               )}
 
-              {isAdminMode && activeTab === 'content_manager' && (
-                <EducationalContentManager
-                  adminUid={user.uid}
-                  assignedUniversityId={roleDoc?.assignedUniversityId || 'univ-dar-al-salam'}
-                />
-              )}
+              {/* ADMIN & OWNER NAVIGATION ITEMS */}
+              {isAdminMode && (
+                <div className="space-y-1">
+                  <div className="px-3 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    إدارة الكلية والمنصة
+                  </div>
 
-              {isAdminMode && activeTab === 'assessments_manager' && (
-                <AssessmentManager
-                  universityId={roleDoc?.assignedUniversityId || 'univ-dar-al-salam'}
-                />
-              )}
+                  <button
+                    onClick={() => setActiveTab('enrollment_queue')}
+                    className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                      activeTab === 'enrollment_queue'
+                        ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
+                        : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                    }`}
+                  >
+                    <Users className="w-4 h-4 shrink-0" />
+                    <span>اعتماد طلبات القيد</span>
+                  </button>
 
-              {isAdminMode && activeTab === 'enrollment_queue' && (
-                <EnrollmentApprovalManager
-                  adminUid={user.uid}
-                  assignedUniversityId={roleDoc?.assignedUniversityId}
-                />
-              )}
+                  <button
+                    onClick={() => setActiveTab('academic')}
+                    className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                      activeTab === 'academic'
+                        ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
+                        : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                    }`}
+                  >
+                    <Building2 className="w-4 h-4 shrink-0" />
+                    <span>الهيكل الأكاديمي والجامعات</span>
+                  </button>
 
-              {isOwnerMode && activeTab === 'backup_restore' && (
-                <BackupRestoreConsole
-                  adminEmail={user.email || ''}
-                  assignedUniversityId={roleDoc?.assignedUniversityId || 'univ-dar-al-salam'}
-                />
-              )}
-            </React.Suspense>
+                  <button
+                    onClick={() => setActiveTab('content_manager')}
+                    className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                      activeTab === 'content_manager'
+                        ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
+                        : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                    }`}
+                  >
+                    <BookOpen className="w-4 h-4 shrink-0" />
+                    <span>إدارة المحتوى والمكتبة</span>
+                  </button>
 
-            {/* ADMIN TAB: ROLES & UNIVERSITY ADMIN ASSIGNMENT (Owner Only) */}
-            {isOwnerMode && activeTab === 'roles' && (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
-                  <h2 className="text-base font-bold text-white flex items-center gap-2">
-                    <ShieldCheck className="w-5 h-5 text-teal-400" />
-                    <span>تعيين مشرفي الجامعات والصلاحيات (RBAC)</span>
-                  </h2>
-                  <p className="text-xs text-slate-400">
-                    يمكن لمالك المنصة منح صلاحية مشرف جامعة (<code className="text-teal-300 font-mono">university_admin</code>) لأي عضو هيئة تدريس أو مسؤول تسجيل عبر معرف حسابه (UID).
-                  </p>
+                  <button
+                    onClick={() => setActiveTab('assessments_manager')}
+                    className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                      activeTab === 'assessments_manager'
+                        ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
+                        : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                    }`}
+                  >
+                    <Trophy className="w-4 h-4 shrink-0" />
+                    <span>إدارة الاختبارات والمسابقات</span>
+                  </button>
 
-                  {roleAssignMsg && (
-                    <div className={`p-3 rounded-xl border text-xs ${
-                      roleAssignMsg.type === 'success'
-                        ? 'bg-emerald-950/50 border-emerald-800 text-emerald-300'
-                        : 'bg-rose-950/50 border-rose-800 text-rose-300'
-                    }`}>
-                      {roleAssignMsg.text}
-                    </div>
+                  {isOwnerMode && (
+                    <>
+                      <div className="pt-3 px-3 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        صلاحيات مالك المنصة
+                      </div>
+
+                      <button
+                        onClick={() => setActiveTab('roles')}
+                        className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                          activeTab === 'roles'
+                            ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
+                            : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                        }`}
+                      >
+                        <ShieldCheck className="w-4 h-4 shrink-0" />
+                        <span>إدارة المشرفين والصلاحيات</span>
+                      </button>
+
+                      <button
+                        onClick={() => setActiveTab('backup_restore')}
+                        className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                          activeTab === 'backup_restore'
+                            ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
+                            : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                        }`}
+                      >
+                        <HardDrive className="w-4 h-4 shrink-0" />
+                        <span>النسخ الاحتياطي والاستعادة</span>
+                      </button>
+                    </>
                   )}
 
-                  <form onSubmit={handleAssignRoleSubmit} className="space-y-3 text-xs">
-                    <div>
-                      <label className="block text-slate-300 mb-1 font-semibold">معرف المستخدم في Firebase (UID):</label>
-                      <input
-                        type="text"
-                        required
-                        value={targetUidInput}
-                        onChange={(e) => setTargetUidInput(e.target.value)}
-                        placeholder="انسخ الـ UID من صفحة حساب المشرف"
-                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
-                        dir="ltr"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-slate-300 mb-1 font-semibold">البريد الإلكتروني للمشرف:</label>
-                      <input
-                        type="email"
-                        required
-                        value={targetEmailInput}
-                        onChange={(e) => setTargetEmailInput(e.target.value)}
-                        placeholder="admin@daralsalam.edu.ye"
-                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
-                        dir="ltr"
-                      />
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-slate-300 mb-1 font-semibold">الرتبة المطلوبة:</label>
-                        <select
-                          value={targetRoleInput}
-                          onChange={(e) => setTargetRoleInput(e.target.value as UserRole)}
-                          className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
-                        >
-                          <option value="university_admin">مشرف جامعة (University Admin)</option>
-                          <option value="platform_owner">مالك منصة (Platform Owner)</option>
-                          <option value="student">طالب (إلغاء الإشراف)</option>
-                        </select>
+                  <button
+                    onClick={() => setActiveTab('audit')}
+                    className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                      activeTab === 'audit'
+                        ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
+                        : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                    }`}
+                  >
+                    <FileText className="w-4 h-4 shrink-0" />
+                    <span>سجل التدقيق السحابي</span>
+                  </button>
+                </div>
+              )}
+
+              {/* SETTINGS & ACCOUNT SECTION */}
+              <div className="space-y-1 pt-2 border-t border-slate-800">
+                <div className="px-3 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                  النظام والحساب
+                </div>
+                <button
+                  onClick={() => setActiveTab('auth')}
+                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                    activeTab === 'auth'
+                      ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
+                      : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                  }`}
+                >
+                  <Settings className="w-4 h-4 shrink-0" />
+                  <span>الإعدادات والحساب</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Sidebar User Card Footer */}
+            <div className="p-3.5 border-t border-slate-800 bg-slate-950/60 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-xs font-bold text-white truncate">
+                    {userProfile?.displayNameArabic || user.displayName || 'مستخدم UMED'}
+                  </div>
+                  <div className="text-[10px] text-slate-400 font-mono truncate" dir="ltr">
+                    {user.email}
+                  </div>
+                </div>
+                <span
+                  className={`px-2 py-0.5 rounded-md text-[10px] font-bold shrink-0 ${
+                    isOwnerMode
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                      : isAdminMode
+                      ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
+                      : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                  }`}
+                >
+                  {isOwnerMode ? 'المالك' : isAdminMode ? 'مشرف' : 'طالب'}
+                </span>
+              </div>
+            </div>
+          </aside>
+
+          {/* MAIN WORKSPACE CONTENT AREA */}
+          <div className="flex-1 flex flex-col min-w-0">
+            
+            {/* Clean Contextual Top Bar (Zero Telemetry Clutter) */}
+            <header className="sticky top-0 z-30 bg-slate-900/85 backdrop-blur border-b border-slate-800 px-4 py-3 sm:px-6">
+              <div className="max-w-6xl mx-auto flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setSidebarOpen(true)}
+                    className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 lg:hidden transition-colors"
+                    title="فتح القائمة الجانبية"
+                  >
+                    <Menu className="w-5 h-5" />
+                  </button>
+                  <div>
+                    <h1 className="text-sm sm:text-base font-bold text-white">{pageInfo.title}</h1>
+                    <p className="text-[11px] text-slate-400 hidden sm:block">{pageInfo.subtitle}</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setActiveTab('auth')}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                    title="الإعدادات والحساب"
+                  >
+                    <Settings className="w-3.5 h-3.5 text-teal-400" />
+                    <span className="hidden sm:inline">الإعدادات</span>
+                  </button>
+                </div>
+              </div>
+            </header>
+
+            {/* Page Content Viewport */}
+            <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-6 sm:px-6">
+              
+              {/* STUDENT WORKSPACE VIEWS */}
+              {!isAdminMode && (activeTab === 'student_dashboard' || activeTab === 'student_library' || activeTab === 'student_assessments') && (
+                <StudentDashboard
+                  uid={user.uid}
+                  userEmail={user.email || ''}
+                  displayNameArabic={userProfile?.displayNameArabic || user.displayName || 'طالب كلية الطب البشري'}
+                  activeSection={
+                    activeTab === 'student_library'
+                      ? 'library'
+                      : activeTab === 'student_assessments'
+                      ? 'assessments'
+                      : 'study'
+                  }
+                  onSelectSection={(sec) => {
+                    if (sec === 'library') setActiveTab('student_library');
+                    else if (sec === 'assessments') setActiveTab('student_assessments');
+                    else if (sec === 'profile') setActiveTab('student_profile');
+                    else setActiveTab('student_dashboard');
+                  }}
+                  onEnrollmentStatusChange={(enr) => setStudentEnrollment(enr)}
+                />
+              )}
+
+              {!isAdminMode && activeTab === 'student_profile' && (
+                <StudentProfile
+                  uid={user.uid}
+                  userEmail={user.email || ''}
+                  displayNameArabic={userProfile?.displayNameArabic || user.displayName || 'طالب كلية الطب البشري'}
+                  initialEnrollment={studentEnrollment}
+                  onNavigateTab={(tab) => {
+                    if (tab === 'library') setActiveTab('student_library');
+                    else if (tab === 'assessments') setActiveTab('student_assessments');
+                    else setActiveTab('student_dashboard');
+                  }}
+                />
+              )}
+
+              {/* ADMIN & OWNER WORKSPACE VIEWS */}
+              <React.Suspense
+                fallback={
+                  <div className="flex flex-col items-center justify-center p-12 text-slate-400 space-y-3">
+                    <RefreshCw className="w-8 h-8 animate-spin text-teal-400" />
+                    <span className="text-xs font-semibold">جارٍ تحميل الوحدة الإدارية...</span>
+                  </div>
+                }
+              >
+                {isAdminMode && activeTab === 'academic' && (
+                  <AcademicStructureManager />
+                )}
+
+                {isAdminMode && activeTab === 'content_manager' && (
+                  <EducationalContentManager
+                    adminUid={user.uid}
+                    assignedUniversityId={roleDoc?.assignedUniversityId || 'univ-dar-al-salam'}
+                  />
+                )}
+
+                {isAdminMode && activeTab === 'assessments_manager' && (
+                  <AssessmentManager
+                    universityId={roleDoc?.assignedUniversityId || 'univ-dar-al-salam'}
+                  />
+                )}
+
+                {isAdminMode && activeTab === 'enrollment_queue' && (
+                  <EnrollmentApprovalManager
+                    adminUid={user.uid}
+                    assignedUniversityId={roleDoc?.assignedUniversityId}
+                  />
+                )}
+
+                {isOwnerMode && activeTab === 'backup_restore' && (
+                  <BackupRestoreConsole
+                    adminEmail={user.email || ''}
+                    assignedUniversityId={roleDoc?.assignedUniversityId || 'univ-dar-al-salam'}
+                  />
+                )}
+              </React.Suspense>
+
+              {/* ADMIN TAB: ROLES & UNIVERSITY ADMIN ASSIGNMENT (Owner Only) */}
+              {isOwnerMode && activeTab === 'roles' && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+                    <h2 className="text-base font-bold text-white flex items-center gap-2">
+                      <ShieldCheck className="w-5 h-5 text-teal-400" />
+                      <span>تعيين مشرفي الجامعات والصلاحيات (RBAC)</span>
+                    </h2>
+                    <p className="text-xs text-slate-400">
+                      يمكن لمالك المنصة منح صلاحية مشرف جامعة (<code className="text-teal-300 font-mono">university_admin</code>) لأي عضو هيئة تدريس أو مسؤول تسجيل عبر معرف حسابه (UID).
+                    </p>
+
+                    {roleAssignMsg && (
+                      <div className={`p-3 rounded-xl border text-xs ${
+                        roleAssignMsg.type === 'success'
+                          ? 'bg-emerald-950/50 border-emerald-800 text-emerald-300'
+                          : 'bg-rose-950/50 border-rose-800 text-rose-300'
+                      }`}>
+                        {roleAssignMsg.text}
                       </div>
+                    )}
+
+                    <form onSubmit={handleAssignRoleSubmit} className="space-y-3 text-xs">
                       <div>
-                        <label className="block text-slate-300 mb-1 font-semibold">الجامعة المخصصة:</label>
+                        <label className="block text-slate-300 mb-1 font-semibold">معرف المستخدم في Firebase (UID):</label>
                         <input
                           type="text"
-                          value={targetUnivInput}
-                          onChange={(e) => setTargetUnivInput(e.target.value)}
+                          required
+                          value={targetUidInput}
+                          onChange={(e) => setTargetUidInput(e.target.value)}
+                          placeholder="انسخ الـ UID من صفحة حساب المشرف"
                           className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
                           dir="ltr"
                         />
                       </div>
-                    </div>
-                    <button
-                      type="submit"
-                      className="w-full py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold flex items-center justify-center gap-2 transition-colors"
-                    >
-                      <Plus className="w-4 h-4" />
-                      <span>حفظ وتعيين الصلاحية سحابياً</span>
-                    </button>
-                  </form>
-                </div>
+                      <div>
+                        <label className="block text-slate-300 mb-1 font-semibold">البريد الإلكتروني للمشرف:</label>
+                        <input
+                          type="email"
+                          required
+                          value={targetEmailInput}
+                          onChange={(e) => setTargetEmailInput(e.target.value)}
+                          placeholder="admin@daralsalam.edu.ye"
+                          className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                          dir="ltr"
+                        />
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-slate-300 mb-1 font-semibold">الرتبة المطلوبة:</label>
+                          <select
+                            value={targetRoleInput}
+                            onChange={(e) => setTargetRoleInput(e.target.value as UserRole)}
+                            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
+                          >
+                            <option value="university_admin">مشرف جامعة (University Admin)</option>
+                            <option value="platform_owner">مالك منصة (Platform Owner)</option>
+                            <option value="student">طالب (إلغاء الإشراف)</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-slate-300 mb-1 font-semibold">الجامعة المخصصة:</label>
+                          <input
+                            type="text"
+                            value={targetUnivInput}
+                            onChange={(e) => setTargetUnivInput(e.target.value)}
+                            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                            dir="ltr"
+                          />
+                        </div>
+                      </div>
+                      <button
+                        type="submit"
+                        className="w-full py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold flex items-center justify-center gap-2 transition-colors"
+                      >
+                        <Plus className="w-4 h-4" />
+                        <span>حفظ وتعيين الصلاحية سحابياً</span>
+                      </button>
+                    </form>
+                  </div>
 
-                <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                    <h3 className="text-sm font-bold text-white">قائمة الحسابات الإدارية المعتمدة ({assignedRolesList.length})</h3>
+                  <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                      <h3 className="text-sm font-bold text-white">قائمة الحسابات الإدارية المعتمدة ({assignedRolesList.length})</h3>
+                      <button
+                        onClick={refreshAdminData}
+                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300"
+                        title="تحديث القائمة"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    <div className="space-y-2 max-h-96 overflow-y-auto text-xs">
+                      {assignedRolesList.map((r) => (
+                        <div key={r.uid} className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-between">
+                          <div>
+                            <div className="font-bold text-white font-mono" dir="ltr">{r.email || r.uid}</div>
+                            <div className="text-[10px] text-slate-500 font-mono" dir="ltr">UID: {r.uid}</div>
+                          </div>
+                          <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                            r.role === 'platform_owner' ? 'bg-amber-500/20 text-amber-300' : 'bg-teal-500/20 text-teal-300'
+                          }`}>
+                            {r.role === 'platform_owner' ? 'مالك المنصة' : 'مشرف جامعة'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ADMIN TAB: AUDIT LOGS */}
+              {isAdminMode && activeTab === 'audit' && (
+                <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                    <div>
+                      <h2 className="text-base font-bold text-white flex items-center gap-2">
+                        <FileText className="w-5 h-5 text-teal-400" />
+                        <span>سجل التدقيق السحابي غير القابل للتعديل (auditLogs)</span>
+                      </h2>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        يوثق عمليات ترقية المالك، تعيين المشرفين، تهيئة الجامعات، واعتماد القيد وتصحيح الاختبارات
+                      </p>
+                    </div>
                     <button
                       onClick={refreshAdminData}
-                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300"
+                      className="py-1.5 px-3 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700 transition-colors flex items-center gap-1.5"
                     >
                       <RefreshCw className="w-3.5 h-3.5" />
+                      <span>تحديث السجل</span>
                     </button>
                   </div>
-                  <div className="space-y-2 max-h-72 overflow-y-auto text-xs">
-                    {assignedRolesList.map((r) => (
-                      <div key={r.uid} className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-between">
-                        <div>
-                          <div className="font-bold text-white font-mono" dir="ltr">{r.email || r.uid}</div>
-                          <div className="text-[10px] text-slate-500 font-mono" dir="ltr">UID: {r.uid}</div>
-                        </div>
-                        <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
-                          r.role === 'platform_owner' ? 'bg-amber-500/20 text-amber-300' : 'bg-teal-500/20 text-teal-300'
-                        }`}>
-                          {r.role === 'platform_owner' ? 'مالك المنصة' : 'مشرف جامعة'}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
 
-                  {/* Admin View Switcher */}
-                  <div className="pt-4 border-t border-slate-800">
-                    <span className="text-xs text-slate-400 block mb-2 font-semibold">وضع المعاينة السريع للمسؤول:</span>
-                    <div className="grid grid-cols-3 gap-2 text-xs">
+                  {auditLogs.length === 0 ? (
+                    <div className="p-8 text-center bg-slate-950 rounded-xl border border-slate-800 text-slate-500 text-xs">
+                      لا توجد سجلات تدقيق حالياً.
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
+                      {auditLogs.map((log) => (
+                        <div key={log.id} className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 text-xs flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2.5">
+                            <span className={`px-2 py-0.5 rounded font-mono font-bold text-[10px] ${
+                              log.action === 'OWNER_PROVISIONED' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' :
+                              log.action === 'ASSESSMENT_SCORED' ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30' :
+                              'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                            }`}>
+                              {log.action}
+                            </span>
+                            <span className="text-slate-200 font-semibold">
+                              بواسطة: <code className="text-teal-300 font-mono">{log.performedBy}</code>
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-3 text-[11px] text-slate-400 font-mono">
+                            <span>{new Date(log.timestamp).toLocaleString('ar-YE')}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* TAB: SETTINGS, APPEARANCE, SYSTEM STATUS & ACCOUNT (الإعدادات والحساب) */}
+              {activeTab === 'auth' && (
+                <div className="max-w-3xl mx-auto space-y-6">
+                  
+                  {/* 1. Theme & Appearance Settings (الوضع الليلي والنهاري) */}
+                  <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+                    <div className="pb-3 border-b border-slate-800">
+                      <h2 className="text-base font-bold text-white flex items-center gap-2">
+                        {isDarkMode ? <Moon className="w-5 h-5 text-indigo-400" /> : <Sun className="w-5 h-5 text-amber-400" />}
+                        <span>إعدادات المظهر والعرض (الوضع الليلي / النهاري)</span>
+                      </h2>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        اختر نمط الإضاءة المناسب للقراءة والمذاكرة الطبية مع تباين كامل للنصوص والبطاقات
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                       <button
-                        onClick={() => setActiveRole('platform_owner')}
-                        className={`p-2 rounded-xl border font-bold ${activeRole === 'platform_owner' ? 'bg-amber-500/20 border-amber-500 text-amber-300' : 'bg-slate-950 border-slate-800 text-slate-400'}`}
+                        onClick={() => toggleThemeMode(true)}
+                        className={`p-4 rounded-xl border text-right transition-all flex items-center justify-between ${
+                          isDarkMode
+                            ? 'bg-teal-600/20 border-teal-500 text-white font-bold shadow-md'
+                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                        }`}
                       >
-                        👑 مالك المنصة
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-xl bg-slate-800 flex items-center justify-center text-indigo-400">
+                            <Moon className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <div className="text-sm font-bold text-white">الوضع الليلي (الداكن)</div>
+                            <div className="text-[11px] text-slate-400">مريح للعين في الإضاءة المنخفضة</div>
+                          </div>
+                        </div>
+                        {isDarkMode && <CheckCircle2 className="w-5 h-5 text-teal-400 shrink-0" />}
                       </button>
+
                       <button
-                        onClick={() => setActiveRole('university_admin')}
-                        className={`p-2 rounded-xl border font-bold ${activeRole === 'university_admin' ? 'bg-teal-500/20 border-teal-500 text-teal-300' : 'bg-slate-950 border-slate-800 text-slate-400'}`}
+                        onClick={() => toggleThemeMode(false)}
+                        className={`p-4 rounded-xl border text-right transition-all flex items-center justify-between ${
+                          !isDarkMode
+                            ? 'bg-teal-600/20 border-teal-500 text-white font-bold shadow-md'
+                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                        }`}
                       >
-                        🏛️ مشرف جامعة
-                      </button>
-                      <button
-                        onClick={() => { setActiveRole('student'); setActiveTab('student_dashboard'); }}
-                        className={`p-2 rounded-xl border font-bold ${activeRole === 'student' ? 'bg-indigo-500/20 border-indigo-500 text-indigo-300' : 'bg-slate-950 border-slate-800 text-slate-400'}`}
-                      >
-                        🎓 معاينة كطالب
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-xl bg-amber-500/20 flex items-center justify-center text-amber-400">
+                            <Sun className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <div className="text-sm font-bold text-white">الوضع النهاري (الفاتح)</div>
+                            <div className="text-[11px] text-slate-400">خلفية فاتحة عالية الوضوح للقراءة النهارية</div>
+                          </div>
+                        </div>
+                        {!isDarkMode && <CheckCircle2 className="w-5 h-5 text-teal-400 shrink-0" />}
                       </button>
                     </div>
                   </div>
-                </div>
-              </div>
-            )}
 
-            {/* ADMIN TAB: AUDIT LOGS */}
-            {isAdminMode && activeTab === 'audit' && (
-              <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
-                <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-                  <div>
-                    <h2 className="text-base font-bold text-white flex items-center gap-2">
-                      <FileText className="w-5 h-5 text-teal-400" />
-                      <span>سجل التدقيق السحابي غير القابل للتعديل (auditLogs)</span>
-                    </h2>
-                    <p className="text-xs text-slate-400 mt-0.5">
-                      يوثق عمليات ترقية المالك، تعيين المشرفين، تهيئة الجامعات، واعتماد القيد وتصحيح الاختبارات
-                    </p>
-                  </div>
-                  <button
-                    onClick={refreshAdminData}
-                    className="py-1.5 px-3 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700 transition-colors flex items-center gap-1.5"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    <span>تحديث السجل</span>
-                  </button>
-                </div>
-
-                {auditLogs.length === 0 ? (
-                  <div className="p-8 text-center bg-slate-950 rounded-xl border border-slate-800 text-slate-500 text-xs">
-                    لا توجد سجلات تدقيق حالياً.
-                  </div>
-                ) : (
-                  <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
-                    {auditLogs.map((log) => (
-                      <div key={log.id} className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 text-xs flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2.5">
-                          <span className={`px-2 py-0.5 rounded font-mono font-bold text-[10px] ${
-                            log.action === 'OWNER_PROVISIONED' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' :
-                            log.action === 'ASSESSMENT_SCORED' ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30' :
-                            'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
-                          }`}>
-                            {log.action}
-                          </span>
-                          <span className="text-slate-200 font-semibold">
-                            بواسطة: <code className="text-teal-300 font-mono">{log.performedBy}</code>
-                          </span>
-                        </div>
-
-                        <div className="flex items-center gap-3 text-[11px] text-slate-400 font-mono">
-                          <span>{new Date(log.timestamp).toLocaleString('ar-YE')}</span>
-                        </div>
+                  {/* 2. Workspace Mode Switcher (Strictly for Authorized Admins/Owner Only) */}
+                  {isAuthorizedAdmin && (
+                    <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+                      <div className="pb-3 border-b border-slate-800">
+                        <h2 className="text-base font-bold text-white flex items-center gap-2">
+                          <Crown className="w-5 h-5 text-amber-400" />
+                          <span>تبديل بوابة العمل (خاص بالمالك والمشرفين المعتمدين)</span>
+                        </h2>
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          يمكنك التبديل بين بوابة الإدارة الكاملة أو معاينة المنصة كما تظهر للطالب
+                        </p>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
 
-            {/* TAB: ACCOUNT DETAILS & OWNER VERIFICATION */}
-            {activeTab === 'auth' && (
-              <div className="max-w-2xl mx-auto bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
-                <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-                  <h2 className="text-base font-bold text-white flex items-center gap-2">
-                    <UserCheck className="w-5 h-5 text-teal-400" />
-                    <span>بيانات الحساب والجلسة النشطة</span>
-                  </h2>
-                  <span className="text-xs px-2.5 py-1 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                    متصل وموثق ✓
-                  </span>
-                </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                        <button
+                          onClick={() => {
+                            setActiveRole('platform_owner');
+                            setActiveTab('enrollment_queue');
+                          }}
+                          className={`p-3.5 rounded-xl border font-bold text-right transition-all flex items-center justify-between ${
+                            activeRole === 'platform_owner'
+                              ? 'bg-amber-500/20 border-amber-500 text-amber-300'
+                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          <span>👑 مالك المنصة</span>
+                          {activeRole === 'platform_owner' && <CheckCircle2 className="w-4 h-4 text-amber-400" />}
+                        </button>
 
-                <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-2.5 text-xs">
-                  <div className="flex justify-between items-center pb-2 border-b border-slate-800/80">
-                    <span className="text-slate-400">الاسم الكامل:</span>
-                    <strong className="text-white">{userProfile?.displayNameArabic || user.displayName || 'مستخدم مسجل'}</strong>
-                  </div>
-                  <div className="flex justify-between items-center pb-2 border-b border-slate-800/80">
-                    <span className="text-slate-400">البريد الإلكتروني:</span>
-                    <span className="font-mono text-teal-300" dir="ltr">{user.email}</span>
-                  </div>
-                  <div className="flex justify-between items-center pb-2 border-b border-slate-800/80">
-                    <span className="text-slate-400">معرف المستخدم (UID):</span>
-                    <span className="font-mono text-slate-400 text-[11px]" dir="ltr">{user.uid}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-slate-400">الوضع والصلاحية النشطة:</span>
-                    <span className="font-bold text-amber-400">
-                      {activeRole === 'platform_owner' ? '👑 مالك المنصة (Platform Owner)' :
-                       activeRole === 'university_admin' ? '🏛️ مشرف جامعة (University Admin)' :
-                       '🎓 طالب طب بشري (واجهة الطالب المعزولة)'}
-                    </span>
-                  </div>
-                </div>
+                        <button
+                          onClick={() => {
+                            setActiveRole('university_admin');
+                            setActiveTab('enrollment_queue');
+                          }}
+                          className={`p-3.5 rounded-xl border font-bold text-right transition-all flex items-center justify-between ${
+                            activeRole === 'university_admin'
+                              ? 'bg-teal-500/20 border-teal-500 text-teal-300'
+                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          <span>🏛️ مشرف جامعة</span>
+                          {activeRole === 'university_admin' && <CheckCircle2 className="w-4 h-4 text-teal-400" />}
+                        </button>
 
-                {isOwnerMode && (
-                  <div className="p-4 bg-slate-950 rounded-xl border border-amber-500/30 space-y-3 text-xs">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-amber-300 flex items-center gap-1.5">
-                        <Crown className="w-4 h-4" />
-                        <span>تأكيد ومزامنة صلاحية مالك المنصة سحابياً</span>
+                        <button
+                          onClick={() => {
+                            setActiveRole('student');
+                            setActiveTab('student_dashboard');
+                          }}
+                          className={`p-3.5 rounded-xl border font-bold text-right transition-all flex items-center justify-between ${
+                            activeRole === 'student'
+                              ? 'bg-indigo-500/20 border-indigo-500 text-indigo-300'
+                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          <span>🎓 معاينة كطالب</span>
+                          {activeRole === 'student' && <CheckCircle2 className="w-4 h-4 text-indigo-400" />}
+                        </button>
+                      </div>
+
+                      {isOwnerMode && (
+                        <div className="pt-3 border-t border-slate-800 space-y-2.5 text-xs">
+                          {bootstrapMessage && (
+                            <div className="p-2.5 rounded-lg bg-emerald-950/50 border border-emerald-800 text-emerald-300">
+                              {bootstrapMessage}
+                            </div>
+                          )}
+                          <button
+                            onClick={handleBootstrapOwner}
+                            disabled={bootstrapLoading}
+                            className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold transition-colors"
+                          >
+                            {bootstrapLoading ? 'جاري التحقق والمزامنة...' : 'تأكيد ومزامنة صلاحية المالك في قاعدة بيانات السحابة'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 3. Cloud & Network Diagnostics (Moved from main header into Settings) */}
+                  <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+                    <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                      <div>
+                        <h2 className="text-base font-bold text-white flex items-center gap-2">
+                          <Database className="w-5 h-5 text-teal-400" />
+                          <span>حالة الاتصال والمزامنة السحابية</span>
+                        </h2>
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          مؤشرات اتصال الشبكة وقاعدة البيانات السحابية (تعمل تلقائياً في الخلفية)
+                        </p>
+                      </div>
+                      <button
+                        onClick={checkConnectivity}
+                        className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>فحص الاتصال</span>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                      <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-between">
+                        <span className="text-slate-400">حالة شبكة الإنترنت:</span>
+                        {isOnline ? (
+                          <span className="flex items-center gap-1.5 text-emerald-400 font-bold">
+                            <Wifi className="w-4 h-4" />
+                            <span>متصل بالشبكة</span>
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-1.5 text-rose-400 font-bold">
+                            <WifiOff className="w-4 h-4" />
+                            <span>وضع عدم الاتصال</span>
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-between">
+                        <span className="text-slate-400">قاعدة البيانات السحابية:</span>
+                        {firestoreConnected ? (
+                          <span className="text-teal-300 font-bold flex items-center gap-1.5">
+                            <span>متصلة</span>
+                            {firestoreLatency !== null && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-teal-950 border border-teal-800 text-teal-400 font-mono">
+                                {firestoreLatency}ms
+                              </span>
+                            )}
+                          </span>
+                        ) : (
+                          <span className="text-amber-400 font-bold">قيد المزامنة المحلية</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 4. Account Information & Logout */}
+                  <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
+                    <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                      <h2 className="text-base font-bold text-white flex items-center gap-2">
+                        <UserCheck className="w-5 h-5 text-teal-400" />
+                        <span>بيانات الحساب والجلسة النشطة</span>
+                      </h2>
+                      <span className="text-xs px-2.5 py-1 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-semibold">
+                        حساب موثق ✓
                       </span>
                     </div>
-                    {bootstrapMessage && (
-                      <div className="p-2.5 rounded-lg bg-emerald-950/50 border border-emerald-800 text-emerald-300">
-                        {bootstrapMessage}
+
+                    <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-2.5 text-xs">
+                      <div className="flex justify-between items-center pb-2 border-b border-slate-800/80">
+                        <span className="text-slate-400">الاسم الكامل:</span>
+                        <strong className="text-white">{userProfile?.displayNameArabic || user.displayName || 'مستخدم مسجل'}</strong>
                       </div>
-                    )}
+                      <div className="flex justify-between items-center pb-2 border-b border-slate-800/80">
+                        <span className="text-slate-400">البريد الإلكتروني:</span>
+                        <span className="font-mono text-teal-300" dir="ltr">{user.email}</span>
+                      </div>
+                      <div className="flex justify-between items-center pb-2 border-b border-slate-800/80">
+                        <span className="text-slate-400">معرف المستخدم (UID):</span>
+                        <span className="font-mono text-slate-400 text-[11px]" dir="ltr">{user.uid}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-400">الوضع والصلاحية النشطة:</span>
+                        <span className="font-bold text-amber-400">
+                          {activeRole === 'platform_owner' ? '👑 مالك المنصة (Platform Owner)' :
+                           activeRole === 'university_admin' ? '🏛️ مشرف جامعة (University Admin)' :
+                           '🎓 طالب طب بشري'}
+                        </span>
+                      </div>
+                    </div>
+
                     <button
-                      onClick={handleBootstrapOwner}
-                      disabled={bootstrapLoading}
-                      className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold transition-colors"
+                      onClick={logout}
+                      className="w-full py-2.5 px-4 rounded-xl bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-800/50 text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
                     >
-                      {bootstrapLoading ? 'جاري التحقق والمزامنة...' : 'تأكيد وحفظ صلاحية المالك في Firestore والخادم'}
+                      <LogOut className="w-4 h-4" />
+                      <span>تسجيل الخروج من المنصة</span>
                     </button>
                   </div>
-                )}
 
-                <button
-                  onClick={logout}
-                  className="w-full py-2.5 px-4 rounded-xl bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-800/50 text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
-                >
-                  <LogOut className="w-4 h-4" />
-                  <span>تسجيل الخروج من المنصة</span>
-                </button>
-              </div>
-            )}
-          </>
-        )}
+                </div>
+              )}
 
-      </main>
+            </main>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
