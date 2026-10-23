@@ -7,7 +7,7 @@
  * Dynamically linked to Universities, Study Levels, Blocks, and Courses
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Plus, 
   FileText, 
@@ -19,7 +19,12 @@ import {
   Edit2,
   Trash2, 
   RefreshCw, 
-  X
+  X,
+  Upload,
+  Mic,
+  Square,
+  Volume2,
+  Cloud
 } from 'lucide-react';
 import { 
   EducationalResource, 
@@ -33,7 +38,8 @@ import {
   fetchEducationalResources, 
   saveEducationalResource, 
   toggleResourceStatus, 
-  deleteEducationalResource 
+  deleteEducationalResource,
+  uploadFileToCloudFirestore
 } from '../../services/resourceService.ts';
 import {
   fetchUniversities,
@@ -78,6 +84,10 @@ export default function EducationalContentManager({
     resourceType: 'pdf' as ResourceType,
     url: '',
     fileSizeLabel: '1.5 MB',
+    fileName: '',
+    mimeType: '',
+    chunkCount: 0,
+    storageProvider: 'firestore_cloud' as 'firestore_cloud' | 'external_url',
     universityId: assignedUniversityId,
     studyLevelId: 'lvl-4',
     studyPeriodId: 'blk-cvs',
@@ -85,6 +95,20 @@ export default function EducationalContentManager({
     sectionType: 'theoretical' as 'theoretical' | 'practical' | 'general',
     status: 'published' as 'published' | 'draft' | 'archived'
   });
+
+  // Direct File Upload & Voice Recording State
+  const [uploadSourceMode, setUploadSourceMode] = useState<'device_file' | 'voice_record' | 'external_link'>('device_file');
+  const [uploadingFile, setUploadingFile] = useState<boolean>(false);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Microphone Audio Recording State
+  const [isRecording, setIsRecording] = useState<boolean>(false);
+  const [recordingSeconds, setRecordingSeconds] = useState<number>(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<BlobPart[]>([]);
+  const recordingTimerRef = useRef<number | null>(null);
 
   const loadAcademicHierarchy = async () => {
     try {
@@ -186,8 +210,135 @@ export default function EducationalContentManager({
     }
   }, [editingResource?.studyPeriodId]);
 
+  const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>, isEditMode: boolean = false) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadError(null);
+    setUploadingFile(true);
+    setUploadProgress(5);
+
+    // Auto-detect resourceType from MIME type or extension
+    let detectedType: ResourceType = 'pdf';
+    const lowerName = file.name.toLowerCase();
+    if (file.type.startsWith('image/') || /\.(jpg|jpeg|png|webp|gif|svg)$/.test(lowerName)) {
+      detectedType = 'image';
+    } else if (file.type.startsWith('audio/') || /\.(mp3|wav|m4a|ogg|aac|webm)$/.test(lowerName)) {
+      detectedType = 'audio';
+    } else if (file.type === 'application/pdf' || lowerName.endsWith('.pdf')) {
+      detectedType = 'pdf';
+    }
+
+    try {
+      const uploaded = await uploadFileToCloudFirestore(file, file.name, (pct) => {
+        setUploadProgress(pct);
+      });
+
+      if (isEditMode && editingResource) {
+        setEditingResource({
+          ...editingResource,
+          resourceType: detectedType,
+          url: uploaded.url,
+          fileSizeLabel: uploaded.fileSizeLabel,
+          fileName: uploaded.fileName,
+          mimeType: uploaded.mimeType,
+          chunkCount: uploaded.chunkCount,
+          storageProvider: 'firestore_cloud'
+        });
+      } else {
+        const cleanTitle = file.name.replace(/\.[^/.]+$/, '');
+        setForm(prev => ({
+          ...prev,
+          title: prev.title.trim() ? prev.title : cleanTitle,
+          resourceType: detectedType,
+          url: uploaded.url,
+          fileSizeLabel: uploaded.fileSizeLabel,
+          fileName: uploaded.fileName,
+          mimeType: uploaded.mimeType,
+          chunkCount: uploaded.chunkCount,
+          storageProvider: 'firestore_cloud'
+        }));
+      }
+    } catch (err: any) {
+      setUploadError(err.message || 'تعذر رفع الملف إلى السحابة');
+    } finally {
+      setUploadingFile(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const startVoiceRecording = async () => {
+    setUploadError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordedChunksRef.current = [];
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (ev) => {
+        if (ev.data && ev.data.size > 0) {
+          recordedChunksRef.current.push(ev.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        if (recordingTimerRef.current) {
+          window.clearInterval(recordingTimerRef.current);
+          recordingTimerRef.current = null;
+        }
+        setIsRecording(false);
+
+        const audioBlob = new Blob(recordedChunksRef.current, { type: 'audio/webm' });
+        if (audioBlob.size === 0) return;
+
+        setUploadingFile(true);
+        setUploadProgress(10);
+        try {
+          const recFileName = `lecture-audio-${new Date().toISOString().slice(0, 10)}.webm`;
+          const uploaded = await uploadFileToCloudFirestore(audioBlob, recFileName, (pct) => {
+            setUploadProgress(pct);
+          });
+          setForm(prev => ({
+            ...prev,
+            title: prev.title.trim() ? prev.title : `تسجيل صوتي لمحاضرة (${new Date().toLocaleDateString('ar-YE')})`,
+            resourceType: 'audio',
+            url: uploaded.url,
+            fileSizeLabel: uploaded.fileSizeLabel,
+            fileName: uploaded.fileName,
+            mimeType: uploaded.mimeType,
+            chunkCount: uploaded.chunkCount,
+            storageProvider: 'firestore_cloud'
+          }));
+        } catch (err: any) {
+          setUploadError(err.message || 'فشل حفظ التسجيل الصوتي في السحابة');
+        } finally {
+          setUploadingFile(false);
+        }
+      };
+
+      recorder.start();
+      setIsRecording(true);
+      setRecordingSeconds(0);
+      recordingTimerRef.current = window.setInterval(() => {
+        setRecordingSeconds(s => s + 1);
+      }, 1000);
+    } catch (err: any) {
+      setUploadError('تعذر الوصول إلى الميكروفون. يرجى السماح للمتصفح بصلاحية الميكروفون أو اختيار ملف صوتي جاهز من جهازك.');
+    }
+  };
+
+  const stopVoiceRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+  };
+
   const handleCreateResource = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!form.url.trim()) {
+      setUploadError('يرجى رفع ملف من جهازك (PDF / صورة / صوت) أو إدخال رابط الملف أولاً.');
+      return;
+    }
     try {
       const id = `res-${Date.now().toString(36)}`;
       const newResource: EducationalResource = {
@@ -197,6 +348,10 @@ export default function EducationalContentManager({
         resourceType: form.resourceType,
         url: form.url,
         fileSizeLabel: form.fileSizeLabel,
+        fileName: form.fileName || undefined,
+        mimeType: form.mimeType || undefined,
+        chunkCount: form.chunkCount || undefined,
+        storageProvider: form.url.startsWith('umed-cloud://') ? 'firestore_cloud' : 'external_url',
         universityId: form.universityId || assignedUniversityId,
         programId: 'prog-mbbs',
         curriculumVersionId: 'cur-dar-2024',
@@ -220,10 +375,14 @@ export default function EducationalContentManager({
         resourceType: 'pdf',
         url: '',
         fileSizeLabel: '1.5 MB',
+        fileName: '',
+        mimeType: '',
+        chunkCount: 0,
+        storageProvider: 'firestore_cloud',
         sectionType: 'theoretical',
         status: 'published'
       }));
-      setStatusMessage({ type: 'success', text: 'تمت إضافة ونشر المورد التعليمي بنجاح!' });
+      setStatusMessage({ type: 'success', text: 'تم رفع وحفظ ونشر المورد التعليمي في قاعدة بيانات السحابة (Firestore) بنجاح!' });
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: err.message || 'فشلت إضافة المورد' });
     }
@@ -289,16 +448,18 @@ export default function EducationalContentManager({
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => {
               loadAcademicHierarchy();
+              setUploadSourceMode('device_file');
+              setUploadError(null);
               setShowAddModal(true);
             }}
             className="py-2.5 px-4 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-teal-600/20 transition-colors"
           >
-            <Plus className="w-4 h-4" />
-            <span>إضافة مورد تعليمي جديد</span>
+            <Upload className="w-4 h-4" />
+            <span>رفع ملف (PDF / صورة / صوت) أو إضافة مورد</span>
           </button>
 
           <button
@@ -311,6 +472,23 @@ export default function EducationalContentManager({
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
+        </div>
+      </div>
+
+      {/* Cloud Storage Architecture Explanation Banner */}
+      <div className="bg-slate-900/60 border border-teal-500/30 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div className="flex items-start sm:items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-teal-500/15 text-teal-400 flex items-center justify-center shrink-0">
+            <Cloud className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="font-bold text-white">
+              أين يتم تخزين الملفات المرفوعة (PDF، الصور، التسجيلات الصوتية)؟
+            </div>
+            <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
+              تُخزّن جميع الملفات المرفوعة سحابياً بشكل مباشر ومجاني داخل قاعدة بيانات مشروعك <code className="text-teal-300 font-mono">umed-yemen (Cloud Firestore)</code> ضمن مجموعتي <code className="text-teal-300 font-mono">educationalResources</code> و <code className="text-teal-300 font-mono">uploadedFileChunks</code>، مع حفظ نسخة محلية فورية في متصفح الطالب (<code className="text-amber-300 font-mono">IndexedDB</code>) لفتحها لاحقاً بدون استهلاك إنترنت.
+            </p>
+          </div>
         </div>
       </div>
 
@@ -332,7 +510,7 @@ export default function EducationalContentManager({
       <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
         
         {/* Status Filters */}
-        <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800">
+        <div className="flex flex-wrap bg-slate-950 p-1 rounded-xl border border-slate-800 gap-1">
           <button
             onClick={() => setStatusFilter('all')}
             className={`px-3 py-1.5 rounded-lg transition-colors font-medium ${
@@ -371,6 +549,7 @@ export default function EducationalContentManager({
             <option value="all">جميع الأنواع</option>
             <option value="pdf">ملفات PDF</option>
             <option value="image">شرائح وصور طبية</option>
+            <option value="audio">تسجيلات ومحاضرات صوتية</option>
             <option value="link">روابط خارجية</option>
             <option value="video_link">روابط فيديو</option>
           </select>
@@ -387,23 +566,30 @@ export default function EducationalContentManager({
         ) : (
           filtered.map((res) => (
             <div key={res.id} className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 shadow-lg text-xs flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 min-w-0">
                 <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold flex-shrink-0 ${
                   res.resourceType === 'pdf' ? 'bg-rose-500/10 text-rose-400' :
                   res.resourceType === 'image' ? 'bg-teal-500/10 text-teal-400' :
+                  res.resourceType === 'audio' ? 'bg-amber-500/10 text-amber-400' :
                   'bg-indigo-500/10 text-indigo-400'
                 }`}>
                   {res.resourceType === 'pdf' && <FileText className="w-5 h-5" />}
                   {res.resourceType === 'image' && <ImageIcon className="w-5 h-5" />}
-                  {res.resourceType !== 'pdf' && res.resourceType !== 'image' && <ExternalLink className="w-5 h-5" />}
+                  {res.resourceType === 'audio' && <Volume2 className="w-5 h-5" />}
+                  {res.resourceType !== 'pdf' && res.resourceType !== 'image' && res.resourceType !== 'audio' && <ExternalLink className="w-5 h-5" />}
                 </div>
 
-                <div>
+                <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-bold text-white text-sm">{res.title}</span>
                     <span className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800 text-amber-300 font-mono text-[10px]">
                       {res.fileSizeLabel || '1.8 MB'}
                     </span>
+                    {res.url?.startsWith('umed-cloud://') && (
+                      <span className="px-2 py-0.5 rounded bg-teal-950 text-teal-300 border border-teal-800 text-[10px] font-bold">
+                        مرفوع سحابياً (Firestore)
+                      </span>
+                    )}
                     <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                       res.status === 'published' ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' :
                       'bg-amber-950 text-amber-300 border border-amber-800'
@@ -564,6 +750,174 @@ export default function EducationalContentManager({
                 </div>
               </div>
 
+              {/* Method Selector: Upload File vs Record Audio vs External URL */}
+              <div className="space-y-2.5 p-3.5 rounded-2xl bg-slate-950/90 border border-slate-800">
+                <label className="block text-slate-200 font-bold">طريقة إرفاق الملف أو المحاضرة:</label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { setUploadSourceMode('device_file'); setUploadError(null); }}
+                    className={`py-2 px-3 rounded-xl font-bold flex items-center justify-center gap-1.5 border transition-all ${
+                      uploadSourceMode === 'device_file'
+                        ? 'bg-teal-600 text-white border-teal-500 shadow-md'
+                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                    }`}
+                  >
+                    <Upload className="w-3.5 h-3.5 shrink-0" />
+                    <span>رفع ملف (PDF / صورة / صوت)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => { setUploadSourceMode('voice_record'); setUploadError(null); }}
+                    className={`py-2 px-3 rounded-xl font-bold flex items-center justify-center gap-1.5 border transition-all ${
+                      uploadSourceMode === 'voice_record'
+                        ? 'bg-amber-600 text-white border-amber-500 shadow-md'
+                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                    }`}
+                  >
+                    <Mic className="w-3.5 h-3.5 shrink-0" />
+                    <span>تسجيل صوتي مباشر</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => { setUploadSourceMode('external_link'); setUploadError(null); }}
+                    className={`py-2 px-3 rounded-xl font-bold flex items-center justify-center gap-1.5 border transition-all ${
+                      uploadSourceMode === 'external_link'
+                        ? 'bg-indigo-600 text-white border-indigo-500 shadow-md'
+                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                    }`}
+                  >
+                    <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                    <span>رابط خارجي (Drive)</span>
+                  </button>
+                </div>
+
+                {uploadError && (
+                  <div className="p-2.5 rounded-xl bg-rose-950/60 border border-rose-800 text-rose-300 text-[11px] flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{uploadError}</span>
+                  </div>
+                )}
+
+                {/* OPTION 1: DIRECT FILE UPLOAD FROM PHONE/PC */}
+                {uploadSourceMode === 'device_file' && (
+                  <div className="space-y-2 pt-1">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".pdf,image/*,audio/*,.mp3,.wav,.m4a,.ogg"
+                      onChange={(e) => handleFileSelected(e, false)}
+                      className="hidden"
+                      id="umed-direct-file-upload"
+                    />
+                    <label
+                      htmlFor="umed-direct-file-upload"
+                      className="cursor-pointer w-full py-4 px-4 rounded-xl border-2 border-dashed border-teal-500/40 hover:border-teal-400 bg-slate-900/70 flex flex-col items-center justify-center gap-1.5 text-center transition-colors"
+                    >
+                      <Upload className="w-6 h-6 text-teal-400" />
+                      <span className="font-bold text-white text-xs">
+                        اضغط هنا لاختيار ملف من جهازك (PDF، صورة طبية، أو تسجيل صوتي)
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        يتم حفظ الملف مباشرة في قاعدة بيانات السحابة (Cloud Firestore) ومزامنته لجميع الطلاب
+                      </span>
+                    </label>
+
+                    {uploadingFile && (
+                      <div className="space-y-1 pt-1">
+                        <div className="flex justify-between text-[11px] text-teal-300 font-bold">
+                          <span>جارٍ رفع وتخزين الملف في السحابة...</span>
+                          <span className="font-mono">{uploadProgress}%</span>
+                        </div>
+                        <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-teal-500 transition-all duration-200"
+                            style={{ width: `${uploadProgress}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {form.url.startsWith('umed-cloud://') && !uploadingFile && (
+                      <div className="p-2.5 rounded-xl bg-emerald-950/50 border border-emerald-800/80 text-emerald-300 text-[11px] flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                          <span className="truncate font-bold">تم رفع الملف للسحابة: {form.fileName || 'ملف جاهز'} ({form.fileSizeLabel})</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* OPTION 2: LIVE MICROPHONE VOICE RECORDING */}
+                {uploadSourceMode === 'voice_record' && (
+                  <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 flex flex-col items-center justify-center gap-2.5 text-center">
+                    {!isRecording ? (
+                      <button
+                        type="button"
+                        onClick={startVoiceRecording}
+                        disabled={uploadingFile}
+                        className="py-2.5 px-5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg"
+                      >
+                        <Mic className="w-4 h-4" />
+                        <span>بدء تسجيل صوتي مباشر من الميكروفون</span>
+                      </button>
+                    ) : (
+                      <div className="space-y-2 w-full">
+                        <div className="flex items-center justify-center gap-2 text-rose-400 font-bold animate-pulse">
+                          <span className="w-2.5 h-2.5 rounded-full bg-rose-500" />
+                          <span>جارٍ التسجيل الصوتي... ({Math.floor(recordingSeconds / 60)}:{String(recordingSeconds % 60).padStart(2, '0')})</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={stopVoiceRecording}
+                          className="py-2 px-5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs flex items-center gap-2 mx-auto"
+                        >
+                          <Square className="w-3.5 h-3.5" />
+                          <span>إيقاف التسجيل وحفظه في السحابة</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {uploadingFile && (
+                      <div className="w-full space-y-1">
+                        <div className="flex justify-between text-[11px] text-teal-300">
+                          <span>جارٍ رفع التسجيل الصوتي للسحابة...</span>
+                          <span className="font-mono">{uploadProgress}%</span>
+                        </div>
+                        <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                          <div className="h-full bg-teal-500" style={{ width: `${uploadProgress}%` }} />
+                        </div>
+                      </div>
+                    )}
+
+                    {form.url.startsWith('umed-cloud://') && form.resourceType === 'audio' && !uploadingFile && (
+                      <div className="p-2 rounded-lg bg-emerald-950/50 border border-emerald-800 text-emerald-300 text-[11px] flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span>تم حفظ التسجيل الصوتي ({form.fileSizeLabel}) في السحابة وجاهز للنشر!</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* OPTION 3: EXTERNAL URL (GOOGLE DRIVE / DIRECT LINK) */}
+                {uploadSourceMode === 'external_link' && (
+                  <div className="pt-1">
+                    <label className="block text-slate-300 mb-1 font-semibold">رابط الملف المعتمد (Google Drive / Direct URL):</label>
+                    <input
+                      type="url"
+                      value={form.url}
+                      onChange={(e) => setForm({ ...form, url: e.target.value })}
+                      placeholder="https://drive.google.com/file/d/.../preview"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white font-mono"
+                      dir="ltr"
+                    />
+                  </div>
+                )}
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-300 mb-1 font-semibold">نوع المورد:</label>
@@ -574,13 +928,14 @@ export default function EducationalContentManager({
                   >
                     <option value="pdf">ملف PDF (محاضرة / كتاب)</option>
                     <option value="image">صورة طبية / شريحة هستولوجي</option>
+                    <option value="audio">تسجيل صوتي / محاضرة صوتية</option>
                     <option value="link">رابط موقع / مرجع خارجي</option>
                     <option value="video_link">رابط فيديو تعليمي</option>
                   </select>
                 </div>
 
                 <div>
-                  <label className="block text-slate-300 mb-1 font-semibold">حجم الملف (لإرشاد شبكات 3G):</label>
+                  <label className="block text-slate-300 mb-1 font-semibold">حجم الملف (يحسب تلقائياً عند الرفع):</label>
                   <input
                     type="text"
                     required
@@ -591,19 +946,6 @@ export default function EducationalContentManager({
                     dir="ltr"
                   />
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-300 mb-1 font-semibold">رابط الملف المعتمد (Google Drive / Direct URL):</label>
-                <input
-                  type="url"
-                  required
-                  value={form.url}
-                  onChange={(e) => setForm({ ...form, url: e.target.value })}
-                  placeholder="https://drive.google.com/file/d/.../preview"
-                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
-                  dir="ltr"
-                />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -755,6 +1097,7 @@ export default function EducationalContentManager({
                   >
                     <option value="pdf">ملف PDF (محاضرة / كتاب)</option>
                     <option value="image">صورة طبية / شريحة هستولوجي</option>
+                    <option value="audio">تسجيل صوتي / محاضرة صوتية</option>
                     <option value="link">رابط موقع / مرجع خارجي</option>
                     <option value="video_link">رابط فيديو تعليمي</option>
                   </select>
@@ -773,10 +1116,22 @@ export default function EducationalContentManager({
                 </div>
               </div>
 
-              <div>
-                <label className="block text-slate-300 mb-1 font-semibold">رابط الملف (URL):</label>
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="block text-slate-300 font-semibold">ملف المورد أو الرابط:</label>
+                  <label className="cursor-pointer px-3 py-1 rounded-lg bg-teal-600/20 hover:bg-teal-600/30 text-teal-300 border border-teal-500/40 font-bold text-[11px] flex items-center gap-1.5">
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>استبدال بملف جديد من الجهاز</span>
+                    <input
+                      type="file"
+                      accept=".pdf,image/*,audio/*,.mp3,.wav,.m4a,.ogg"
+                      onChange={(e) => handleFileSelected(e, true)}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
                 <input
-                  type="url"
+                  type="text"
                   required
                   value={editingResource.url}
                   onChange={(e) => setEditingResource({ ...editingResource, url: e.target.value })}

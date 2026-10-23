@@ -147,6 +147,11 @@ service cloud.firestore {
       allow write: if isAnyAdmin();
     }
 
+    match /uploadedFileChunks/{chunkId} {
+      allow read: if isAuthenticated();
+      allow write: if isAnyAdmin();
+    }
+
     // -------------------------------------------------------------------------
     // Assessments, Questions & Protected Answer Keys
     // -------------------------------------------------------------------------

@@ -209,15 +209,19 @@ export interface AcademicChangeRequest {
 // 4. Educational Content Library
 // ---------------------------------------------------------------------------
 
-export type ResourceType = 'pdf' | 'image' | 'link' | 'video_link';
+export type ResourceType = 'pdf' | 'image' | 'audio' | 'link' | 'video_link';
 
 export interface EducationalResource {
   id: string;
   title: string;
   description?: string;
   resourceType: ResourceType;
-  url: string; // Google Drive viewer link, verified Direct URL, or CDN link
+  url: string; // umed-cloud://<fileId>, Google Drive viewer link, verified Direct URL, or data URL
   fileSizeLabel?: string; // e.g. '2.4 MB' for low-bandwidth warning
+  fileName?: string;
+  mimeType?: string;
+  chunkCount?: number;
+  storageProvider?: 'firestore_cloud' | 'external_url';
   universityId: string;
   programId: string;
   curriculumVersionId: string;
