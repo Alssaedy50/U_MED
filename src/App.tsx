@@ -1285,14 +1285,15 @@ export default function App() {
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
-                  {(isTruePlatformOwner || isAuthorizedAdmin) && (
+                  {isAuthorizedAdmin && (
                     <button
                       onClick={() => {
                         if (activeRole === 'student') {
-                          setActiveRoleOverride(isTruePlatformOwner ? 'platform_owner' : (roleDoc?.role || 'university_admin'));
-                          setActiveTab(isTruePlatformOwner ? 'users_manager' : 'roles');
+                          const targetRole = realRole !== 'student' ? realRole : (roleDoc?.role || 'university_admin');
+                          setActiveRole(targetRole);
+                          setActiveTab(targetRole === 'platform_owner' ? 'users_manager' : 'roles');
                         } else {
-                          setActiveRoleOverride('student');
+                          setActiveRole('student');
                           setActiveTab('student_dashboard');
                         }
                       }}
@@ -1318,7 +1319,7 @@ export default function App() {
                   )}
 
                   <button
-                    onClick={() => setIsDarkMode(!isDarkMode)}
+                    onClick={() => toggleThemeMode(!isDarkMode)}
                     className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
                     title={isDarkMode ? 'التبديل إلى الوضع النهاري الفاتح' : 'التبديل إلى الوضع الليلي الداكن'}
                   >
