@@ -17,7 +17,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script>
-      // Purge legacy v1.0.0 cache that could serve stale/broken JS bundles
+      // Purge legacy cache that could serve stale or mismatched JS bundles
       (function () {
         try {
           if ('caches' in window) {
@@ -27,14 +27,7 @@
                   caches.delete(name);
                 }
               });
-            });
-          }
-          if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.getRegistrations().then(function (regs) {
-              regs.forEach(function (reg) {
-                reg.update();
-              });
-            });
+            }).catch(function () {});
           }
         } catch (e) {}
       })();
@@ -57,10 +50,9 @@
     <script type="module" src="/src/main.tsx"></script>
     <script>
       if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js').then((reg) => {
-            reg.update();
-          }).catch(() => {});
+        window.addEventListener('load', function () {
+          navigator.serviceWorker.register('/sw.js', { scope: '/' })
+            .catch(function () {});
         });
       }
     </script>

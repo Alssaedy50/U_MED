@@ -11,6 +11,7 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import fs from 'fs';
 import { app } from './api/index.ts';
 
 dotenv.config();
@@ -22,6 +23,19 @@ const PORT = Number(process.env.PORT) || 3000;
 const INITIAL_OWNER_EMAIL = (process.env.INITIAL_OWNER_EMAIL || 'alssaedy50@gmail.com, alssaedy500@gmail.com').trim().toLowerCase();
 
 async function startServer() {
+  // Explicitly serve Service Worker with standard PWA and scope headers
+  app.get('/sw.js', (req: Request, res: Response) => {
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Service-Worker-Allowed', '/');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const swPath = path.resolve(__dirname, 'public', 'sw.js');
+    if (fs.existsSync(swPath)) {
+      res.sendFile(swPath);
+    } else {
+      res.status(404).end();
+    }
+  });
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: {

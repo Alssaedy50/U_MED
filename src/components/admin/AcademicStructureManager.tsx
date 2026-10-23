@@ -13,6 +13,7 @@ import {
   BookOpen, 
   Layers, 
   Plus, 
+  Minus,
   CheckCircle2, 
   AlertTriangle, 
   ShieldAlert, 
@@ -22,8 +23,10 @@ import {
   Edit2,
   Trash2,
   ToggleLeft,
-  ToggleRight
+  ToggleRight,
+  BarChart3
 } from 'lucide-react';
+import AcademicAnalyticsDashboard from './AcademicAnalyticsDashboard.tsx';
 import { 
   University, 
   College, 
@@ -107,6 +110,7 @@ export default function AcademicStructureManager({
   const [courses, setCourses] = useState<CourseOffering[]>([]);
 
   // UI State
+  const [activeViewMode, setActiveViewMode] = useState<'hierarchy' | 'analytics'>('hierarchy');
   const [loading, setLoading] = useState<boolean>(true);
   const [seedLoading, setSeedLoading] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
@@ -500,10 +504,16 @@ export default function AcademicStructureManager({
     e.preventDefault();
     if (!editingCourse) return;
     try {
-      await saveCourseOffering(editingCourse);
-      setCourses(courses.map(c => c.id === editingCourse.id ? editingCourse : c));
+      const rawHours = Number(editingCourse.creditHours);
+      const creditHours = !isNaN(rawHours) && rawHours >= 1 ? Math.min(Math.floor(rawHours), 20) : 3;
+      const updatedCourse: CourseOffering = {
+        ...editingCourse,
+        creditHours
+      };
+      await saveCourseOffering(updatedCourse);
+      setCourses(courses.map(c => c.id === updatedCourse.id ? updatedCourse : c));
       setEditingCourse(null);
-      setStatusMessage({ type: 'success', text: `تم تحديث بيانات مقرر ${editingCourse.titleArabic} بنجاح` });
+      setStatusMessage({ type: 'success', text: `تم تحديث بيانات مقرر ${updatedCourse.titleArabic} بنجاح (${creditHours} ساعات معتمدة)` });
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: err.message });
     }
@@ -675,6 +685,8 @@ export default function AcademicStructureManager({
     if (!selectedPeriod || !selectedLevel || !selectedUniversity) return;
     try {
       const id = `crs-${Date.now().toString(36)}`;
+      const rawHours = Number(courseForm.creditHours);
+      const creditHours = !isNaN(rawHours) && rawHours >= 1 ? Math.min(Math.floor(rawHours), 20) : 3;
       const newCourse: CourseOffering = {
         id,
         studyPeriodId: selectedPeriod.id,
@@ -684,14 +696,14 @@ export default function AcademicStructureManager({
         titleArabic: courseForm.titleArabic,
         titleEnglish: courseForm.titleEnglish,
         code: courseForm.code,
-        creditHours: Number(courseForm.creditHours) || 3,
+        creditHours,
         isActive: true
       };
       await saveCourseOffering(newCourse);
       setCourses([...courses, newCourse]);
       setShowAddCourseModal(false);
       setCourseForm({ titleArabic: '', titleEnglish: '', code: '', creditHours: 3 });
-      setStatusMessage({ type: 'success', text: `تمت إضافة مقرر ${newCourse.titleArabic} بنجاح` });
+      setStatusMessage({ type: 'success', text: `تمت إضافة مقرر ${newCourse.titleArabic} بنجاح (${creditHours} ساعات معتمدة)` });
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: err.message });
     }
@@ -757,8 +769,54 @@ export default function AcademicStructureManager({
         </div>
       )}
 
-      {/* 2. Interactive Cascading Academic Hierarchy Explorer */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+      {/* View Switcher: Hierarchy Manager vs Data Visualizations (Recharts) */}
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/80 p-2.5 rounded-2xl border border-slate-800 shadow-md">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setActiveViewMode('hierarchy')}
+            className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
+              activeViewMode === 'hierarchy'
+                ? 'bg-teal-600 text-white shadow-md shadow-teal-500/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <Layers className="w-4 h-4" />
+            <span>إدارة الهيكل الأكاديمي والبلوكات</span>
+          </button>
+          
+          <button
+            onClick={() => setActiveViewMode('analytics')}
+            className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
+              activeViewMode === 'analytics'
+                ? 'bg-teal-600 text-white shadow-md shadow-teal-500/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <BarChart3 className="w-4 h-4 text-teal-300" />
+            <span>مؤشرات نمو القيد ونتائج التقييمات الأكاديمية</span>
+            <span className="px-1.5 py-0.5 rounded bg-teal-500/20 text-teal-300 text-[10px] font-mono">
+              Recharts Data Viz
+            </span>
+          </button>
+        </div>
+
+        {selectedUniversity && (
+          <div className="text-xs text-slate-400 flex items-center gap-2 px-3 py-1.5 bg-slate-950 rounded-xl border border-slate-800">
+            <Building2 className="w-3.5 h-3.5 text-teal-400" />
+            <span>المؤسسة: <strong className="text-white">{selectedUniversity.nameArabic}</strong></span>
+          </div>
+        )}
+      </div>
+
+      {activeViewMode === 'analytics' ? (
+        <AcademicAnalyticsDashboard
+          selectedUniversity={selectedUniversity}
+          studyLevels={studyLevels}
+        />
+      ) : (
+        <>
+          {/* 2. Interactive Cascading Academic Hierarchy Explorer */}
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         
         {/* Column 1: Universities */}
         <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between">
@@ -1348,7 +1406,7 @@ export default function AcademicStructureManager({
                         </div>
 
                         <div className="flex items-center gap-2">
-                          <span className="text-slate-400 font-mono">{course.creditHours} ساعات معتمدة</span>
+                          <span className="text-slate-400 font-mono">{course.creditHours ?? 3} ساعات معتمدة</span>
                           <button
                             onClick={() => setEditingCourse(course)}
                             className="text-slate-400 hover:text-indigo-300 px-2 py-1 rounded hover:bg-slate-900 flex items-center gap-1"
@@ -1396,6 +1454,8 @@ export default function AcademicStructureManager({
 
           </div>
         </div>
+      )}
+        </>
       )}
 
       {/* 4. MODALS */}
@@ -1928,7 +1988,7 @@ export default function AcademicStructureManager({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-300 mb-1 font-semibold">رمز المقرر:</label>
                   <input
@@ -1942,15 +2002,80 @@ export default function AcademicStructureManager({
                   />
                 </div>
                 <div>
-                  <label className="block text-slate-300 mb-1 font-semibold">الساعات المعتمدة:</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="15"
-                    value={courseForm.creditHours}
-                    onChange={(e) => setCourseForm({ ...courseForm, creditHours: parseInt(e.target.value) || 3 })}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-teal-500"
-                  />
+                  <label className="block text-slate-300 mb-1 font-semibold flex items-center justify-between">
+                    <span>الساعات المعتمدة:</span>
+                    <span className="text-[11px] text-teal-400 font-mono font-bold">
+                      {Number(courseForm.creditHours) || 3} ساعات
+                    </span>
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const cur = Number(courseForm.creditHours) || 3;
+                        setCourseForm({ ...courseForm, creditHours: Math.max(1, cur - 1) });
+                      }}
+                      className="w-9 h-9 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 flex items-center justify-center border border-slate-700 shrink-0 transition-colors"
+                      title="تقليل الساعات"
+                    >
+                      <Minus className="w-4 h-4" />
+                    </button>
+                    <input
+                      type="number"
+                      min="1"
+                      max="20"
+                      value={courseForm.creditHours !== undefined && courseForm.creditHours !== null ? courseForm.creditHours : ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === '') {
+                          setCourseForm({ ...courseForm, creditHours: '' as any });
+                        } else {
+                          const parsed = parseInt(val, 10);
+                          setCourseForm({
+                            ...courseForm,
+                            creditHours: isNaN(parsed) ? ('' as any) : parsed
+                          });
+                        }
+                      }}
+                      onBlur={() => {
+                        const parsed = Number(courseForm.creditHours);
+                        const safe = !isNaN(parsed) && parsed >= 1 ? Math.min(20, Math.floor(parsed)) : 3;
+                        setCourseForm({ ...courseForm, creditHours: safe });
+                      }}
+                      className="w-full text-center px-2 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono font-bold focus:outline-none focus:border-teal-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const cur = Number(courseForm.creditHours) || 3;
+                        setCourseForm({ ...courseForm, creditHours: Math.min(20, cur + 1) });
+                      }}
+                      className="w-9 h-9 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 flex items-center justify-center border border-slate-700 shrink-0 transition-colors"
+                      title="زيادة الساعات"
+                    >
+                      <Plus className="w-4 h-4" />
+                    </button>
+                  </div>
+                  {/* Quick Selectors */}
+                  <div className="flex items-center gap-1 mt-1.5 flex-wrap">
+                    {[1, 2, 3, 4, 5, 6].map((hrs) => {
+                      const isSelected = Number(courseForm.creditHours) === hrs;
+                      return (
+                        <button
+                          key={hrs}
+                          type="button"
+                          onClick={() => setCourseForm({ ...courseForm, creditHours: hrs })}
+                          className={`px-2 py-0.5 rounded-lg text-[10px] font-mono transition-all ${
+                            isSelected
+                              ? 'bg-teal-600 text-white font-bold shadow-sm'
+                              : 'bg-slate-800/80 text-slate-400 hover:text-white hover:bg-slate-700'
+                          }`}
+                        >
+                          {hrs} س
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
 
@@ -2436,7 +2561,7 @@ export default function AcademicStructureManager({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-300 mb-1 font-semibold">رمز المقرر:</label>
                   <input
@@ -2449,15 +2574,80 @@ export default function AcademicStructureManager({
                   />
                 </div>
                 <div>
-                  <label className="block text-slate-300 mb-1 font-semibold">الساعات المعتمدة:</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="15"
-                    value={editingCourse.creditHours || 3}
-                    onChange={(e) => setEditingCourse({ ...editingCourse, creditHours: parseInt(e.target.value) || 3 })}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-indigo-500"
-                  />
+                  <label className="block text-slate-300 mb-1 font-semibold flex items-center justify-between">
+                    <span>الساعات المعتمدة:</span>
+                    <span className="text-[11px] text-indigo-400 font-mono font-bold">
+                      {Number(editingCourse.creditHours) || 3} ساعات
+                    </span>
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const cur = Number(editingCourse.creditHours) || 3;
+                        setEditingCourse({ ...editingCourse, creditHours: Math.max(1, cur - 1) });
+                      }}
+                      className="w-9 h-9 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 flex items-center justify-center border border-slate-700 shrink-0 transition-colors"
+                      title="تقليل الساعات"
+                    >
+                      <Minus className="w-4 h-4" />
+                    </button>
+                    <input
+                      type="number"
+                      min="1"
+                      max="20"
+                      value={editingCourse.creditHours !== undefined && editingCourse.creditHours !== null ? editingCourse.creditHours : ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === '') {
+                          setEditingCourse({ ...editingCourse, creditHours: '' as any });
+                        } else {
+                          const parsed = parseInt(val, 10);
+                          setEditingCourse({
+                            ...editingCourse,
+                            creditHours: isNaN(parsed) ? ('' as any) : parsed
+                          });
+                        }
+                      }}
+                      onBlur={() => {
+                        const parsed = Number(editingCourse.creditHours);
+                        const safe = !isNaN(parsed) && parsed >= 1 ? Math.min(20, Math.floor(parsed)) : 3;
+                        setEditingCourse({ ...editingCourse, creditHours: safe });
+                      }}
+                      className="w-full text-center px-2 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono font-bold focus:outline-none focus:border-indigo-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const cur = Number(editingCourse.creditHours) || 3;
+                        setEditingCourse({ ...editingCourse, creditHours: Math.min(20, cur + 1) });
+                      }}
+                      className="w-9 h-9 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 flex items-center justify-center border border-slate-700 shrink-0 transition-colors"
+                      title="زيادة الساعات"
+                    >
+                      <Plus className="w-4 h-4" />
+                    </button>
+                  </div>
+                  {/* Quick Selectors */}
+                  <div className="flex items-center gap-1 mt-1.5 flex-wrap">
+                    {[1, 2, 3, 4, 5, 6].map((hrs) => {
+                      const isSelected = Number(editingCourse.creditHours) === hrs;
+                      return (
+                        <button
+                          key={hrs}
+                          type="button"
+                          onClick={() => setEditingCourse({ ...editingCourse, creditHours: hrs })}
+                          className={`px-2 py-0.5 rounded-lg text-[10px] font-mono transition-all ${
+                            isSelected
+                              ? 'bg-indigo-600 text-white font-bold shadow-sm'
+                              : 'bg-slate-800/80 text-slate-400 hover:text-white hover:bg-slate-700'
+                          }`}
+                        >
+                          {hrs} س
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
 

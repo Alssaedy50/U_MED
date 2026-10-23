@@ -543,7 +543,7 @@ export default function StudentDashboard({
                         <span className="font-mono text-teal-300 font-bold px-2 py-0.5 rounded bg-slate-900 border border-slate-800">
                           {course.code}
                         </span>
-                        <span className="text-slate-500 text-[11px] font-mono">{course.creditHours} ساعات</span>
+                        <span className="text-slate-500 text-[11px] font-mono">{course.creditHours ?? 3} ساعات</span>
                       </div>
 
                       <div>
