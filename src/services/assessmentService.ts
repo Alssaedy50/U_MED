@@ -296,9 +296,13 @@ export async function deleteQuestionBank(
 
   if (deletedQuestionIds.length > 0) {
     try {
+      const token = await getIdTokenSafe();
       await fetch('/api/admin/sync-assessment-questions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
         body: JSON.stringify({ deletedQuestionIds })
       });
     } catch (e) {}
@@ -337,7 +341,12 @@ export async function getBankQuestions(bankId: string): Promise<QuestionItemFull
 
   // Fetch protected default questions from server endpoint for Admin Console
   try {
-    const res = await fetch(`/api/admin/questions?bankId=${encodeURIComponent(bankId)}`);
+    const token = await getIdTokenSafe();
+    const res = await fetch(`/api/admin/questions?bankId=${encodeURIComponent(bankId)}`, {
+      headers: {
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      }
+    });
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.questions) && data.questions.length > 0) {
@@ -430,9 +439,13 @@ export async function createQuestion(question: Omit<QuestionItemFull, 'id' | 'cr
 
   // Sync to backend server
   try {
+    const token = await getIdTokenSafe();
     await fetch('/api/admin/sync-assessment-questions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      },
       body: JSON.stringify({ questions: [newQ] })
     });
   } catch (e) {}
@@ -501,9 +514,13 @@ export async function updateQuestion(
   } catch (e) {}
 
   try {
+    const token = await getIdTokenSafe();
     await fetch('/api/admin/sync-assessment-questions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      },
       body: JSON.stringify({ questions: [updatedQ] })
     });
   } catch (e) {}
@@ -529,9 +546,13 @@ export async function deleteQuestion(questionId: string, bankId: string): Promis
   } catch (e) {}
 
   try {
+    const token = await getIdTokenSafe();
     await fetch('/api/admin/sync-assessment-questions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      },
       body: JSON.stringify({ deletedQuestionIds: [questionId] })
     });
   } catch (e) {}
@@ -640,9 +661,13 @@ export async function createAssessment(
   } catch (e) {}
 
   try {
+    const token = await getIdTokenSafe();
     await fetch('/api/admin/sync-assessment-questions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      },
       body: JSON.stringify({ assessment: newAssessment, questions: bankQuestions || [] })
     });
   } catch (e) {}
@@ -717,9 +742,13 @@ export async function updateAssessment(
   } catch (e) {}
 
   try {
+    const token = await getIdTokenSafe();
     await fetch('/api/admin/sync-assessment-questions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      },
       body: JSON.stringify({ assessment: updatedAssessment, questions: bankQuestions || [] })
     });
   } catch (e) {}
@@ -744,9 +773,13 @@ export async function deleteAssessment(
   } catch (e) {}
 
   try {
+    const token = await getIdTokenSafe();
     await fetch('/api/admin/sync-assessment-questions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      },
       body: JSON.stringify({ deletedAssessmentIds: [assessmentId] })
     });
   } catch (e) {}

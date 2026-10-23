@@ -302,13 +302,12 @@ service cloud.firestore {
       allow delete: if isPlatformOwner() || (isAuthenticated() && resource.data.uid == request.auth.uid);
     }
 
-    // Assessment Results (Controlled Release)
+    // Assessment Results (Controlled Release - Server/Admin Authoritative Only)
     match /assessmentResults/{resultId} {
       allow read: if isAuthenticated() && 
         ((resource.data.uid == request.auth.uid && resource.data.isReleased == true) || isAnyAdmin());
-      allow create: if isAnyAdmin() || (isAuthenticated() && request.resource.data.uid == request.auth.uid);
-      allow update: if isAnyAdmin();
-      allow delete: if isPlatformOwner() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      allow create, update: if isAnyAdmin();
+      allow delete: if isPlatformOwner();
     }
 
     // -------------------------------------------------------------------------
