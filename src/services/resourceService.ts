@@ -440,6 +440,19 @@ function applyLocalFilters(list: EducationalResource[], filters: ResourceFilters
   });
 }
 
+export async function deleteCloudFileChunks(cloudUrl?: string, chunkCount?: number): Promise<void> {
+  if (!cloudUrl || !cloudUrl.startsWith('umed-cloud://')) return;
+  const fileId = cloudUrl.replace('umed-cloud://', '').trim();
+  if (!fileId) return;
+  await deleteFileFromIDB(fileId);
+  const count = Math.max(1, chunkCount || 1);
+  const deletions: Promise<any>[] = [];
+  for (let i = 0; i < count; i++) {
+    deletions.push(deleteDoc(doc(db, 'uploadedFileChunks', `${fileId}_chunk_${i}`)).catch(() => {}));
+  }
+  await Promise.all(deletions);
+}
+
 export async function saveEducationalResource(resource: EducationalResource): Promise<void> {
   unmarkResourceDeleted(resource.id);
   const current = await ensureResourcesInitialized();
@@ -449,6 +462,18 @@ export async function saveEducationalResource(resource: EducationalResource): Pr
   });
 
   const index = current.findIndex(r => r.id === resource.id);
+  const previousResource = index >= 0 ? current[index] : null;
+
+  // If replacing an existing cloud-uploaded file with a new file/URL, clean up orphaned chunks from the old file
+  if (
+    previousResource &&
+    previousResource.url &&
+    previousResource.url.startsWith('umed-cloud://') &&
+    previousResource.url !== updatedResource.url
+  ) {
+    deleteCloudFileChunks(previousResource.url, previousResource.chunkCount).catch(() => {});
+  }
+
   if (index >= 0) {
     current[index] = updatedResource;
   } else {
@@ -503,14 +528,9 @@ export async function deleteEducationalResource(resourceId: string): Promise<voi
 
   try {
     await deleteDoc(doc(db, 'educationalResources', resourceId));
-    // Also clean up cloud file chunks if it was a direct upload
+    // Also clean up cloud file chunks in parallel if it was a direct upload
     if (target?.url?.startsWith('umed-cloud://')) {
-      const fileId = target.url.replace('umed-cloud://', '').trim();
-      await deleteFileFromIDB(fileId);
-      const count = target.chunkCount || 1;
-      for (let i = 0; i < count; i++) {
-        await deleteDoc(doc(db, 'uploadedFileChunks', `${fileId}_chunk_${i}`)).catch(() => {});
-      }
+      await deleteCloudFileChunks(target.url, target.chunkCount);
     }
   } catch (err) {
     console.warn('Firestore deleteEducationalResource error:', err);

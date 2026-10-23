@@ -177,10 +177,15 @@ export default function StudentAssessmentList({
             const isOpen = now >= opensAt && now <= closesAt;
             const isUpcoming = now < opensAt;
 
-            const userAttemptList = attempts.filter(a => a.assessmentId === assessment.id && a.status === 'scored');
+            const userAttemptList = attempts.filter(
+              a => a.assessmentId === assessment.id && (a.status === 'scored' || a.status === 'submitted')
+            );
+            const activeInProgressAttempt = attempts.find(
+              a => a.assessmentId === assessment.id && a.status === 'in_progress' && new Date(a.expiresAt).getTime() > now.getTime()
+            );
             const userResult = results.find(r => r.assessmentId === assessment.id);
             const attemptCount = userAttemptList.length;
-            const hasMaxAttempts = attemptCount >= assessment.maxAttempts;
+            const hasMaxAttempts = attemptCount >= assessment.maxAttempts && !activeInProgressAttempt;
 
             return (
               <div 
@@ -271,6 +276,11 @@ export default function StudentAssessmentList({
                       <>
                         <CheckCircle2 className="w-4 h-4" />
                         <span>تم استيفاء المحاولات المسموحة</span>
+                      </>
+                     ) : activeInProgressAttempt ? (
+                      <>
+                        <Play className="w-4 h-4 fill-current" />
+                        <span>متابعة المحاولة الجارية (#{activeInProgressAttempt.attemptNumber || attemptCount + 1})</span>
                       </>
                     ) : isOpen ? (
                       <>

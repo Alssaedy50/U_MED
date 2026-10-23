@@ -31,6 +31,8 @@ import {
 } from '../../services/academicService.ts';
 import { getQuestionBanks, getAssessments } from '../../services/assessmentService.ts';
 import { fetchEducationalResources } from '../../services/resourceService.ts';
+import { fetchCourseInstructors, fetchBatchNotifications } from '../../services/batchGovernanceService.ts';
+import { fetchEnrollmentsForAdmin } from '../../services/enrollmentService.ts';
 
 interface BackupRestoreConsoleProps {
   adminEmail?: string;
@@ -55,7 +57,7 @@ export default function BackupRestoreConsole({
     setStatusMsg(null);
 
     try {
-      // Gather all current collections across the hierarchy
+      // Gather all current collections dynamically across the entire hierarchy (no hardcoded IDs)
       const [
         universities,
         colleges,
@@ -65,23 +67,29 @@ export default function BackupRestoreConsole({
         courseOfferings,
         questionBanks,
         assessments,
-        resources
+        resources,
+        courseInstructors,
+        batchNotifications,
+        studentEnrollments
       ] = await Promise.all([
-        fetchUniversities(),
-        fetchColleges(assignedUniversityId),
-        fetchPrograms('col-human-medicine'),
-        fetchStudyLevels('prog-mbbs'),
-        fetchStudyPeriods('lvl-4'),
-        fetchCourseOfferings('blk-cvs'),
+        fetchUniversities(''),
+        fetchColleges(),
+        fetchPrograms(),
+        fetchStudyLevels(),
+        fetchStudyPeriods(),
+        fetchCourseOfferings(),
         getQuestionBanks(assignedUniversityId),
         getAssessments(assignedUniversityId),
-        fetchEducationalResources({ universityId: assignedUniversityId })
+        fetchEducationalResources({}),
+        fetchCourseInstructors({}),
+        fetchBatchNotifications({}),
+        fetchEnrollmentsForAdmin()
       ]);
 
       const snapshot = {
         meta: {
           app: 'UMED - Yemen Medical Education Platform',
-          version: '2.2.0',
+          version: '2.3.0',
           exportedAt: new Date().toISOString(),
           exportedBy: adminEmail,
           universityId: assignedUniversityId,
@@ -97,7 +105,10 @@ export default function BackupRestoreConsole({
           courseOfferings: courseOfferings || [],
           questionBanks: questionBanks || [],
           assessments: assessments || [],
-          educationalResources: resources || []
+          educationalResources: resources || [],
+          courseInstructors: courseInstructors || [],
+          batchNotifications: batchNotifications || [],
+          studentEnrollments: studentEnrollments || []
         }
       };
 
@@ -111,7 +122,7 @@ export default function BackupRestoreConsole({
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
 
-      setStatusMsg({ type: 'success', text: 'تم تصدير النسخة الاحتياطية بنجاح بنسق JSON الشامل.' });
+      setStatusMsg({ type: 'success', text: 'تم تصدير النسخة الاحتياطية الشاملة لجميع الجامعات والمستويات والبلوكات والمواد بنجاح.' });
     } catch (err: any) {
       console.error('Export error:', err);
       setStatusMsg({ type: 'error', text: err.message || 'فشل تصدير النسخة الاحتياطية' });
@@ -184,6 +195,9 @@ export default function BackupRestoreConsole({
       const questionBanks = Array.isArray(data.questionBanks) ? data.questionBanks : [];
       const assessments = Array.isArray(data.assessments) ? data.assessments : [];
       const educationalResources = Array.isArray(data.educationalResources) ? data.educationalResources : [];
+      const courseInstructors = Array.isArray(data.courseInstructors) ? data.courseInstructors : [];
+      const batchNotifications = Array.isArray(data.batchNotifications) ? data.batchNotifications : [];
+      const studentEnrollments = Array.isArray(data.studentEnrollments) ? data.studentEnrollments : [];
 
       // 1. Write all collections to Cloud Firestore via writeBatch
       const collectionsToWrite: Array<{ name: string; items: any[] }> = [
@@ -195,7 +209,10 @@ export default function BackupRestoreConsole({
         { name: 'courseOfferings', items: courseOfferings },
         { name: 'questionBanks', items: questionBanks },
         { name: 'assessments', items: assessments },
-        { name: 'educationalResources', items: educationalResources }
+        { name: 'educationalResources', items: educationalResources },
+        { name: 'courseInstructors', items: courseInstructors },
+        { name: 'batchNotifications', items: batchNotifications },
+        { name: 'studentEnrollments', items: studentEnrollments }
       ];
 
       try {
@@ -214,39 +231,37 @@ export default function BackupRestoreConsole({
         totalRestoredDocs = collectionsToWrite.reduce((acc, c) => acc + c.items.length, 0);
       }
 
-      // 2. Synchronize LocalStorage caches so all restored items are immediately active
+      // Helper to merge restored items with existing local items by ID so other universities aren't wiped
+      const mergeIntoLocalStorage = (storageKey: string, initKey: string | null, incomingItems: any[]) => {
+        if (!incomingItems || incomingItems.length === 0) return;
+        try {
+          const existingRaw = localStorage.getItem(storageKey);
+          const existingList = existingRaw ? (JSON.parse(existingRaw) as any[]) : [];
+          const map = new Map<string, any>();
+          if (Array.isArray(existingList)) {
+            existingList.forEach(item => {
+              if (item && item.id) map.set(item.id, item);
+            });
+          }
+          incomingItems.forEach(item => {
+            if (item && item.id) map.set(item.id, item);
+          });
+          localStorage.setItem(storageKey, JSON.stringify(Array.from(map.values())));
+          if (initKey) localStorage.setItem(initKey, 'true');
+        } catch (e) {}
+      };
+
+      // 2. Synchronize LocalStorage caches safely
       try {
-        if (universities.length > 0) {
-          localStorage.setItem('umed_acad_universities', JSON.stringify(universities));
-          localStorage.setItem('umed_acad_universities_init', 'true');
-        }
-        if (colleges.length > 0) {
-          localStorage.setItem('umed_acad_colleges', JSON.stringify(colleges));
-          localStorage.setItem('umed_acad_colleges_init', 'true');
-        }
-        if (programs.length > 0) {
-          localStorage.setItem('umed_acad_programs', JSON.stringify(programs));
-          localStorage.setItem('umed_acad_programs_init', 'true');
-        }
-        if (studyLevels.length > 0) {
-          localStorage.setItem('umed_acad_levels', JSON.stringify(studyLevels));
-          localStorage.setItem('umed_acad_levels_init', 'true');
-        }
-        if (studyPeriods.length > 0) {
-          localStorage.setItem('umed_acad_periods', JSON.stringify(studyPeriods));
-          localStorage.setItem('umed_acad_periods_init', 'true');
-        }
-        if (courseOfferings.length > 0) {
-          localStorage.setItem('umed_acad_courses', JSON.stringify(courseOfferings));
-          localStorage.setItem('umed_acad_courses_init', 'true');
-        }
-        if (questionBanks.length > 0) {
-          localStorage.setItem(`umed_assessment_banks_${targetUnivId}`, JSON.stringify(questionBanks));
-          localStorage.setItem(`umed_assessment_banks_init_${targetUnivId}`, 'true');
-        }
+        mergeIntoLocalStorage('umed_acad_universities', 'umed_acad_universities_init', universities);
+        mergeIntoLocalStorage('umed_acad_colleges', 'umed_acad_colleges_init', colleges);
+        mergeIntoLocalStorage('umed_acad_programs', 'umed_acad_programs_init', programs);
+        mergeIntoLocalStorage('umed_acad_levels', 'umed_acad_levels_init', studyLevels);
+        mergeIntoLocalStorage('umed_acad_periods', 'umed_acad_periods_init', studyPeriods);
+        mergeIntoLocalStorage('umed_acad_courses', 'umed_acad_courses_init', courseOfferings);
+        mergeIntoLocalStorage(`umed_assessment_banks_${targetUnivId}`, `umed_assessment_banks_init_${targetUnivId}`, questionBanks);
         if (assessments.length > 0) {
-          localStorage.setItem(`umed_assessment_assessments_${targetUnivId}`, JSON.stringify(assessments));
-          localStorage.setItem(`umed_assessment_assessments_init_${targetUnivId}`, 'true');
+          mergeIntoLocalStorage(`umed_assessment_assessments_${targetUnivId}`, `umed_assessment_assessments_init_${targetUnivId}`, assessments);
           for (const asmnt of assessments) {
             try {
               await fetch('/api/admin/sync-assessment-questions', {

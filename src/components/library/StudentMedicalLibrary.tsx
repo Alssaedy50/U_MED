@@ -20,7 +20,8 @@ import {
   RefreshCw,
   Eye,
   AlertCircle,
-  Volume2
+  Volume2,
+  Video
 } from 'lucide-react';
 import { EducationalResource, ResourceType } from '../../types/umed.ts';
 import { fetchEducationalResources } from '../../services/resourceService.ts';
@@ -140,6 +141,16 @@ export default function StudentMedicalLibrary({
           >
             <ImageIcon className="w-3.5 h-3.5" />
             <span>شرائح وصور طبية ({resources.filter(r => r.resourceType === 'image').length})</span>
+          </button>
+
+          <button
+            onClick={() => setSelectedType('video')}
+            className={`px-3 py-1.5 rounded-lg transition-colors font-medium flex items-center gap-1.5 ${
+              selectedType === 'video' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <Video className="w-3.5 h-3.5" />
+            <span>فيديوهات طبية ({resources.filter(r => r.resourceType === 'video').length})</span>
           </button>
 
           <button

@@ -59,12 +59,14 @@ interface AssessmentManagerProps {
   universityId: string;
   userRole?: UserRole;
   assignedStudyLevelId?: string;
+  assignedCourseId?: string;
 }
 
 export default function AssessmentManager({
   universityId: initialUniversityId,
   userRole = 'university_admin',
-  assignedStudyLevelId
+  assignedStudyLevelId,
+  assignedCourseId
 }: AssessmentManagerProps) {
   const isOwner = userRole === 'platform_owner';
   const isBatchScoped = (userRole === 'batch_rep' || userRole === 'department_head') && Boolean(assignedStudyLevelId);

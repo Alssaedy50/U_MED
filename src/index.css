@@ -96,30 +96,45 @@
   color: #0f172a !important;
 }
 
-/* Keep white text on vibrant primary action buttons & brand badges */
+/* Keep white text on vibrant primary action buttons, gradient buttons & brand badges */
 .theme-light .bg-teal-600.text-white,
 .theme-light .bg-teal-600\/90.text-white,
 .theme-light .bg-teal-500.text-white,
 .theme-light .bg-emerald-600.text-white,
 .theme-light .bg-emerald-500.text-white,
+.theme-light .bg-cyan-600.text-white,
+.theme-light .bg-cyan-500.text-white,
 .theme-light .bg-indigo-600.text-white,
 .theme-light .bg-indigo-500.text-white,
 .theme-light .bg-blue-600.text-white,
 .theme-light .bg-rose-600.text-white,
 .theme-light .bg-rose-500.text-white,
 .theme-light .bg-amber-600.text-white,
+.theme-light .bg-amber-500.text-white,
 .theme-light .from-teal-500.text-white,
 .theme-light .from-teal-600.text-white,
+.theme-light .from-emerald-500.text-white,
+.theme-light .from-emerald-600.text-white,
+.theme-light .from-indigo-500.text-white,
+.theme-light .from-indigo-600.text-white,
+.theme-light .from-amber-500.text-white,
+.theme-light .from-amber-600.text-white,
 .theme-light .bg-teal-600 .text-white,
 .theme-light .bg-teal-500 .text-white,
 .theme-light .bg-emerald-600 .text-white,
+.theme-light .bg-emerald-500 .text-white,
+.theme-light .bg-cyan-600 .text-white,
 .theme-light .bg-indigo-600 .text-white,
 .theme-light .bg-indigo-500 .text-white,
 .theme-light .bg-blue-600 .text-white,
 .theme-light .bg-amber-600 .text-white,
+.theme-light .bg-amber-500 .text-white,
 .theme-light .bg-rose-600 .text-white,
+.theme-light .bg-rose-500 .text-white,
 .theme-light .from-teal-500 .text-white,
-.theme-light .from-teal-600 .text-white {
+.theme-light .from-teal-600 .text-white,
+.theme-light .from-emerald-500 .text-white,
+.theme-light .from-indigo-500 .text-white {
   color: #ffffff !important;
 }
 

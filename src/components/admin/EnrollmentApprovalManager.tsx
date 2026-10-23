@@ -137,7 +137,7 @@ export default function EnrollmentApprovalManager({
         uid: targetUid,
         studentNameArabic: newStudentName.trim(),
         universityId: assignedUniversityId || 'univ-dar-al-salam',
-        collegeId: 'col-human-medicine',
+        collegeId: 'col-medicine-dar',
         programId: 'prog-mbbs',
         curriculumVersionId: 'cur-dar-2024',
         currentStudyLevelId: newStudentLevelId,
@@ -400,9 +400,9 @@ export default function EnrollmentApprovalManager({
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="بحث بالرقم الأكاديمي أو المعرف..."
-                className="w-full pl-3 pr-9 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-600 focus:outline-none focus:border-teal-500 font-mono"
-                dir="ltr"
+                placeholder="بحث بالاسم أو الرقم الأكاديمي..."
+                className="w-full pl-3 pr-9 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-500 focus:outline-none focus:border-teal-500"
+                dir="auto"
               />
             </div>
           </div>

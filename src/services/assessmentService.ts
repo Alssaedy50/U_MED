@@ -820,6 +820,7 @@ export async function startAttemptServer(
   const token = await getIdTokenSafe();
   const uid = auth.currentUser?.uid || 'student-user';
   const durationMinutes = assessmentObj?.durationMinutes || 45;
+  const maxAttempts = assessmentObj?.maxAttempts || 1;
   const questionIds = assessmentObj?.questionIds?.length
     ? assessmentObj.questionIds
     : ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
@@ -827,6 +828,31 @@ export async function startAttemptServer(
   // Fetch public questions from Firestore first
   const firestoreQuestions = await fetchPublicQuestionsForAssessment(questionIds);
 
+  // Check existing attempts for this student to resume active attempt or calculate cumulative attemptNumber
+  const existingUserAttempts = (await getStudentAttempts(uid)).filter(
+    (a) => a.assessmentId === assessmentId
+  );
+  const now = new Date();
+  const activeLocalOrRemoteAttempt = existingUserAttempts.find(
+    (a) => a.status === 'in_progress' && new Date(a.expiresAt).getTime() > now.getTime()
+  );
+
+  if (activeLocalOrRemoteAttempt) {
+    return {
+      attempt: activeLocalOrRemoteAttempt,
+      questions: firestoreQuestions
+    };
+  }
+
+  const completedAttemptsCount = existingUserAttempts.filter(
+    (a) => a.status === 'scored' || a.status === 'submitted'
+  ).length;
+
+  if (completedAttemptsCount >= maxAttempts) {
+    throw new Error(`لقد استنفدت الحد الأقصى للمحاولات المسموحة لهذا التقييم (${maxAttempts}).`);
+  }
+
+  const nextAttemptNumber = completedAttemptsCount + 1;
   let attempt: AssessmentAttempt | null = null;
   let serverQuestions: AssessmentQuestionPublic[] = [];
 
@@ -840,20 +866,24 @@ export async function startAttemptServer(
       body: JSON.stringify({
         assessmentId,
         durationMinutes,
-        questionIds
+        maxAttempts,
+        questionIds,
+        uid
       })
     });
     if (res.ok) {
       const data = await res.json();
       if (data.success && data.attempt) {
-        attempt = data.attempt;
+        attempt = {
+          ...data.attempt,
+          attemptNumber: Math.max(Number(data.attempt.attemptNumber) || 1, nextAttemptNumber)
+        };
         serverQuestions = data.questions || [];
       }
     }
   } catch (e) {}
 
   if (!attempt) {
-    const now = new Date();
     const expiresAt = new Date(now.getTime() + durationMinutes * 60 * 1000).toISOString();
     attempt = {
       id: `att-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
@@ -864,7 +894,7 @@ export async function startAttemptServer(
       status: 'in_progress',
       answers: {},
       lastSavedAt: now.toISOString(),
-      attemptNumber: 1
+      attemptNumber: nextAttemptNumber
     };
   }
 

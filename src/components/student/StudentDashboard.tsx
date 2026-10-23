@@ -269,13 +269,21 @@ export default function StudentDashboard({
           </div>
         </div>
 
-        <button
-          onClick={loadStudentData}
-          className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center justify-center gap-2 transition-colors border border-slate-700"
-        >
-          <RefreshCw className="w-3.5 h-3.5" />
-          <span>تحديث حالة القيد الآن</span>
-        </button>
+        <div className="flex flex-col sm:flex-row gap-2.5">
+          <button
+            onClick={loadStudentData}
+            className="flex-1 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center justify-center gap-2 transition-colors shadow-lg shadow-teal-600/20"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>تحديث حالة القيد الآن</span>
+          </button>
+          <button
+            onClick={() => setEnrollment(null)}
+            className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center justify-center gap-2 transition-colors border border-slate-700"
+          >
+            <span>تعديل بيانات طلب القيد</span>
+          </button>
+        </div>
       </div>
     );
   }

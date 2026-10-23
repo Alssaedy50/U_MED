@@ -304,8 +304,8 @@ export default function App() {
             phoneInput,
             passwordInput,
             displayNameInput,
-            academicIdInput.trim(),
-            emailInput.trim() || undefined
+            emailInput.trim() || undefined,
+            academicIdInput.trim()
           );
           setAuthSuccess('تم إنشاء الحساب بنجاح — يرجى إدخال رمز التحقق لتفعيل رقم الهاتف والبريد');
         } else {
@@ -1299,6 +1299,7 @@ export default function App() {
                     userRole={activeRole}
                     assignedUniversityId={roleDoc?.assignedUniversityId || 'univ-dar-al-salam'}
                     assignedStudyLevelId={roleDoc?.assignedStudyLevelId}
+                    assignedCourseId={roleDoc?.assignedCourseId}
                   />
                 )}
 
@@ -1307,6 +1308,7 @@ export default function App() {
                     universityId={roleDoc?.assignedUniversityId || 'univ-dar-al-salam'}
                     userRole={activeRole}
                     assignedStudyLevelId={roleDoc?.assignedStudyLevelId}
+                    assignedCourseId={roleDoc?.assignedCourseId}
                   />
                 )}
 

@@ -55,13 +55,15 @@ interface EducationalContentManagerProps {
   userRole?: UserRole;
   assignedUniversityId?: string;
   assignedStudyLevelId?: string;
+  assignedCourseId?: string;
 }
 
 export default function EducationalContentManager({
   adminUid,
   userRole = 'platform_owner',
   assignedUniversityId = 'univ-dar-al-salam',
-  assignedStudyLevelId
+  assignedStudyLevelId,
+  assignedCourseId
 }: EducationalContentManagerProps) {
   const [resources, setResources] = useState<EducationalResource[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -150,15 +152,19 @@ export default function EducationalContentManager({
       setStudyPeriods(periods);
 
       const defaultPeriodId = periods.find(p => p.id === form.studyPeriodId)?.id || periods[0]?.id || '';
-      const crs = defaultPeriodId ? await fetchCourseOfferings(defaultPeriodId) : [];
-      setCourses(crs);
+      const rawCrs = defaultPeriodId ? await fetchCourseOfferings(defaultPeriodId) : [];
+      const crs = userRole === 'department_head' && assignedCourseId
+        ? rawCrs.filter(c => c.id === assignedCourseId)
+        : rawCrs;
+      const finalCrs = crs.length > 0 ? crs : rawCrs;
+      setCourses(finalCrs);
 
       setForm(prev => ({
         ...prev,
         universityId: univIdToUse,
         studyLevelId: defaultLvlId,
         studyPeriodId: defaultPeriodId,
-        courseOfferingId: crs[0]?.id || ''
+        courseOfferingId: (userRole === 'department_head' && assignedCourseId) ? assignedCourseId : (finalCrs[0]?.id || '')
       }));
     } catch (e) {
       console.warn('Failed to load academic hierarchy for content manager:', e);
@@ -170,7 +176,8 @@ export default function EducationalContentManager({
     try {
       const list = await fetchEducationalResources({
         universityId: isUnivScoped ? assignedUniversityId : undefined,
-        studyLevelId: isBatchScoped && assignedStudyLevelId ? assignedStudyLevelId : undefined
+        studyLevelId: isBatchScoped && assignedStudyLevelId ? assignedStudyLevelId : undefined,
+        courseOfferingId: userRole === 'department_head' && assignedCourseId ? assignedCourseId : undefined
       });
       setResources(list);
     } catch (err: any) {
@@ -183,7 +190,7 @@ export default function EducationalContentManager({
   useEffect(() => {
     loadAcademicHierarchy();
     loadResources();
-  }, [assignedUniversityId, assignedStudyLevelId, userRole]);
+  }, [assignedUniversityId, assignedStudyLevelId, assignedCourseId, userRole]);
 
   // Cascade Periods when Add Form StudyLevel changes
   useEffect(() => {

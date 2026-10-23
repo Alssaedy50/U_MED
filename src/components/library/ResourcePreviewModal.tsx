@@ -54,13 +54,23 @@ export default function ResourcePreviewModal({
   useEffect(() => {
     if (!hasConfirmedLoad) return;
     let active = true;
+    let createdViewBlobUrl = '';
+    let createdDownloadBlobUrl = '';
     setIsLoading(true);
     setLoadError(null);
     resolveResourceFileUrl(resource, (pct) => {
       if (active) setLoadProgress(pct);
     })
       .then((res) => {
-        if (!active) return;
+        if (!active) {
+          if (res.viewUrl.startsWith('blob:')) URL.revokeObjectURL(res.viewUrl);
+          if (res.downloadUrl.startsWith('blob:') && res.downloadUrl !== res.viewUrl) {
+            URL.revokeObjectURL(res.downloadUrl);
+          }
+          return;
+        }
+        if (res.viewUrl.startsWith('blob:')) createdViewBlobUrl = res.viewUrl;
+        if (res.downloadUrl.startsWith('blob:')) createdDownloadBlobUrl = res.downloadUrl;
         setResolvedViewUrl(res.viewUrl);
         setResolvedDownloadUrl(res.downloadUrl);
         setIsCloudStored(res.isCloudFile);
@@ -74,6 +84,16 @@ export default function ResourcePreviewModal({
 
     return () => {
       active = false;
+      if (createdViewBlobUrl) {
+        try {
+          URL.revokeObjectURL(createdViewBlobUrl);
+        } catch {}
+      }
+      if (createdDownloadBlobUrl && createdDownloadBlobUrl !== createdViewBlobUrl) {
+        try {
+          URL.revokeObjectURL(createdDownloadBlobUrl);
+        } catch {}
+      }
     };
   }, [hasConfirmedLoad, resource]);
 

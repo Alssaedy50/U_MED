@@ -242,15 +242,19 @@ async function fetchHybridCollection<T extends { id: string }>(
     });
 
     if (firestoreItems.length > 0 || isInitialized) {
-      // Merge local items and Firestore items (giving local recent edits priority if present, and keeping defaults if not initialized)
+      // Cloud Firestore is the authoritative source of truth across devices when reachable.
+      // Only include defaults if not initialized and Firestore is empty.
       const mergedMap = new Map<string, T>();
-      if (!isInitialized) {
-        (DEFAULT_SEED_DATA[key] as T[]).forEach(def => {
-          if (!deleted.has(def.id)) mergedMap.set(def.id, def);
-        });
+      if (firestoreItems.length > 0) {
+        firestoreItems.forEach(fItem => mergedMap.set(fItem.id, fItem));
+      } else {
+        if (!isInitialized) {
+          (DEFAULT_SEED_DATA[key] as T[]).forEach(def => {
+            if (!deleted.has(def.id)) mergedMap.set(def.id, def);
+          });
+        }
+        localItems.forEach(lItem => mergedMap.set(lItem.id, lItem));
       }
-      firestoreItems.forEach(fItem => mergedMap.set(fItem.id, fItem));
-      localItems.forEach(lItem => mergedMap.set(lItem.id, lItem));
 
       const merged = Array.from(mergedMap.values());
       writeLocalCollection(key, merged);
@@ -309,7 +313,7 @@ export async function saveUniversity(university: University): Promise<void> {
     const existingCols = await fetchColleges(university.id);
     if (existingCols.length === 0) {
       const now = new Date().toISOString();
-      const defaultColId = university.id === 'univ-dar-al-salam' ? 'col-med-dar' : `col-med-${university.id}`;
+      const defaultColId = university.id === 'univ-dar-al-salam' ? 'col-medicine-dar' : `col-med-${university.id}`;
       await saveCollege({
         id: defaultColId,
         universityId: university.id,
@@ -728,15 +732,23 @@ export async function seedDarAlSalamToFirestore(performedBy: string = 'PLATFORM_
     isActive: true
   };
 
-  // Sync to localStorage first
-  writeLocalCollection('countries', [DAR_AL_SALAM_SEED.country]);
-  writeLocalCollection('universities', [univWithTimestamp]);
-  writeLocalCollection('colleges', [colWithTimestamp]);
-  writeLocalCollection('programs', [progWithTimestamp]);
-  writeLocalCollection('curriculumVersions', [curWithTimestamp]);
-  writeLocalCollection('studyLevels', DAR_AL_SALAM_SEED.studyLevels);
-  writeLocalCollection('studyPeriods', periodsList);
-  writeLocalCollection('courseOfferings', [defaultCourse]);
+  // Merge with existing local collections so other universities' entities are never overwritten
+  const mergeSeedWithLocal = <T extends { id: string }>(key: CollectionKey, seedItems: T[]) => {
+    const existing = readLocalCollection<T>(key) || [];
+    const map = new Map<string, T>();
+    existing.forEach(item => map.set(item.id, item));
+    seedItems.forEach(item => map.set(item.id, item));
+    writeLocalCollection(key, Array.from(map.values()));
+  };
+
+  mergeSeedWithLocal('countries', [DAR_AL_SALAM_SEED.country]);
+  mergeSeedWithLocal('universities', [univWithTimestamp]);
+  mergeSeedWithLocal('colleges', [colWithTimestamp]);
+  mergeSeedWithLocal('programs', [progWithTimestamp]);
+  mergeSeedWithLocal('curriculumVersions', [curWithTimestamp]);
+  mergeSeedWithLocal('studyLevels', DAR_AL_SALAM_SEED.studyLevels);
+  mergeSeedWithLocal('studyPeriods', periodsList);
+  mergeSeedWithLocal('courseOfferings', [defaultCourse]);
 
   let count = 1 + 1 + 1 + 1 + 1 + DAR_AL_SALAM_SEED.studyLevels.length + periodsList.length + 1;
 

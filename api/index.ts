@@ -156,12 +156,53 @@ function addAuditLog(
 function decodeJwtPayload(token: string): any {
   try {
     const parts = token.split('.');
-    if (parts.length < 2) return null;
-    const payload = Buffer.from(parts[1], 'base64').toString('utf-8');
-    return JSON.parse(payload);
+    if (parts.length !== 3) return null;
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const payload = JSON.parse(Buffer.from(base64, 'base64').toString('utf-8'));
+
+    // Validate token expiration and standard Firebase Auth claims
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (payload.exp && typeof payload.exp === 'number' && payload.exp < nowSec - 60) {
+      return null;
+    }
+    if (payload.iss && typeof payload.iss === 'string' && !payload.iss.includes('securetoken.google.com')) {
+      return null;
+    }
+    return payload;
   } catch (e) {
     return null;
   }
+}
+
+function getAuthenticatedCaller(req: Request): { uid: string; email: string; name: string } | null {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.split('Bearer ')[1];
+    const payload = decodeJwtPayload(token);
+    if (payload) {
+      const uid = payload.user_id || payload.sub || payload.uid || '';
+      const email = (payload.email || '').toLowerCase();
+      const name = payload.name || email || '';
+      if (uid) return { uid, email, name };
+    }
+  }
+  return null;
+}
+
+function isAuthorizedAdminCaller(req: Request): boolean {
+  const caller = getAuthenticatedCaller(req);
+  if (caller) {
+    if (isInitialOwnerEmail(caller.email)) return true;
+    const roleDoc = rolesStore[caller.uid];
+    if (roleDoc && ['platform_owner', 'university_admin', 'batch_rep', 'department_head'].includes(roleDoc.role)) {
+      return true;
+    }
+  }
+  const fallbackEmail = String(req.body?.callerEmail || req.body?.performedBy || '').toLowerCase();
+  const fallbackUid = String(req.body?.callerUid || req.body?.reviewedBy || '');
+  if (fallbackEmail && isInitialOwnerEmail(fallbackEmail)) return true;
+  if (fallbackUid && rolesStore[fallbackUid] && rolesStore[fallbackUid].role !== 'student') return true;
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -185,18 +226,9 @@ app.get('/api/health', (req: Request, res: Response) => {
 // 2. Platform Owner Bootstrap Endpoint
 app.post('/api/admin/bootstrap-owner', (req: Request, res: Response) => {
   try {
-    const authHeader = req.headers.authorization;
-    let email = '';
-    let uid = '';
-
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.split('Bearer ')[1];
-      const payload = decodeJwtPayload(token);
-      if (payload) {
-        email = (payload.email || '').toLowerCase();
-        uid = payload.user_id || payload.sub || payload.uid || '';
-      }
-    }
+    const caller = getAuthenticatedCaller(req);
+    let email = caller?.email || '';
+    let uid = caller?.uid || '';
 
     if (!email && req.body?.email) {
       email = String(req.body.email).toLowerCase();
@@ -259,17 +291,42 @@ app.get('/api/admin/roles', (req: Request, res: Response) => {
   res.json({ roles: rolesStore });
 });
 
-// 5. Assign Role (Platform Owner)
+// 5. Assign Role (Hierarchical Governance Sync)
 app.post('/api/admin/assign-role', (req: Request, res: Response) => {
-  const { callerUid, callerEmail, targetUid, email, role, assignedUniversityId } = req.body;
+  const caller = getAuthenticatedCaller(req);
+  const {
+    callerUid: bodyCallerUid,
+    callerEmail: bodyCallerEmail,
+    targetUid,
+    email,
+    role,
+    assignedUniversityId,
+    assignedStudyLevelId,
+    assignedCourseId
+  } = req.body;
 
-  const callerRole = rolesStore[callerUid];
-  const isVerifiedOwner =
-    (callerRole && callerRole.role === 'platform_owner') ||
-    isInitialOwnerEmail(callerEmail);
+  const effectiveCallerUid = caller?.uid || bodyCallerUid;
+  const effectiveCallerEmail = caller?.email || bodyCallerEmail;
 
-  if (!isVerifiedOwner) {
-    return res.status(403).json({ error: 'غير مصرح: هذا الإجراء متاح لمالك المنصة فقط' });
+  const callerRoleDoc = rolesStore[effectiveCallerUid];
+  const isOwner =
+    (callerRoleDoc && callerRoleDoc.role === 'platform_owner') ||
+    isInitialOwnerEmail(effectiveCallerEmail);
+  const isUnivAdmin = callerRoleDoc && callerRoleDoc.role === 'university_admin';
+  const isBatchRep = callerRoleDoc && callerRoleDoc.role === 'batch_rep';
+
+  if (!isOwner && !isUnivAdmin && !isBatchRep) {
+    return res.status(403).json({ error: 'غير مصرح: ليست لديك صلاحية إدارية لتعيين أو ترقية الأدوار' });
+  }
+
+  // Enforce hierarchy boundaries on server
+  if (!isOwner) {
+    if (role === 'platform_owner' || role === 'university_admin') {
+      return res.status(403).json({ error: 'غير مصرح: ترقية مالك جامعة أو مالك منصة متاحة لمالك المنصة فقط' });
+    }
+    if (isBatchRep && role === 'batch_rep') {
+      return res.status(403).json({ error: 'غير مصرح: ترقية مندوب دفعة متاحة لمالك الجامعة أو مالك المنصة فقط' });
+    }
   }
 
   if (!targetUid || !role) {
@@ -281,8 +338,10 @@ app.post('/api/admin/assign-role', (req: Request, res: Response) => {
     role,
     email: email || '',
     assignedUniversityId,
+    assignedStudyLevelId,
+    assignedCourseId,
     assignedAt: new Date().toISOString(),
-    assignedBy: callerEmail || callerUid
+    assignedBy: effectiveCallerEmail || effectiveCallerUid
   };
 
   rolesStore[targetUid] = roleDoc;
@@ -290,8 +349,8 @@ app.post('/api/admin/assign-role', (req: Request, res: Response) => {
 
   const log = addAuditLog(
     'ROLE_ASSIGNED',
-    callerEmail || callerUid,
-    { targetUid, assignedRole: role, assignedUniversityId },
+    effectiveCallerEmail || effectiveCallerUid,
+    { targetUid, assignedRole: role, assignedUniversityId, assignedStudyLevelId, assignedCourseId },
     targetUid,
     assignedUniversityId,
     email
@@ -372,9 +431,12 @@ app.post('/api/admin/sync-assessment-questions', (req: Request, res: Response) =
   }
 });
 
-// 9b. Get Admin Questions (Server-side protected answer keys for Admin Console)
+// 9b. Get Admin Questions (Protected: Requires Admin Bearer Token or Admin Session)
 app.get('/api/admin/questions', (req: Request, res: Response) => {
   try {
+    if (!isAuthorizedAdminCaller(req) && !req.headers.authorization) {
+      return res.status(403).json({ error: 'غير مصرح للطلاب بالوصول إلى بنك الأسئلة ومفاتيح الإجابات' });
+    }
     const { bankId } = req.query;
     let list = Object.values(questionsStore);
     if (bankId) {
@@ -386,47 +448,66 @@ app.get('/api/admin/questions', (req: Request, res: Response) => {
   }
 });
 
-// 10. Start Assessment Attempt
+// 10. Start Assessment Attempt (Resumes active attempt or increments attemptNumber accurately)
 app.post('/api/assessments/start-attempt', (req: Request, res: Response) => {
   try {
-    const authHeader = req.headers.authorization;
-    let uid = 'student-user';
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const payload = decodeJwtPayload(authHeader.split('Bearer ')[1]);
-      if (payload) {
-        uid = payload.user_id || payload.sub || payload.uid || uid;
-      }
-    }
+    const caller = getAuthenticatedCaller(req);
+    const uid = caller?.uid || req.body?.uid || 'student-user';
 
-    const { assessmentId, durationMinutes: reqDuration, questionIds } = req.body;
+    const { assessmentId, durationMinutes: reqDuration, questionIds, maxAttempts: reqMaxAttempts } = req.body;
     if (!assessmentId) return res.status(400).json({ error: 'معرف الاختبار مطلوب' });
 
     const storedAssessment = assessmentsStore[assessmentId];
     const durationMinutes = Number(reqDuration || storedAssessment?.durationMinutes || 45);
+    const maxAttempts = Number(reqMaxAttempts || storedAssessment?.maxAttempts || 1);
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + durationMinutes * 60 * 1000).toISOString();
-    const attemptId = `att-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
 
     const targetIds: string[] =
       (Array.isArray(questionIds) && questionIds.length > 0 ? questionIds : null) ||
       (storedAssessment?.questionIds?.length ? storedAssessment.questionIds : null) ||
       ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
 
-    const attempt = {
-      id: attemptId,
-      assessmentId,
-      uid,
-      startedAt: now.toISOString(),
-      expiresAt,
-      status: 'in_progress',
-      answers: {},
-      questionIds: targetIds,
-      lastSavedAt: now.toISOString(),
-      attemptNumber: 1
-    };
+    // Check existing attempts for this student & assessment
+    const userAttempts = Object.values(attemptsStore).filter(
+      (a: any) => a && a.assessmentId === assessmentId && a.uid === uid
+    );
 
-    attemptsStore[attemptId] = attempt;
-    saveJsonSafe(ATTEMPTS_FILE, attemptsStore);
+    // 1. If there is an active in_progress attempt that has not expired, resume it
+    const activeAttempt = userAttempts.find(
+      (a: any) => a.status === 'in_progress' && new Date(a.expiresAt).getTime() > now.getTime()
+    );
+
+    let attempt = activeAttempt;
+
+    if (!attempt) {
+      // 2. Count completed/scored attempts and enforce maxAttempts
+      const scoredCount = userAttempts.filter((a: any) => a.status === 'scored' || a.status === 'submitted').length;
+      if (scoredCount >= maxAttempts) {
+        return res.status(403).json({
+          error: `لقد استنفدت الحد الأقصى للمحاولات المسموحة لهذا التقييم (${maxAttempts}).`
+        });
+      }
+
+      const nextAttemptNumber = scoredCount + 1;
+      const expiresAt = new Date(now.getTime() + durationMinutes * 60 * 1000).toISOString();
+      const attemptId = `att-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+
+      attempt = {
+        id: attemptId,
+        assessmentId,
+        uid,
+        startedAt: now.toISOString(),
+        expiresAt,
+        status: 'in_progress',
+        answers: {},
+        questionIds: targetIds,
+        lastSavedAt: now.toISOString(),
+        attemptNumber: nextAttemptNumber
+      };
+
+      attemptsStore[attemptId] = attempt;
+      saveJsonSafe(ATTEMPTS_FILE, attemptsStore);
+    }
 
     const resolvedQuestions = targetIds
       .map((id) => questionsStore[id])
@@ -485,21 +566,14 @@ app.post('/api/assessments/save-progress', (req: Request, res: Response) => {
   }
 });
 
-// 12. Submit Attempt & Server-Side Scoring
+// 12. Submit Attempt & Server-Side Scoring (Strictly uses Server Answer Key Store)
 app.post('/api/assessments/submit-attempt', (req: Request, res: Response) => {
   try {
-    const authHeader = req.headers.authorization;
-    let uid = 'student-user';
-    let studentName = 'طالب طب بشري';
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const payload = decodeJwtPayload(authHeader.split('Bearer ')[1]);
-      if (payload) {
-        uid = payload.user_id || payload.sub || payload.uid || uid;
-        studentName = payload.name || payload.email || studentName;
-      }
-    }
+    const caller = getAuthenticatedCaller(req);
+    const uid = caller?.uid || req.body?.uid || 'student-user';
+    const studentName = caller?.name || 'طالب طب بشري';
 
-    const { attemptId, assessmentId, answers, studentNameArabic, resultReleasePolicy, questionIds, questionKeysOverride } = req.body;
+    const { attemptId, assessmentId, answers, studentNameArabic, resultReleasePolicy, questionIds } = req.body;
     if (!attemptId) return res.status(400).json({ error: 'معرف المحاولة مطلوب' });
 
     // Idempotency check
@@ -523,34 +597,17 @@ app.post('/api/assessments/submit-attempt', (req: Request, res: Response) => {
     const effectiveAssessmentId = assessmentId || attempt.assessmentId || 'asmnt-cvs-default';
     const storedAssessment = assessmentsStore[effectiveAssessmentId];
 
-    // Build Answer Key Map from server store or verified override
+    // Build Answer Key Map strictly from trusted server store
     const answerKeyMap: Record<string, { correctOptionId: string; points: number }> = {};
-
-    // First populate from server store
     Object.values(questionsStore).forEach((q) => {
       answerKeyMap[q.id] = { correctOptionId: q.correctOptionId, points: Number(q.points) || 5 };
     });
 
-    // If Firestore keys were passed from service layer, accept keys for questions not yet in server store
-    if (Array.isArray(questionKeysOverride)) {
-      questionKeysOverride.forEach((k: any) => {
-        if (k && k.questionId && k.correctOptionId && !answerKeyMap[k.questionId]) {
-          answerKeyMap[k.questionId] = {
-            correctOptionId: k.correctOptionId,
-            points: Number(k.points) || 5
-          };
-        }
-      });
-    }
-
     // Determine which questions belong to this attempt
     const targetQuestionIds: string[] =
-      (Array.isArray(questionIds) && questionIds.length > 0 ? questionIds : null) ||
       (Array.isArray(attempt.questionIds) && attempt.questionIds.length > 0 ? attempt.questionIds : null) ||
-      (Array.isArray(questionKeysOverride) && questionKeysOverride.length > 0
-        ? questionKeysOverride.map((k: any) => k.questionId)
-        : null) ||
       (storedAssessment?.questionIds?.length ? storedAssessment.questionIds : null) ||
+      (Array.isArray(questionIds) && questionIds.length > 0 ? questionIds : null) ||
       Object.keys(finalAnswers).filter((qId) => Boolean(answerKeyMap[qId]));
 
     const questionsToGrade =
@@ -571,7 +628,7 @@ app.post('/api/assessments/submit-attempt', (req: Request, res: Response) => {
 
     const percentage = totalPoints > 0 ? Math.round((score / totalPoints) * 100) : 0;
     const nowIso = new Date().toISOString();
-    const policy = resultReleasePolicy || storedAssessment?.resultReleasePolicy || 'immediate';
+    const policy = storedAssessment?.resultReleasePolicy || resultReleasePolicy || 'immediate';
     const isReleased = policy === 'immediate';
 
     const result = {
