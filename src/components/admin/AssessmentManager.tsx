@@ -20,7 +20,11 @@ import {
   FileJson,
   Download,
   BookOpen,
-  X
+  X,
+  Upload,
+  Wifi,
+  WifiOff,
+  RefreshCw
 } from 'lucide-react';
 import { 
   QuestionBank, 
@@ -41,6 +45,7 @@ import {
   updateQuestionBank,
   deleteQuestionBank,
   getBankQuestions, 
+  subscribeToBankQuestions,
   createQuestion, 
   updateQuestion,
   deleteQuestion, 
@@ -50,10 +55,13 @@ import {
   deleteAssessment,
   updateAssessmentStatus,
   getAssessmentResultsForAdmin, 
-  releaseAssessmentResults 
+  releaseAssessmentResults,
+  flushQuestionOutbox,
+  subscribeToQuestionSyncState
 } from '../../services/assessmentService.ts';
 import { fetchStudyLevels, fetchPrograms, fetchColleges, fetchUniversities } from '../../services/academicService.ts';
 import { getRoleLabelArabic } from '../../services/batchGovernanceService.ts';
+import BulkQuestionImportModal from './BulkQuestionImportModal.tsx';
 
 interface AssessmentManagerProps {
   universityId: string;
@@ -134,9 +142,41 @@ export default function AssessmentManager({
   const [selectedAssessmentForResults, setSelectedAssessmentForResults] = useState<Assessment | null>(null);
   const [results, setResults] = useState<AssessmentResult[]>([]);
 
-  // Feedback State
+  // Feedback & Bulk Import / Offline Outbox Sync State
   const [loading, setLoading] = useState<boolean>(false);
   const [statusMsg, setStatusMsg] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
+  const [showBulkImportModal, setShowBulkImportModal] = useState<boolean>(false);
+  const [syncState, setSyncState] = useState<{
+    pendingCount: number;
+    syncing: boolean;
+    lastSyncedAt: string | null;
+    isOnline: boolean;
+  }>({
+    pendingCount: 0,
+    syncing: false,
+    lastSyncedAt: null,
+    isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true
+  });
+
+  useEffect(() => {
+    const unsub = subscribeToQuestionSyncState((state) => {
+      setSyncState({
+        pendingCount: state.pendingCount,
+        syncing: state.isSyncing,
+        lastSyncedAt: state.lastSyncedAt,
+        isOnline: state.isOnline
+      });
+    });
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    if (!selectedBank?.id) return;
+    const unsub = subscribeToBankQuestions(selectedBank.id, (updatedQuestions) => {
+      setBankQuestions(updatedQuestions);
+    });
+    return unsub;
+  }, [selectedBank?.id]);
 
   useEffect(() => {
     if (!isOwner && initialUniversityId) {
@@ -623,6 +663,51 @@ export default function AssessmentManager({
         </div>
       </div>
 
+      {/* Offline / Outbox Synchronization Status Bar */}
+      <div className="px-4 py-2.5 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <span
+            className={`px-2.5 py-1 rounded-full font-bold flex items-center gap-1.5 border ${
+              syncState.isOnline
+                ? 'bg-emerald-950/70 border-emerald-700/60 text-emerald-300'
+                : 'bg-amber-950/80 border-amber-700/70 text-amber-300'
+            }`}
+          >
+            {syncState.isOnline ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
+            <span>{syncState.isOnline ? 'متصل بالسحابة (تزامن تلقائي نشط)' : 'وضع العمل بدون إنترنت (Offline Mode)'}</span>
+          </span>
+
+          {syncState.pendingCount > 0 ? (
+            <span className="text-amber-300 font-semibold">
+              يوجد {syncState.pendingCount} عملية محفوظة محلياً بانتظار المزامنة السحابية التلقائية
+            </span>
+          ) : (
+            <span className="text-slate-400">
+              جميع بنوك الأسئلة ومفاتيح الإجابات متزامنة ومحمية ✓
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          {syncState.lastSyncedAt && (
+            <span className="text-[11px] text-slate-400 font-mono">
+              آخر مزامنة: {new Date(syncState.lastSyncedAt).toLocaleTimeString('ar-YE')}
+            </span>
+          )}
+          {syncState.pendingCount > 0 && (
+            <button
+              type="button"
+              onClick={() => flushQuestionOutbox()}
+              disabled={syncState.syncing || !syncState.isOnline}
+              className="px-3 py-1 rounded-lg bg-teal-600 hover:bg-teal-500 disabled:opacity-40 text-white text-[11px] font-bold flex items-center gap-1 transition-colors"
+            >
+              <RefreshCw className={`w-3 h-3 ${syncState.syncing ? 'animate-spin' : ''}`} />
+              <span>{syncState.syncing ? 'جاري المزامنة...' : 'مزامنة الآن'}</span>
+            </button>
+          )}
+        </div>
+      </div>
+
       {statusMsg && (
         <div className={`p-4 rounded-xl text-xs font-semibold flex items-center gap-2 border ${
           statusMsg.type === 'error' ? 'bg-rose-950/60 border-rose-800 text-rose-300' : 'bg-teal-950/60 border-teal-800 text-teal-300'
@@ -754,13 +839,20 @@ export default function AssessmentManager({
                     <h3 className="text-base font-bold text-white">{selectedBank.titleArabic}</h3>
                     <p className="text-xs text-slate-400 mt-0.5">عدد الأسئلة المسجلة: {bankQuestions.length}</p>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
                       onClick={() => setEditingBank(selectedBank)}
                       className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
                     >
                       <Edit2 className="w-3.5 h-3.5" />
                       <span>تعديل البنك</span>
+                    </button>
+                    <button
+                      onClick={() => setShowBulkImportModal(true)}
+                      className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-lg"
+                    >
+                      <Upload className="w-4 h-4" />
+                      <span>استيراد دفعة أسئلة (Bulk / بدون إنترنت)</span>
                     </button>
                     <button
                       onClick={() => setShowNewQuestionForm(true)}
@@ -903,7 +995,18 @@ export default function AssessmentManager({
                     <div key={q.id} className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
                       <div className="flex items-start justify-between gap-3">
                         <div className="space-y-1">
-                          <span className="text-[11px] font-bold text-teal-400">سؤال {idx + 1} ({q.points} نقاط)</span>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-[11px] font-bold text-teal-400">سؤال {idx + 1} ({q.points} نقاط)</span>
+                            {q.syncStatus === 'pending_sync' ? (
+                              <span className="px-2 py-0.5 rounded bg-amber-950/80 border border-amber-700/70 text-amber-300 text-[10px] font-semibold">
+                                محفوظ محلياً — بانتظار المزامنة
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded bg-emerald-950/60 border border-emerald-800/60 text-emerald-300 text-[10px]">
+                                متزامن سحابياً ✓
+                              </span>
+                            )}
+                          </div>
                           <p className="text-sm font-bold text-white">{q.stemArabic}</p>
                           {q.stemEnglish && <p className="text-xs text-slate-400 font-mono" dir="ltr">{q.stemEnglish}</p>}
                         </div>
@@ -935,7 +1038,12 @@ export default function AssessmentManager({
                                 : 'bg-slate-900/50 border-slate-800 text-slate-400'
                             }`}
                           >
-                            {o.textArabic} {o.id === q.correctOptionId && '✓ (الإجابة الصحيحة)'}
+                            <div>{o.textArabic} {o.id === q.correctOptionId && '✓ (الإجابة الصحيحة)'}</div>
+                            {q.optionExplanations?.[o.id] && (
+                              <div className="text-[10px] font-normal text-slate-300 mt-1 pt-1 border-t border-slate-800/80">
+                                {q.optionExplanations[o.id]}
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -1644,6 +1752,29 @@ export default function AssessmentManager({
             </div>
           </form>
         </div>
+      )}
+
+      {/* MODAL: BULK QUESTION IMPORT (OFFLINE-FIRST + OPTIONAL AI EXPLANATIONS) */}
+      {showBulkImportModal && selectedBank && (
+        <BulkQuestionImportModal
+          bank={selectedBank}
+          existingQuestions={bankQuestions}
+          userRole={userRole}
+          onClose={() => setShowBulkImportModal(false)}
+          onSaved={(result) => {
+            setBankQuestions(result.savedQuestions);
+            setStatusMsg({
+              type: 'success',
+              text: `تم حفظ الدفعة بنجاح: ${result.createdCount} سؤال جديد، و${result.updatedCount} سؤال محدّث${
+                result.skippedDuplicatesCount > 0 ? ` (تم تخطي ${result.skippedDuplicatesCount} مكرر)` : ''
+              } — ${
+                result.syncedImmediately
+                  ? 'تمت المزامنة السحابية فوراً ✓'
+                  : 'محفوظ بأمان على الجهاز وسيتم مزامنته تلقائياً فور توفر الإنترنت'
+              }`
+            });
+          }}
+        />
       )}
 
     </div>

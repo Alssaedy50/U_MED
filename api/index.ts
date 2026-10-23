@@ -619,14 +619,28 @@ app.post('/api/admin/enrollment-review', requireAdmin, (req: AuthenticatedReques
   res.json({ success: true, message: 'تم تسجيل مراجعة قيد الطالب بنجاح', log });
 });
 
-// 9. Sync Admin Questions & Assessments to Server Store (Protected: Admin Only)
-app.post('/api/admin/sync-assessment-questions', requireAdmin, (req: Request, res: Response) => {
+// 9. Sync Admin Questions & Assessments to Server Store (Protected: Admin Only, Conflict-Safe & Idempotent)
+app.post('/api/admin/sync-assessment-questions', requireAdmin, (req: AuthenticatedRequest, res: Response) => {
   try {
     const { questions, assessment, deletedQuestionIds, deletedAssessmentIds } = req.body;
+    let upsertedCount = 0;
+
     if (Array.isArray(questions)) {
       questions.forEach((q: QuestionItemFull) => {
-        if (q && q.id) {
-          questionsStore[q.id] = q;
+        if (q && q.id && q.stemArabic && Array.isArray(q.options) && q.correctOptionId) {
+          const existing = questionsStore[q.id];
+          const existingTime = existing?.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+          const incomingTime = q.updatedAt ? new Date(q.updatedAt).getTime() : Date.now();
+
+          if (!existing || incomingTime >= existingTime) {
+            questionsStore[q.id] = {
+              ...existing,
+              ...q,
+              points: Number(q.points) || 5,
+              updatedAt: q.updatedAt || new Date().toISOString()
+            };
+            upsertedCount++;
+          }
         }
       });
       saveJsonSafe(QUESTIONS_FILE, questionsStore);
@@ -647,7 +661,11 @@ app.post('/api/admin/sync-assessment-questions', requireAdmin, (req: Request, re
       });
       saveJsonSafe(ASSESSMENTS_FILE, assessmentsStore);
     }
-    res.json({ success: true, questionsCount: Object.keys(questionsStore).length });
+    res.json({
+      success: true,
+      upsertedCount,
+      questionsCount: Object.keys(questionsStore).length
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'فشل مزامنة الأسئلة' });
   }
@@ -664,6 +682,94 @@ app.get('/api/admin/questions', requireAdmin, (req: Request, res: Response) => {
     res.json({ questions: list });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'فشل جلب الأسئلة' });
+  }
+});
+
+// 9c. Optional AI Medical Explanation Generator (Protected: Admin Only, Strictly Preserves User's Correct Answer)
+app.post('/api/admin/generate-mcq-explanations', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(503).json({
+        error: 'مفتاح خدمة الذكاء الاصطناعي (GEMINI_API_KEY) غير مضاف في الخادم حالياً. يمكنك حفظ الأسئلة واستخدام المنصة بالكامل بدون ذكاء اصطناعي.'
+      });
+    }
+
+    const rawQuestions = Array.isArray(req.body?.questions) ? req.body.questions.slice(0, 15) : [];
+    if (rawQuestions.length === 0) {
+      return res.status(400).json({ error: 'لا توجد أسئلة مرسلة لتوليد التعليل الطبي.' });
+    }
+
+    const { GoogleGenAI, Type } = await import('@google/genai');
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build'
+        }
+      }
+    });
+
+    const formattedPromptItems = rawQuestions.map((q: any, idx: number) => {
+      const optionsText = (q.options || [])
+        .map((o: any) => `${o.id}: ${o.textArabic}${o.textEnglish ? ` (${o.textEnglish})` : ''}`)
+        .join(' | ');
+      return `Question #${idx + 1} [tempId=${q.tempId}]:
+Stem (AR): ${q.stemArabic}
+${q.stemEnglish ? `Stem (EN): ${q.stemEnglish}\n` : ''}Options: ${optionsText}
+Authoritative User-Supplied Correct Option ID (DO NOT CHANGE): ${q.correctOptionId}`;
+    }).join('\n\n');
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: `You are an expert medical faculty professor generating concise, accurate Arabic medical rationales for multiple-choice questions (MCQs).
+For each question below, explain clearly and concisely in Arabic:
+1) Why the user-supplied correct option (${'`Authoritative User-Supplied Correct Option ID`'}) is medically correct.
+2) Briefly why the other distractor options are incorrect.
+CRITICAL RULE: You must treat the supplied Correct Option ID as fixed and authoritative. Never alter or override the correct option ID.
+
+${formattedPromptItems}`,
+      config: {
+        systemInstruction: 'Return concise, clinically accurate Arabic medical explanations for each question. Never modify the user-supplied correct answer.',
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              tempId: {
+                type: Type.STRING,
+                description: 'The exact tempId provided in the input question.'
+              },
+              explanationArabic: {
+                type: Type.STRING,
+                description: 'Concise unified Arabic medical explanation (2-4 sentences) explaining why the correct option is right and why distractors are wrong.'
+              }
+            },
+            required: ['tempId', 'explanationArabic']
+          }
+        }
+      }
+    });
+
+    const jsonText = (response.text || '[]').trim();
+    const parsed = JSON.parse(jsonText);
+    const explanations = Array.isArray(parsed)
+      ? parsed.map((item: any) => ({
+          tempId: String(item.tempId || ''),
+          explanationArabic: String(item.explanationArabic || '').trim()
+        }))
+      : [];
+
+    return res.json({
+      success: true,
+      explanations
+    });
+  } catch (err: any) {
+    console.warn('[AI Explanations] Error:', err);
+    return res.status(500).json({
+      error: err?.message || 'حدث خطأ أثناء توليد التعليل الطبي بالذكاء الاصطناعي'
+    });
   }
 });
 

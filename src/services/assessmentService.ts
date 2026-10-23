@@ -29,10 +29,34 @@ import {
   AssessmentAttempt, 
   AssessmentResult, 
   AssessmentType,
-  AssessmentStatus
+  AssessmentStatus,
+  ParsedQuestionDraft
 } from '../types/umed.ts';
+import { computeQuestionFingerprint } from './mcqBulkParser.ts';
+import {
+  enqueueQuestionsUpsert,
+  enqueueQuestionDelete,
+  mergeCloudAndOfflineQuestions,
+  readLocalBankQuestionsAsync,
+  writeLocalBankQuestions,
+  startQuestionOutboxAutoSync,
+  flushQuestionOutbox,
+  sanitizePublicQuestion,
+  extractProtectedAnswerKey,
+  subscribeToQuestionSyncState
+} from './questionImportSyncService.ts';
+
+export {
+  flushQuestionOutbox,
+  subscribeToQuestionSyncState
+};
 
 const LOCAL_STORAGE_PREFIX = 'umed_assessment_';
+
+// Start automatic background outbox synchronization in browser runtime
+if (typeof window !== 'undefined') {
+  startQuestionOutboxAutoSync();
+}
 
 // Default Seed Question Bank for Dar Al Salam University
 export const DEFAULT_QUESTION_BANK: QuestionBank = {
@@ -144,7 +168,7 @@ async function getIdTokenSafe(): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Admin Question Banks & MCQs (Full Dynamic CRUD)
+// 1. Admin Question Banks & MCQs (Full Dynamic CRUD + Offline Bulk Outbox)
 // ---------------------------------------------------------------------------
 
 export async function getQuestionBanks(universityId: string): Promise<QuestionBank[]> {
@@ -269,17 +293,8 @@ export async function deleteQuestionBank(
     await deleteDoc(doc(db, 'questionBanks', bankId));
   } catch (err) {}
 
-  // Also delete associated questions from Firestore & server
-  const deletedQuestionIds: string[] = [];
   for (const q of questions) {
-    deletedQuestionIds.push(q.id);
-    try {
-      await Promise.all([
-        deleteDoc(doc(db, 'questions', q.id)),
-        deleteDoc(doc(db, 'assessmentQuestions', q.id)),
-        deleteDoc(doc(db, 'questionAnswerKeys', q.id))
-      ]);
-    } catch (e) {}
+    await enqueueQuestionDelete(bankId, q.id);
   }
 
   try {
@@ -289,26 +304,11 @@ export async function deleteQuestionBank(
     localStorage.removeItem(`${LOCAL_STORAGE_PREFIX}q_${bankId}`);
     localStorage.setItem(`${LOCAL_STORAGE_PREFIX}q_init_${bankId}`, 'true');
   } catch (e) {}
-
-  if (deletedQuestionIds.length > 0) {
-    try {
-      const token = await getIdTokenSafe();
-      await fetch('/api/admin/sync-assessment-questions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        },
-        body: JSON.stringify({ deletedQuestionIds })
-      });
-    } catch (e) {}
-  }
 }
 
 export async function getBankQuestions(bankId: string): Promise<QuestionItemFull[]> {
   const initKey = `${LOCAL_STORAGE_PREFIX}q_init_${bankId}`;
-  const raw = localStorage.getItem(`${LOCAL_STORAGE_PREFIX}q_${bankId}`);
-  const localQuestions: QuestionItemFull[] = raw ? JSON.parse(raw) : [];
+  const localQuestions = await readLocalBankQuestionsAsync(bankId);
 
   try {
     const q = query(
@@ -316,11 +316,11 @@ export async function getBankQuestions(bankId: string): Promise<QuestionItemFull
       where('bankId', '==', bankId)
     );
     const snap = await getDocs(q);
-    const list: QuestionItemFull[] = [];
-    snap.forEach(d => list.push({ id: d.id, ...d.data() } as QuestionItemFull));
-    if (list.length > 0) {
-      localStorage.setItem(`${LOCAL_STORAGE_PREFIX}q_${bankId}`, JSON.stringify(list));
-      localStorage.setItem(initKey, 'true');
+    const cloudList: QuestionItemFull[] = [];
+    snap.forEach(d => cloudList.push({ id: d.id, ...d.data(), syncStatus: 'synced' } as QuestionItemFull));
+    if (cloudList.length > 0) {
+      const merged = mergeCloudAndOfflineQuestions(bankId, cloudList, localQuestions);
+      await writeLocalBankQuestions(bankId, merged);
       // Keep backend grading store synchronized in background
       getIdTokenSafe().then(token => {
         fetch('/api/admin/sync-assessment-questions', {
@@ -329,18 +329,16 @@ export async function getBankQuestions(bankId: string): Promise<QuestionItemFull
             'Content-Type': 'application/json',
             ...(token ? { 'Authorization': `Bearer ${token}` } : {})
           },
-          body: JSON.stringify({ questions: list })
+          body: JSON.stringify({ questions: merged })
         }).catch(() => {});
       });
-      return list;
+      return merged;
     }
   } catch (err) {}
 
-  if (localStorage.getItem(initKey) === 'true') {
+  if (localStorage.getItem(initKey) === 'true' || localQuestions.length > 0) {
     return localQuestions;
   }
-
-  if (localQuestions.length > 0) return localQuestions;
 
   // Fetch protected default questions from server endpoint for Admin Console
   try {
@@ -353,39 +351,75 @@ export async function getBankQuestions(bankId: string): Promise<QuestionItemFull
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.questions) && data.questions.length > 0) {
-        return data.questions;
+        const merged = mergeCloudAndOfflineQuestions(bankId, data.questions, localQuestions);
+        await writeLocalBankQuestions(bankId, merged);
+        return merged;
       }
     }
   } catch (e) {}
 
-  return [];
+  return localQuestions;
+}
+
+export function subscribeToBankQuestions(
+  bankId: string,
+  onUpdate: (questions: QuestionItemFull[]) => void
+): () => void {
+  if (!bankId) return () => {};
+  try {
+    const q = query(
+      collection(db, 'questions'),
+      where('bankId', '==', bankId)
+    );
+    const unsubFirestore = onSnapshot(
+      q,
+      async (snap) => {
+        const cloudList: QuestionItemFull[] = [];
+        snap.forEach(d => {
+          cloudList.push({
+            id: d.id,
+            ...d.data(),
+            syncStatus: 'synced'
+          } as QuestionItemFull);
+        });
+        const localQuestions = await readLocalBankQuestionsAsync(bankId);
+        const merged = mergeCloudAndOfflineQuestions(bankId, cloudList, localQuestions);
+        await writeLocalBankQuestions(bankId, merged);
+        onUpdate(merged);
+      },
+      async () => {
+        const localQuestions = await readLocalBankQuestionsAsync(bankId);
+        onUpdate(localQuestions);
+      }
+    );
+
+    const unsubSync = subscribeToQuestionSyncState(async () => {
+      const localQuestions = await readLocalBankQuestionsAsync(bankId);
+      if (localQuestions.length > 0) {
+        onUpdate(localQuestions);
+      }
+    });
+
+    return () => {
+      unsubFirestore();
+      unsubSync();
+    };
+  } catch {
+    return () => {};
+  }
 }
 
 async function ensureBankQuestionsInitialized(bankId: string): Promise<QuestionItemFull[]> {
   const initKey = `${LOCAL_STORAGE_PREFIX}q_init_${bankId}`;
   const current = await getBankQuestions(bankId);
   if (localStorage.getItem(initKey) !== 'true') {
-    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}q_${bankId}`, JSON.stringify(current));
-    localStorage.setItem(initKey, 'true');
+    await writeLocalBankQuestions(bankId, current);
     for (const q of current) {
       try {
         await Promise.all([
-          setDoc(doc(db, 'questions', q.id), q, { merge: true }),
-          setDoc(doc(db, 'assessmentQuestions', q.id), {
-            id: q.id,
-            bankId: q.bankId,
-            stemArabic: q.stemArabic,
-            stemEnglish: q.stemEnglish || '',
-            options: q.options,
-            points: Number(q.points) || 5
-          }, { merge: true }),
-          setDoc(doc(db, 'questionAnswerKeys', q.id), {
-            questionId: q.id,
-            assessmentId: q.bankId,
-            correctOptionId: q.correctOptionId,
-            explanationArabic: q.explanationArabic || '',
-            points: Number(q.points) || 5
-          }, { merge: true })
+          setDoc(doc(db, 'questions', q.id), cleanFirestoreData(q), { merge: true }),
+          setDoc(doc(db, 'assessmentQuestions', q.id), cleanFirestoreData(sanitizePublicQuestion(q)), { merge: true }),
+          setDoc(doc(db, 'questionAnswerKeys', q.id), cleanFirestoreData(extractProtectedAnswerKey(q)), { merge: true })
         ]);
       } catch (e) {}
     }
@@ -395,65 +429,127 @@ async function ensureBankQuestionsInitialized(bankId: string): Promise<QuestionI
 
 export async function createQuestion(question: Omit<QuestionItemFull, 'id' | 'createdAt'>): Promise<QuestionItemFull> {
   const existing = await ensureBankQuestionsInitialized(question.bankId);
-  const id = `q-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+  const contentHash = question.contentHash || computeQuestionFingerprint(question.stemArabic, question.options);
+
+  // Check if an identical question already exists in this bank
+  const duplicateExisting = existing.find(
+    q => (q.contentHash || computeQuestionFingerprint(q.stemArabic, q.options)) === contentHash
+  );
+  const id = duplicateExisting?.id || `q-${question.bankId}-${contentHash}`;
   const now = new Date().toISOString();
+
   const newQ: QuestionItemFull = {
     ...question,
     id,
-    createdAt: now
+    contentHash,
+    createdAt: duplicateExisting?.createdAt || now,
+    updatedAt: now,
+    syncStatus: 'pending_sync'
   };
 
-  // Public Question (NO correctOptionId)
-  const publicQ: AssessmentQuestionPublic = {
-    id,
-    bankId: question.bankId,
-    stemArabic: question.stemArabic,
-    stemEnglish: question.stemEnglish,
-    imageUrl: question.imageUrl,
-    options: question.options,
-    points: Number(question.points) || 5
-  };
+  await enqueueQuestionsUpsert(question.bankId, [newQ]);
+  const refreshed = await readLocalBankQuestionsAsync(question.bankId);
+  return refreshed.find(q => q.id === id) || newQ;
+}
 
-  // Protected Answer Key
-  const answerKey: QuestionAnswerKey = {
-    questionId: id,
-    assessmentId: question.bankId,
-    correctOptionId: question.correctOptionId,
-    explanationArabic: question.explanationArabic,
-    explanationEnglish: question.explanationEnglish,
-    points: Number(question.points) || 5
-  };
-
-  try {
-    await Promise.all([
-      setDoc(doc(db, 'questions', id), cleanFirestoreData(newQ)),
-      setDoc(doc(db, 'assessmentQuestions', id), cleanFirestoreData(publicQ)),
-      setDoc(doc(db, 'questionAnswerKeys', id), cleanFirestoreData(answerKey))
-    ]);
-  } catch (err) {
-    console.warn('Saving question to localStorage fallback:', err);
+export async function bulkSaveQuestions(
+  bankId: string,
+  items: Array<ParsedQuestionDraft | Omit<QuestionItemFull, 'id' | 'createdAt'>>,
+  createdBy: string = 'ADMIN'
+): Promise<{
+  savedQuestions: QuestionItemFull[];
+  createdCount: number;
+  updatedCount: number;
+  skippedDuplicatesCount: number;
+  syncedImmediately: boolean;
+}> {
+  const existing = await ensureBankQuestionsInitialized(bankId);
+  const existingByHash = new Map<string, QuestionItemFull>();
+  for (const q of existing) {
+    const hash = q.contentHash || computeQuestionFingerprint(q.stemArabic, q.options);
+    existingByHash.set(hash, q);
   }
 
-  try {
-    const updated = [...existing.filter(item => item.id !== id), newQ];
-    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}q_${question.bankId}`, JSON.stringify(updated));
-    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}q_init_${question.bankId}`, 'true');
-  } catch (e) {}
+  const now = new Date().toISOString();
+  const seenBatchHashes = new Set<string>();
+  const toUpsert: QuestionItemFull[] = [];
+  let createdCount = 0;
+  let updatedCount = 0;
+  let skippedDuplicatesCount = 0;
 
-  // Sync to backend server
-  try {
-    const token = await getIdTokenSafe();
-    await fetch('/api/admin/sync-assessment-questions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-      },
-      body: JSON.stringify({ questions: [newQ] })
+  for (const raw of items) {
+    const stemArabic = (raw.stemArabic || '').trim();
+    const options = Array.isArray(raw.options) ? raw.options : [];
+    if (!stemArabic || options.length < 2) continue;
+
+    const contentHash = raw.contentHash || computeQuestionFingerprint(stemArabic, options);
+    if (seenBatchHashes.has(contentHash)) {
+      skippedDuplicatesCount++;
+      continue;
+    }
+    seenBatchHashes.add(contentHash);
+
+    const existingMatch = existingByHash.get(contentHash);
+    const id = existingMatch?.id || `q-${bankId}-${contentHash}`;
+    if (existingMatch) {
+      updatedCount++;
+    } else {
+      createdCount++;
+    }
+
+    const fullQuestion: QuestionItemFull = cleanFirestoreData({
+      id,
+      bankId,
+      stemArabic,
+      stemEnglish: raw.stemEnglish?.trim() || '',
+      options: options.map((o, idx) => ({
+        id: o.id || `opt-${['a', 'b', 'c', 'd'][idx] || 'a'}`,
+        textArabic: (o.textArabic || '').trim(),
+        textEnglish: o.textEnglish?.trim() || undefined
+      })),
+      correctOptionId: raw.correctOptionId || 'opt-a',
+      explanationArabic: raw.explanationArabic?.trim() || '',
+      explanationEnglish: raw.explanationEnglish?.trim() || undefined,
+      optionExplanations: raw.optionExplanations,
+      points: Number(raw.points) || 5,
+      createdBy: existingMatch?.createdBy || createdBy,
+      createdAt: existingMatch?.createdAt || now,
+      updatedAt: now,
+      contentHash,
+      syncStatus: 'pending_sync'
     });
-  } catch (e) {}
 
-  return newQ;
+    toUpsert.push(fullQuestion);
+  }
+
+  if (toUpsert.length > 0) {
+    await enqueueQuestionsUpsert(bankId, toUpsert);
+  }
+
+  const syncRes = await flushQuestionOutbox();
+  const allBankQuestions = await readLocalBankQuestionsAsync(bankId);
+
+  try {
+    await writeAuditLogToCloud({
+      action: 'QUESTIONS_BULK_IMPORTED',
+      performedBy: auth.currentUser?.email || createdBy,
+      details: {
+        bankId,
+        createdCount,
+        updatedCount,
+        skippedDuplicatesCount,
+        totalInBank: allBankQuestions.length
+      }
+    });
+  } catch {}
+
+  return {
+    savedQuestions: allBankQuestions,
+    createdCount,
+    updatedCount,
+    skippedDuplicatesCount,
+    syncedImmediately: syncRes.remainingCount === 0
+  };
 }
 
 export async function updateQuestion(
@@ -463,8 +559,9 @@ export async function updateQuestion(
   const bankId = updates.bankId || 'qbank-cvs-default';
   const existing = await ensureBankQuestionsInitialized(bankId);
   const target = existing.find(q => q.id === questionId);
+  const now = new Date().toISOString();
 
-  const updatedQ: QuestionItemFull = cleanFirestoreData({
+  const mergedBase: QuestionItemFull = {
     ...(target || {
       id: questionId,
       bankId,
@@ -473,92 +570,25 @@ export async function updateQuestion(
       correctOptionId: 'opt-a',
       points: 5,
       createdBy: 'ADMIN',
-      createdAt: new Date().toISOString()
+      createdAt: now
     }),
     ...updates,
-    id: questionId
-  });
-
-  const publicQ: AssessmentQuestionPublic = cleanFirestoreData({
     id: questionId,
-    bankId: updatedQ.bankId,
-    stemArabic: updatedQ.stemArabic,
-    stemEnglish: updatedQ.stemEnglish,
-    imageUrl: updatedQ.imageUrl,
-    options: updatedQ.options,
-    points: Number(updatedQ.points) || 5
-  });
+    updatedAt: now,
+    syncStatus: 'pending_sync'
+  };
+  mergedBase.contentHash = computeQuestionFingerprint(mergedBase.stemArabic, mergedBase.options);
 
-  const answerKey: QuestionAnswerKey = cleanFirestoreData({
-    questionId,
-    assessmentId: updatedQ.bankId,
-    correctOptionId: updatedQ.correctOptionId,
-    explanationArabic: updatedQ.explanationArabic,
-    explanationEnglish: updatedQ.explanationEnglish,
-    points: Number(updatedQ.points) || 5
-  });
+  const updatedQ: QuestionItemFull = cleanFirestoreData(mergedBase);
+  await enqueueQuestionsUpsert(updatedQ.bankId, [updatedQ]);
 
-  try {
-    await Promise.all([
-      setDoc(doc(db, 'questions', questionId), cleanFirestoreData(updatedQ), { merge: true }),
-      setDoc(doc(db, 'assessmentQuestions', questionId), cleanFirestoreData(publicQ), { merge: true }),
-      setDoc(doc(db, 'questionAnswerKeys', questionId), cleanFirestoreData(answerKey), { merge: true })
-    ]);
-  } catch (err) {
-    console.warn('Firestore updateQuestion fallback:', err);
-  }
-
-  try {
-    const updatedList = existing.some(q => q.id === questionId)
-      ? existing.map(q => q.id === questionId ? updatedQ : q)
-      : [...existing, updatedQ];
-    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}q_${updatedQ.bankId}`, JSON.stringify(updatedList));
-    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}q_init_${updatedQ.bankId}`, 'true');
-  } catch (e) {}
-
-  try {
-    const token = await getIdTokenSafe();
-    await fetch('/api/admin/sync-assessment-questions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-      },
-      body: JSON.stringify({ questions: [updatedQ] })
-    });
-  } catch (e) {}
-
-  return updatedQ;
+  const refreshed = await readLocalBankQuestionsAsync(updatedQ.bankId);
+  return refreshed.find(q => q.id === questionId) || updatedQ;
 }
 
 export async function deleteQuestion(questionId: string, bankId: string): Promise<void> {
-  const existing = await ensureBankQuestionsInitialized(bankId);
-
-  try {
-    await Promise.all([
-      deleteDoc(doc(db, 'questions', questionId)),
-      deleteDoc(doc(db, 'assessmentQuestions', questionId)),
-      deleteDoc(doc(db, 'questionAnswerKeys', questionId))
-    ]);
-  } catch (err) {}
-
-  try {
-    const filtered = existing.filter(q => q.id !== questionId);
-    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}q_${bankId}`, JSON.stringify(filtered));
-    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}q_init_${bankId}`, 'true');
-  } catch (e) {}
-
-  try {
-    const token = await getIdTokenSafe();
-    await fetch('/api/admin/sync-assessment-questions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-      },
-      body: JSON.stringify({ deletedQuestionIds: [questionId] })
-    });
-  } catch (e) {}
+  await ensureBankQuestionsInitialized(bankId);
+  await enqueueQuestionDelete(bankId, questionId);
 }
 
 // ---------------------------------------------------------------------------

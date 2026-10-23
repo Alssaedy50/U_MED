@@ -9,3 +9,6 @@ export * from './enrollmentService.ts';
 export * from './resourceService.ts';
 export * from './batchGovernanceService.ts';
 export * from './notificationService.ts';
+export * from './mcqBulkParser.ts';
+export * from './questionImportSyncService.ts';
+
