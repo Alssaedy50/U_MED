@@ -236,7 +236,7 @@ export default function StudentAssessmentList({
   };
 
   const handleCopyShareLink = async (assessment: Assessment) => {
-    const url = buildShareableAssessmentUrl(assessment.id);
+    const url = buildShareableAssessmentUrl(assessment);
     try {
       await navigator.clipboard.writeText(url);
     } catch {}
@@ -651,7 +651,7 @@ export default function StudentAssessmentList({
                   <input
                     type="text"
                     readOnly
-                    value={buildShareableAssessmentUrl(sharingAssessment.id)}
+                    value={buildShareableAssessmentUrl(sharingAssessment)}
                     dir="ltr"
                     className="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-[11px] text-teal-300 font-mono select-all"
                   />
@@ -677,7 +677,7 @@ export default function StudentAssessmentList({
               <div className="grid grid-cols-2 gap-2.5 pt-2">
                 <a
                   href={`https://wa.me/?text=${encodeURIComponent(
-                    `🩺 اختبر مستواك الطبي الآن في "${sharingAssessment.titleArabic}" على منصة UMED وتعرف على ترتيبك بين زملائك:\n${buildShareableAssessmentUrl(sharingAssessment.id)}`
+                    `🩺 اختبر مستواك الطبي الآن في "${sharingAssessment.titleArabic}" على منصة UMED وتعرف على ترتيبك بين زملائك:\n${buildShareableAssessmentUrl(sharingAssessment)}`
                   )}`}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -688,7 +688,7 @@ export default function StudentAssessmentList({
                 </a>
                 <a
                   href={`https://t.me/share/url?url=${encodeURIComponent(
-                    buildShareableAssessmentUrl(sharingAssessment.id)
+                    buildShareableAssessmentUrl(sharingAssessment)
                   )}&text=${encodeURIComponent(
                     `🩺 اختبر مستواك الطبي الآن في "${sharingAssessment.titleArabic}" على منصة UMED وتعرف على ترتيبك بين زملائك!`
                   )}`}

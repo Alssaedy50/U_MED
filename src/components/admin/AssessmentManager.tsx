@@ -1527,7 +1527,7 @@ export default function AssessmentManager({
 
                     <button
                       onClick={async () => {
-                        const url = buildShareableAssessmentUrl(a.id);
+                        const url = buildShareableAssessmentUrl(a);
                         try {
                           await navigator.clipboard.writeText(url);
                         } catch {}

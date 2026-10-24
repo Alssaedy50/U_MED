@@ -60,8 +60,12 @@ import {
   getSharedAssessmentIdFromUrl,
   clearSharedAssessmentIdFromUrl,
   fetchSharedAssessmentForGuest,
+  getCachedSharedAssessmentSync,
+  parseSharedAssessmentInput,
   getPendingGuestExamSubmission,
   claimAndGradePendingGuestSubmission,
+  getAssessmentLeaderboard,
+  resolveResultPublicDisplayName,
   PendingGuestExamSubmission
 } from './services/assessmentService.ts';
 import { Assessment, AssessmentQuestionPublic, AssessmentResult } from './types/umed.ts';
@@ -199,19 +203,33 @@ export default function App() {
     timestamp?: number;
   } | null>(null);
 
-  // Shared Trial Exam & Guest Mandatory Account Gate States
-  const [sharedGuestData, setSharedGuestData] = useState<{
-    assessment: Assessment;
-    questions: AssessmentQuestionPublic[];
-  } | null>(null);
-  const [isGuestExamOpen, setIsGuestExamOpen] = useState<boolean>(false);
+  // Shared Trial Exam & Guest Mandatory Account Gate States (Hydrated synchronously in 0ms on mount)
   const [pendingGuestSubmission, setPendingGuestSubmission] = useState<PendingGuestExamSubmission | null>(() =>
     getPendingGuestExamSubmission()
   );
+  const [sharedGuestData, setSharedGuestData] = useState<{
+    assessment: Assessment;
+    questions: AssessmentQuestionPublic[];
+  } | null>(() => {
+    const initialSharedId = getSharedAssessmentIdFromUrl() || getPendingGuestExamSubmission()?.assessmentId;
+    return initialSharedId ? getCachedSharedAssessmentSync(initialSharedId) : null;
+  });
+  const [isGuestExamOpen, setIsGuestExamOpen] = useState<boolean>(() => {
+    const urlId = getSharedAssessmentIdFromUrl();
+    if (!urlId) return false;
+    const existingSub = getPendingGuestExamSubmission();
+    // If guest already submitted this assessment and is waiting to register, show registration form
+    if (existingSub && existingSub.assessmentId === urlId) return false;
+    return true;
+  });
+  const [isSharedExamFetching, setIsSharedExamFetching] = useState<boolean>(false);
+  const [sharedLinkPasteInput, setSharedLinkPasteInput] = useState<string>('');
+  const [showSharedLinkPasteBox, setShowSharedLinkPasteBox] = useState<boolean>(false);
   const [claimedGuestOutcome, setClaimedGuestOutcome] = useState<{
     result: AssessmentResult;
     assessment: Assessment;
   } | null>(null);
+  const [claimedLeaderboard, setClaimedLeaderboard] = useState<AssessmentResult[]>([]);
 
   useEffect(() => {
     const unsub = subscribeToAppNotifications((list) => {
@@ -221,37 +239,62 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // Detect shared trial exam link (?sharedAssessmentId=...) or pending guest submission on mount
+  // Load and open shared assessment link (?sharedAssessmentId=... or #sharedAssessmentId=...) for both guests & logged-in users
+  const loadAndOpenSharedAssessment = async (targetId: string, forceOpenModal = true) => {
+    if (!targetId) return;
+    const syncCached = getCachedSharedAssessmentSync(targetId);
+    if (syncCached) {
+      setSharedGuestData(syncCached);
+    } else {
+      setIsSharedExamFetching(true);
+    }
+    if (forceOpenModal) {
+      setIsGuestExamOpen(true);
+    }
+
+    try {
+      const loaded = await fetchSharedAssessmentForGuest(targetId);
+      if (loaded) {
+        setSharedGuestData(loaded);
+        const existingSub = getPendingGuestExamSubmission();
+        if (!user && existingSub && existingSub.assessmentId === targetId && !forceOpenModal) {
+          setPendingGuestSubmission(existingSub);
+          setAuthTab('register');
+        } else if (forceOpenModal) {
+          setIsGuestExamOpen(true);
+        }
+      }
+    } catch {} finally {
+      setIsSharedExamFetching(false);
+    }
+  };
+
   useEffect(() => {
-    const sharedId = getSharedAssessmentIdFromUrl() || pendingGuestSubmission?.assessmentId;
+    const urlId = getSharedAssessmentIdFromUrl();
+    const fallbackId = pendingGuestSubmission?.assessmentId;
+    const sharedId = urlId || fallbackId;
     if (!sharedId) return;
 
-    fetchSharedAssessmentForGuest(sharedId)
-      .then((loaded) => {
-        if (!loaded) return;
-        setSharedGuestData(loaded);
-        if (!user) {
-          const existingSub = getPendingGuestExamSubmission();
-          if (existingSub && existingSub.assessmentId === sharedId) {
-            setPendingGuestSubmission(existingSub);
-            setAuthTab('register');
-          } else if (getSharedAssessmentIdFromUrl()) {
-            setIsGuestExamOpen(true);
-          }
-        } else if (getSharedAssessmentIdFromUrl()) {
-          // Authenticated user opened a shared assessment link -> navigate directly to it
-          setActiveRole('student');
-          setTargetAssessmentNav({
-            assessmentType: loaded.assessment.assessmentType === 'competition' ? 'competition' : 'exam',
-            assessmentId: loaded.assessment.id,
-            timestamp: Date.now()
-          });
-          setActiveTabState('student_assessments');
-          clearSharedAssessmentIdFromUrl();
-        }
-      })
-      .catch(() => {});
+    const existingSub = getPendingGuestExamSubmission();
+    const shouldAutoOpen = Boolean(urlId) && (!existingSub || existingSub.assessmentId !== urlId || Boolean(user));
+    loadAndOpenSharedAssessment(sharedId, shouldAutoOpen);
   }, [user?.uid]);
+
+  // Also listen for URL hashchange / popstate so clicking a shared link while app is open triggers immediately
+  useEffect(() => {
+    const handleUrlChange = () => {
+      const urlId = getSharedAssessmentIdFromUrl();
+      if (urlId) {
+        loadAndOpenSharedAssessment(urlId, true);
+      }
+    };
+    window.addEventListener('hashchange', handleUrlChange);
+    window.addEventListener('popstate', handleUrlChange);
+    return () => {
+      window.removeEventListener('hashchange', handleUrlChange);
+      window.removeEventListener('popstate', handleUrlChange);
+    };
+  }, []);
 
   // Automatically grade pending guest trial submission as soon as the user creates an account or logs in
   useEffect(() => {
@@ -269,6 +312,9 @@ export default function App() {
       if (claimed) {
         setPendingGuestSubmission(null);
         setClaimedGuestOutcome(claimed);
+        getAssessmentLeaderboard(claimed.assessment.id)
+          .then((lb) => setClaimedLeaderboard(lb))
+          .catch(() => {});
         setTargetAssessmentNav({
           assessmentType: claimed.assessment.assessmentType === 'competition' ? 'competition' : 'exam',
           assessmentId: claimed.assessment.id,
@@ -690,6 +736,181 @@ export default function App() {
             : undefined
         }
       />
+      {/* TOP-LEVEL SHARED EXAM LOADING OVERLAY (Opens immediately before Auth or Registration screen) */}
+      {isGuestExamOpen && !sharedGuestData && !pendingGuestSubmission && isSharedExamFetching && (
+        <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex items-center justify-center p-4" dir="rtl">
+          <div className="max-w-md w-full bg-slate-900 border border-indigo-500/40 rounded-2xl p-8 text-center space-y-4 shadow-2xl">
+            <RefreshCw className="w-10 h-10 animate-spin text-indigo-400 mx-auto" />
+            <h2 className="text-base font-bold text-white">جارٍ فتح الاختبار الطبي المشترك...</h2>
+            <p className="text-xs text-slate-300">
+              يتم الآن تجهيز الأسئلة والمؤقت لبدء الحل المباشر
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* TOP-LEVEL SHARED / GUEST EXAM TAKING MODAL (Works for both Guests & Authenticated Users regardless of Enrollment) */}
+      {isGuestExamOpen && (sharedGuestData || pendingGuestSubmission) && (
+        <ExamTakingModal
+          assessment={(sharedGuestData?.assessment || pendingGuestSubmission?.assessment)!}
+          attempt={{
+            id: user
+              ? `att-shared-${user.uid}-${Date.now()}`
+              : `guest-attempt-${sharedGuestData?.assessment.id || pendingGuestSubmission?.assessmentId}`,
+            assessmentId: (sharedGuestData?.assessment.id || pendingGuestSubmission?.assessmentId)!,
+            uid: user?.uid || 'guest',
+            attemptNumber: 1,
+            startedAt: pendingGuestSubmission?.startedAt || new Date().toISOString(),
+            expiresAt: new Date(
+              Date.now() +
+                Number(
+                  sharedGuestData?.assessment.durationMinutes ||
+                    pendingGuestSubmission?.assessment.durationMinutes ||
+                    30
+                ) *
+                  60000
+            ).toISOString(),
+            answers: pendingGuestSubmission?.answers || {},
+            lastSavedAt: new Date().toISOString(),
+            status: 'in_progress'
+          }}
+          questions={sharedGuestData?.questions || []}
+          studentNameArabic={userProfile?.displayNameArabic || user?.displayName || undefined}
+          uid={user?.uid}
+          isGuestMode={!user}
+          onRequireGuestAccount={(sub) => {
+            setPendingGuestSubmission(sub);
+            setIsGuestExamOpen(false);
+            clearSharedAssessmentIdFromUrl();
+            setAuthTab('register');
+          }}
+          onClose={() => {
+            setIsGuestExamOpen(false);
+            clearSharedAssessmentIdFromUrl();
+          }}
+          onSubmitted={(res) => {
+            clearSharedAssessmentIdFromUrl();
+            if (sharedGuestData?.assessment) {
+              setClaimedGuestOutcome({
+                result: res,
+                assessment: sharedGuestData.assessment
+              });
+              getAssessmentLeaderboard(sharedGuestData.assessment.id)
+                .then((lb) => setClaimedLeaderboard(lb))
+                .catch(() => {});
+            }
+          }}
+        />
+      )}
+
+      {/* TOP-LEVEL CLAIMED GUEST RESULT & LIVE RANKED LEADERBOARD MODAL (Shown immediately after Account Registration) */}
+      {claimedGuestOutcome && (
+        <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto" dir="rtl">
+          <div className="bg-slate-900 border border-teal-500/50 rounded-2xl p-5 sm:p-6 max-w-xl w-full my-auto space-y-5 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Trophy className="w-6 h-6 text-amber-400" />
+                <div>
+                  <h3 className="text-sm sm:text-base font-extrabold text-white">
+                    نتيجتك المعتمدة وترتيبك في الاختبار المشترك
+                  </h3>
+                  <p className="text-[11px] text-teal-300 font-semibold">
+                    {claimedGuestOutcome.assessment.titleArabic}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setClaimedGuestOutcome(null)}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-gradient-to-b from-teal-950/70 to-slate-950 border border-teal-500/40 text-center space-y-2">
+              <span className="px-3 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold">
+                تم إنشاء حسابك وتصحيح إجاباتك بنجاح ✓
+              </span>
+              <div className="text-3xl font-black text-teal-400 font-mono pt-1">
+                {claimedGuestOutcome.result.percentage}%
+              </div>
+              <div className="text-xs text-slate-200 font-semibold">
+                الدرجة المكتسبة: <span className="font-mono text-white">{claimedGuestOutcome.result.score}</span> من{' '}
+                <span className="font-mono text-white">{claimedGuestOutcome.result.totalPoints}</span> نقطة
+              </div>
+              <div className="text-[11px] text-slate-400">
+                اسمك المعروض للطلاب في لوحة الترتيب:{' '}
+                <strong className="text-amber-300">
+                  {resolveResultPublicDisplayName(claimedGuestOutcome.result)}
+                </strong>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs font-bold text-amber-300">
+                <span>🏆 ترتيب الطلاب في هذا الاختبار (الأعلى درجة والأسرع حلاً):</span>
+                <span className="text-[11px] text-slate-400 font-mono">{claimedLeaderboard.length} مشارك</span>
+              </div>
+              <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
+                {claimedLeaderboard.length === 0 ? (
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-teal-300 text-center font-bold">
+                    أنت في المركز الأول (#1) حالياً في هذا الاختبار! 🎉
+                  </div>
+                ) : (
+                  claimedLeaderboard.slice(0, 15).map((item, idx) => {
+                    const isMe = item.uid === user?.uid || item.id === claimedGuestOutcome.result.id;
+                    return (
+                      <div
+                        key={item.id || idx}
+                        className={`flex items-center justify-between p-2.5 rounded-xl border text-xs ${
+                          isMe
+                            ? 'bg-teal-950/70 border-teal-500/60 text-white font-bold'
+                            : 'bg-slate-950 border-slate-800 text-slate-300'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <span className={`w-6 h-6 rounded-lg font-mono text-[11px] font-extrabold flex items-center justify-center ${
+                            idx === 0
+                              ? 'bg-amber-400 text-slate-950'
+                              : idx === 1
+                              ? 'bg-slate-300 text-slate-950'
+                              : idx === 2
+                              ? 'bg-amber-700 text-white'
+                              : 'bg-slate-800 text-slate-400'
+                          }`}>
+                            #{idx + 1}
+                          </span>
+                          <span>{resolveResultPublicDisplayName(item)}</span>
+                          {isMe && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] bg-teal-500/20 text-teal-300">
+                              أنت
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 font-mono">
+                          <span className="text-slate-400 text-[11px]">{item.score}/{item.totalPoints}</span>
+                          <span className="px-2 py-0.5 rounded bg-teal-500/15 text-teal-300 font-bold">
+                            {item.percentage}%
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setClaimedGuestOutcome(null)}
+              className="w-full py-3 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold shadow-lg transition-colors"
+            >
+              متابعة إلى المنصة الأكاديمية
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* IF INITIALIZING AUTH SESSION ON RELOAD: DO NOT FLASH LOGIN FORM */}
       {loading ? (
         <div className="min-h-[100dvh] flex items-center justify-center p-4 overflow-y-auto">
@@ -732,7 +953,7 @@ export default function App() {
                   أكمل إنشاء حسابك الإجباري الآن لإظهار نتيجتك في "{pendingGuestSubmission.assessment.titleArabic}" ومعرفة ترتيبك!
                 </h3>
                 <p className="text-[11px] text-slate-300 leading-relaxed">
-                  بمجرد إتمام التسجيل أدناه، سيقوم النظام بتصحيح إجاباتك المحفوظة ({Object.keys(pendingGuestSubmission.answers || {}).length} إجابة) وعرض درجتك وترتيبك التنافسي فوراً.
+                  بمجرد إتمام التسجيل أو تسجيل الدخول أدناه، سيقوم النظام بتصحيح إجاباتك المحفوظة ({Object.keys(pendingGuestSubmission.answers || {}).length} إجابة) وعرض درجتك وترتيبك التنافسي فوراً.
                 </p>
               </div>
             )}
@@ -761,55 +982,58 @@ export default function App() {
             )}
 
             {!sharedGuestData && !pendingGuestSubmission && (
-              <button
-                type="button"
-                onClick={async () => {
-                  const loaded = await fetchSharedAssessmentForGuest('exam-cvs-midterm');
-                  if (loaded) {
-                    setSharedGuestData(loaded);
-                    setIsGuestExamOpen(true);
-                  }
-                }}
-                className="w-full py-2.5 px-4 rounded-xl bg-indigo-950/60 hover:bg-indigo-900/70 border border-indigo-500/40 text-indigo-200 text-xs font-bold flex items-center justify-center gap-2 transition-colors"
-              >
-                <Trophy className="w-4 h-4 text-amber-400" />
-                <span>تجربة حل اختبار طبي تجريبي الآن (بدون حساب مسبق)</span>
-              </button>
-            )}
+              <div className="space-y-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => loadAndOpenSharedAssessment('asmnt-cvs-midterm', true)}
+                    className="py-2.5 px-3 rounded-xl bg-indigo-950/60 hover:bg-indigo-900/70 border border-indigo-500/40 text-indigo-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <Trophy className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>حل اختبار تجريبي الآن</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowSharedLinkPasteBox((prev) => !prev)}
+                    className="py-2.5 px-3 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-teal-300 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                    <span>فتح رابط اختبار مشترك</span>
+                  </button>
+                </div>
 
-            {/* Guest Trial Exam Modal */}
-            {isGuestExamOpen && (sharedGuestData || pendingGuestSubmission) && (
-              <ExamTakingModal
-                assessment={(sharedGuestData?.assessment || pendingGuestSubmission?.assessment)!}
-                attempt={{
-                  id: `guest-attempt-${(sharedGuestData?.assessment.id || pendingGuestSubmission?.assessmentId)}`,
-                  assessmentId: (sharedGuestData?.assessment.id || pendingGuestSubmission?.assessmentId)!,
-                  uid: 'guest',
-                  attemptNumber: 1,
-                  startedAt: pendingGuestSubmission?.startedAt || new Date().toISOString(),
-                  expiresAt: new Date(
-                    Date.now() +
-                      Number(
-                        sharedGuestData?.assessment.durationMinutes ||
-                          pendingGuestSubmission?.assessment.durationMinutes ||
-                          30
-                      ) *
-                        60000
-                  ).toISOString(),
-                  answers: pendingGuestSubmission?.answers || {},
-                  lastSavedAt: new Date().toISOString(),
-                  status: 'in_progress'
-                }}
-                questions={sharedGuestData?.questions || []}
-                isGuestMode={true}
-                onRequireGuestAccount={(sub) => {
-                  setPendingGuestSubmission(sub);
-                  setIsGuestExamOpen(false);
-                  setAuthTab('register');
-                }}
-                onClose={() => setIsGuestExamOpen(false)}
-                onSubmitted={() => {}}
-              />
+                {showSharedLinkPasteBox && (
+                  <div className="p-3 rounded-xl bg-slate-950 border border-indigo-500/40 space-y-2">
+                    <label className="block text-[11px] text-slate-300 font-semibold">
+                      الصق رابط الاختبار المشترك أو معرف التقييم لفتحه فوراً:
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={sharedLinkPasteInput}
+                        onChange={(e) => setSharedLinkPasteInput(e.target.value)}
+                        placeholder="https://.../?sharedAssessmentId=..."
+                        dir="ltr"
+                        className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono focus:outline-none focus:border-indigo-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const parsedId = parseSharedAssessmentInput(sharedLinkPasteInput);
+                          if (parsedId) {
+                            setShowSharedLinkPasteBox(false);
+                            setSharedLinkPasteInput('');
+                            loadAndOpenSharedAssessment(parsedId, true);
+                          }
+                        }}
+                        className="px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shrink-0"
+                      >
+                        فتح الاختبار
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
 
             <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">

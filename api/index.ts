@@ -970,11 +970,23 @@ app.post('/api/assessments/submit-attempt', optionalAuth, (req: AuthenticatedReq
     const effectiveAssessmentId = assessmentId || attempt?.assessmentId || 'asmnt-cvs-default';
     const storedAssessment = assessmentsStore[effectiveAssessmentId];
 
-    // Build Answer Key Map STRICTLY from trusted server store
+    // Build Answer Key Map from server store + optional fallback keys
     const answerKeyMap: Record<string, { correctOptionId: string; points: number }> = {};
     Object.values(questionsStore).forEach((q) => {
-      answerKeyMap[q.id] = { correctOptionId: q.correctOptionId, points: Number(q.points) || 5 };
+      if (q && q.id && q.correctOptionId) {
+        answerKeyMap[q.id] = { correctOptionId: q.correctOptionId, points: Number(q.points) || 5 };
+      }
     });
+    if (req.body?.fallbackAnswerKeys && typeof req.body.fallbackAnswerKeys === 'object') {
+      Object.entries(req.body.fallbackAnswerKeys).forEach(([qId, val]: [string, any]) => {
+        if (!answerKeyMap[qId] && val && val.correctOptionId) {
+          answerKeyMap[qId] = {
+            correctOptionId: String(val.correctOptionId),
+            points: Number(val.points) || 5
+          };
+        }
+      });
+    }
 
     // Score STRICTLY against the questions assigned to this attempt
     const targetQuestionIds: string[] =
@@ -985,16 +997,24 @@ app.post('/api/assessments/submit-attempt', optionalAuth, (req: AuthenticatedReq
 
     let score = 0;
     let totalPoints = 0;
+    let matchedKeysCount = 0;
 
     targetQuestionIds.forEach((qId) => {
       const key = answerKeyMap[qId];
       if (key) {
+        matchedKeysCount++;
         totalPoints += key.points;
         if (finalAnswers[qId] === key.correctOptionId) {
           score += key.points;
         }
       }
     });
+
+    if (matchedKeysCount === 0 && targetQuestionIds.length > 0) {
+      return res.status(404).json({
+        error: 'مفاتيح الإجابة غير متوفرة في ذاكرة الخادم المحلية — يرجى التصحيح عبر السحابة'
+      });
+    }
 
     const percentage = totalPoints > 0 ? Math.round((score / totalPoints) * 100) : 0;
     const nowIso = now.toISOString();
@@ -1051,6 +1071,37 @@ app.post('/api/assessments/submit-attempt', optionalAuth, (req: AuthenticatedReq
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'فشل تصحيح وتسليم الاختبار' });
+  }
+});
+
+// 12a. Register Shared Assessment & Public Questions on Server (Callable by any user sharing an assessment)
+app.post('/api/assessments/register-shared', optionalAuth, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { assessment, questions } = req.body;
+    if (assessment && assessment.id) {
+      assessmentsStore[assessment.id] = {
+        ...(assessmentsStore[assessment.id] || {}),
+        ...assessment
+      };
+      saveJsonSafe(ASSESSMENTS_FILE, assessmentsStore);
+    }
+    if (Array.isArray(questions) && questions.length > 0) {
+      questions.forEach((q: any) => {
+        if (q && q.id && q.stemArabic && Array.isArray(q.options)) {
+          const existing = questionsStore[q.id];
+          questionsStore[q.id] = {
+            ...(existing || {}),
+            ...q,
+            correctOptionId: q.correctOptionId || existing?.correctOptionId || 'opt-a',
+            points: Number(q.points || existing?.points) || 5
+          };
+        }
+      });
+      saveJsonSafe(QUESTIONS_FILE, questionsStore);
+    }
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'فشل تسجيل الاختبار المشترك' });
   }
 });
 

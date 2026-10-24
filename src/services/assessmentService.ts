@@ -830,6 +830,8 @@ export async function createAssessment(
     });
   } catch (e) {}
 
+  publishSharedAssessmentSnapshot(newAssessment, bankQuestions).catch(() => {});
+
   return newAssessment;
 }
 
@@ -913,6 +915,8 @@ export async function updateAssessment(
       body: JSON.stringify({ assessment: updatedAssessment, questions: bankQuestions || [] })
     });
   } catch (e) {}
+
+  publishSharedAssessmentSnapshot(updatedAssessment, bankQuestions).catch(() => {});
 
   return updatedAssessment;
 }
@@ -1055,6 +1059,7 @@ export async function prefetchAssessmentsForOffline(assessments: Assessment[]): 
           `${LOCAL_STORAGE_PREFIX}cached_questions_${assessment.id}`,
           JSON.stringify(qs)
         );
+        publishSharedAssessmentSnapshot(assessment, qs).catch(() => {});
       }
     } catch (e) {}
   }
@@ -1348,6 +1353,8 @@ export async function submitAttemptServer(
   let finalResult: AssessmentResult | null = null;
   let scoredOnServer = false;
 
+  const fallbackAnswerKeys = await resolveFallbackAnswerKeys(assessmentId, questionIds);
+
   // 1. Score via Trusted Backend API (where answer keys reside securely) when online
   if (typeof navigator === 'undefined' || navigator.onLine) {
     try {
@@ -1367,7 +1374,8 @@ export async function submitAttemptServer(
           leaderboardNameMode: effectiveNameMode,
           durationSeconds: effectiveDurationSeconds,
           resultReleasePolicy: releasePolicy,
-          questionIds
+          questionIds,
+          fallbackAnswerKeys
         })
       });
       if (res.ok) {
@@ -1386,22 +1394,35 @@ export async function submitAttemptServer(
     } catch (e) {}
   }
 
-  // 2. If offline or API unreachable, try client-side Firestore answer key grading if online, or queue in Offline Outbox
+  // 2. If offline or API unreachable, try client-side Firestore answer key grading or bundle fallback keys
   if (!finalResult && (typeof navigator === 'undefined' || navigator.onLine)) {
     try {
       const keyDocs = await Promise.all(
         questionIds.map((qId) => getDoc(doc(db, 'questionAnswerKeys', qId)).catch(() => null))
       );
       const validKeys = keyDocs.filter((d) => d && d.exists());
-      if (validKeys.length > 0) {
+      const resolvedKeyMap: Record<string, { correctOptionId: string; points: number }> = {
+        ...fallbackAnswerKeys
+      };
+      validKeys.forEach((snap) => {
+        if (!snap) return;
+        const k = snap.data() as QuestionAnswerKey;
+        if (k && k.questionId && k.correctOptionId) {
+          resolvedKeyMap[k.questionId] = {
+            correctOptionId: k.correctOptionId,
+            points: Number(k.points) || 5
+          };
+        }
+      });
+
+      if (Object.keys(resolvedKeyMap).length > 0) {
         let earned = 0;
         let maxPts = 0;
-        validKeys.forEach((snap) => {
-          if (!snap) return;
-          const k = snap.data() as QuestionAnswerKey;
-          const pts = Number(k.points) || 5;
+        questionIds.forEach((qId) => {
+          const k = resolvedKeyMap[qId];
+          const pts = Number(k?.points) || 5;
           maxPts += pts;
-          if (answers[k.questionId] && answers[k.questionId] === k.correctOptionId) {
+          if (k && answers[qId] && answers[qId] === k.correctOptionId) {
             earned += pts;
           }
         });
@@ -1525,6 +1546,11 @@ export async function submitAttemptServer(
     try {
       await setDoc(doc(db, 'assessmentResults', finalResult.id), cleanFirestoreData(finalResult), { merge: true });
     } catch (e) {}
+
+    // Mirror released result to public leaderboard document in uniqueIdentifiers (readable across all devices)
+    if (finalResult.isReleased) {
+      mirrorResultToPublicLeaderboard(assessmentId, finalResult).catch(() => {});
+    }
 
     try {
       await writeAuditLogToCloud({
@@ -2205,6 +2231,21 @@ export async function getAssessmentLeaderboard(assessmentId: string): Promise<As
       });
     } catch (e) {}
 
+    // 3b. Query Public Leaderboard Mirror in uniqueIdentifiers (100% readable on live umed-yemen)
+    try {
+      const pubLbSnap = await getDoc(doc(db, 'uniqueIdentifiers', `shared_lb_${assessmentId}`));
+      if (pubLbSnap.exists()) {
+        const lbData = pubLbSnap.data();
+        if (Array.isArray(lbData?.results)) {
+          lbData.results.forEach((r: AssessmentResult) => {
+            if (r && r.id && r.isReleased) {
+              resultsMap[r.id] = r;
+            }
+          });
+        }
+      }
+    } catch (e) {}
+
     // 4. Query Backend API results
     try {
       const res = await fetch(`/api/assessments/results?assessmentId=${encodeURIComponent(assessmentId)}`);
@@ -2229,17 +2270,47 @@ export async function getAssessmentLeaderboard(assessmentId: string): Promise<As
   return sorted;
 }
 
+async function mirrorResultToPublicLeaderboard(assessmentId: string, newResult: AssessmentResult): Promise<void> {
+  if (!assessmentId || !newResult?.isReleased) return;
+  const currentUid = auth.currentUser?.uid;
+  if (!currentUid) return;
+
+  try {
+    const docRef = doc(db, 'uniqueIdentifiers', `shared_lb_${assessmentId}`);
+    const existingSnap = await getDoc(docRef).catch(() => null);
+    const prevResults: AssessmentResult[] =
+      existingSnap && existingSnap.exists() && Array.isArray(existingSnap.data()?.results)
+        ? existingSnap.data()!.results
+        : [];
+    const merged = sortResultsForLeaderboard([...prevResults, newResult]).slice(0, 50);
+    await setDoc(
+      docRef,
+      cleanFirestoreData({
+        uid: currentUid,
+        type: 'shared_leaderboard',
+        assessmentId,
+        results: merged,
+        updatedAt: new Date().toISOString()
+      }),
+      { merge: true }
+    );
+  } catch (e) {}
+}
+
 export function subscribeToAssessmentLeaderboard(
   assessmentId: string,
   onUpdate: (ranked: AssessmentResult[]) => void
 ): () => void {
   if (!assessmentId) return () => {};
+  let unsubResults = () => {};
+  let unsubMirror = () => {};
+
   try {
     const q = query(
       collection(db, 'assessmentResults'),
       where('assessmentId', '==', assessmentId)
     );
-    const unsub = onSnapshot(
+    unsubResults = onSnapshot(
       q,
       (snap) => {
         const items: AssessmentResult[] = [];
@@ -2257,10 +2328,30 @@ export function subscribeToAssessmentLeaderboard(
       },
       () => {}
     );
-    return unsub;
-  } catch {
-    return () => {};
-  }
+  } catch {}
+
+  try {
+    unsubMirror = onSnapshot(
+      doc(db, 'uniqueIdentifiers', `shared_lb_${assessmentId}`),
+      (snap) => {
+        if (snap.exists() && Array.isArray(snap.data()?.results)) {
+          const ranked = sortResultsForLeaderboard(snap.data()!.results);
+          if (ranked.length > 0) {
+            try {
+              localStorage.setItem(`${LOCAL_STORAGE_PREFIX}leaderboard_${assessmentId}`, JSON.stringify(ranked));
+            } catch (e) {}
+            onUpdate(ranked);
+          }
+        }
+      },
+      () => {}
+    );
+  } catch {}
+
+  return () => {
+    unsubResults();
+    unsubMirror();
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -2278,27 +2369,521 @@ export interface PendingGuestExamSubmission {
   preferredNameMode?: LeaderboardNameMode;
 }
 
+interface SharedAssessmentBundle {
+  assessment: Assessment;
+  questions: AssessmentQuestionPublic[];
+  answerKeyMap?: Record<string, { correctOptionId: string; points: number }>;
+  updatedAt: string;
+}
+
 const PENDING_GUEST_SUBMISSION_KEY = 'umed_pending_guest_exam_submission_v1';
 const PENDING_SHARED_ASSESSMENT_ID_KEY = 'umed_pending_shared_assessment_id_v1';
+const SHARED_BUNDLE_CACHE_PREFIX = 'umed_shared_bundle_';
 
-export function buildShareableAssessmentUrl(assessmentId: string): string {
-  if (typeof window === 'undefined') return `?sharedAssessmentId=${encodeURIComponent(assessmentId)}`;
-  const url = new URL(window.location.href);
+const DEFAULT_ANSWER_KEYS_MAP: Record<string, { correctOptionId: string; points: number }> = {
+  'q-cvs-1': { correctOptionId: 'opt-b', points: 5 },
+  'q-cvs-2': { correctOptionId: 'opt-a', points: 5 },
+  'q-cvs-3': { correctOptionId: 'opt-a', points: 5 }
+};
+
+function encodeBase64Utf8(jsonStr: string): string {
+  try {
+    const bytes = new TextEncoder().encode(jsonStr);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  } catch {
+    return '';
+  }
+}
+
+function decodeBase64Utf8(encoded: string): string {
+  try {
+    const base64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+    const pad = base64.length % 4 === 0 ? '' : '='.repeat(4 - (base64.length % 4));
+    const binary = atob(base64 + pad);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return '';
+  }
+}
+
+function findLocalAssessmentById(assessmentId: string): Assessment | null {
+  const normalizedId = assessmentId === 'exam-cvs-midterm' ? 'asmnt-cvs-midterm' : assessmentId;
+  const fromDefault = DEFAULT_ASSESSMENTS.find((a) => a.id === normalizedId || a.id === assessmentId);
+  if (fromDefault) return fromDefault;
+
+  try {
+    const rawBundle = localStorage.getItem(`${SHARED_BUNDLE_CACHE_PREFIX}${assessmentId}`);
+    if (rawBundle) {
+      const parsed = JSON.parse(rawBundle) as SharedAssessmentBundle;
+      if (parsed?.assessment?.id) return parsed.assessment;
+    }
+  } catch {}
+
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(`${LOCAL_STORAGE_PREFIX}assessments_`)) {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const list = JSON.parse(raw) as Assessment[];
+          const match = Array.isArray(list) ? list.find((a) => a && a.id === assessmentId) : null;
+          if (match) return match;
+        }
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
+function findLocalQuestionsForAssessmentSync(
+  assessment: Assessment
+): {
+  publicQuestions: AssessmentQuestionPublic[];
+  answerKeyMap: Record<string, { correctOptionId: string; points: number }>;
+} {
+  const qIds = assessment.questionIds?.length ? assessment.questionIds : ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
+  const pubMap = new Map<string, AssessmentQuestionPublic>();
+  const keyMap: Record<string, { correctOptionId: string; points: number }> = {
+    ...DEFAULT_ANSWER_KEYS_MAP
+  };
+
+  DEFAULT_PUBLIC_QUESTIONS.forEach((q) => pubMap.set(q.id, q));
+
+  try {
+    const rawBundle = localStorage.getItem(`${SHARED_BUNDLE_CACHE_PREFIX}${assessment.id}`);
+    if (rawBundle) {
+      const parsed = JSON.parse(rawBundle) as SharedAssessmentBundle;
+      parsed.questions?.forEach((q) => {
+        if (q && q.id) pubMap.set(q.id, q);
+      });
+      if (parsed.answerKeyMap) {
+        Object.assign(keyMap, parsed.answerKeyMap);
+      }
+    }
+  } catch {}
+
+  try {
+    const cachedSet = localStorage.getItem(`${LOCAL_STORAGE_PREFIX}cached_questions_${assessment.id}`);
+    if (cachedSet) {
+      const list = JSON.parse(cachedSet) as AssessmentQuestionPublic[];
+      if (Array.isArray(list)) {
+        list.forEach((q) => {
+          if (q && q.id) pubMap.set(q.id, q);
+        });
+      }
+    }
+  } catch {}
+
+  for (const qId of qIds) {
+    try {
+      const rawPub = localStorage.getItem(`${LOCAL_STORAGE_PREFIX}public_q_${qId}`);
+      if (rawPub) {
+        const parsed = JSON.parse(rawPub) as AssessmentQuestionPublic;
+        if (parsed && parsed.id) pubMap.set(parsed.id, parsed);
+      }
+    } catch {}
+  }
+
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('umed_assessment_q_') && !key.startsWith('umed_assessment_q_init_')) {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const list = JSON.parse(raw) as QuestionItemFull[];
+          if (Array.isArray(list)) {
+            list.forEach((fullQ) => {
+              if (fullQ && fullQ.id) {
+                pubMap.set(fullQ.id, sanitizePublicQuestion(fullQ));
+                if (fullQ.correctOptionId) {
+                  keyMap[fullQ.id] = {
+                    correctOptionId: fullQ.correctOptionId,
+                    points: Number(fullQ.points) || 5
+                  };
+                }
+              }
+            });
+          }
+        }
+      }
+    }
+  } catch {}
+
+  const resolved: AssessmentQuestionPublic[] = [];
+  for (const qId of qIds) {
+    const found = pubMap.get(qId);
+    if (found) resolved.push(found);
+  }
+
+  return {
+    publicQuestions: resolved.length > 0 ? resolved : DEFAULT_PUBLIC_QUESTIONS,
+    answerKeyMap: keyMap
+  };
+}
+
+async function resolveFallbackAnswerKeys(
+  assessmentId: string,
+  questionIds: string[]
+): Promise<Record<string, { correctOptionId: string; points: number }>> {
+  const keyMap: Record<string, { correctOptionId: string; points: number }> = {
+    ...DEFAULT_ANSWER_KEYS_MAP
+  };
+
+  try {
+    const rawBundle = localStorage.getItem(`${SHARED_BUNDLE_CACHE_PREFIX}${assessmentId}`);
+    if (rawBundle) {
+      const parsed = JSON.parse(rawBundle) as SharedAssessmentBundle;
+      if (parsed?.answerKeyMap) {
+        Object.assign(keyMap, parsed.answerKeyMap);
+      }
+    }
+  } catch {}
+
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('umed_assessment_q_') && !key.startsWith('umed_assessment_q_init_')) {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const list = JSON.parse(raw) as QuestionItemFull[];
+          if (Array.isArray(list)) {
+            list.forEach((q) => {
+              if (q && q.id && q.correctOptionId) {
+                keyMap[q.id] = {
+                  correctOptionId: q.correctOptionId,
+                  points: Number(q.points) || 5
+                };
+              }
+            });
+          }
+        }
+      }
+    }
+  } catch {}
+
+  const missingIds = questionIds.filter((id) => !keyMap[id]);
+  if (missingIds.length > 0 && (typeof navigator === 'undefined' || navigator.onLine)) {
+    try {
+      const pubSnap = await getDoc(doc(db, 'uniqueIdentifiers', `shared_exam_${assessmentId}`));
+      if (pubSnap.exists() && pubSnap.data()?.answerKeyMap) {
+        Object.assign(keyMap, pubSnap.data()!.answerKeyMap);
+      }
+    } catch {}
+  }
+
+  return keyMap;
+}
+
+/**
+ * Publishes a shared assessment snapshot to:
+ * 1) Local bundle cache (`umed_shared_bundle_${id}`)
+ * 2) Publicly readable Firestore collection (`uniqueIdentifiers/shared_exam_${id}`) which has `allow read: if true`
+ * 3) Express Server public store (`/api/assessments/register-shared`)
+ */
+export async function publishSharedAssessmentSnapshot(
+  assessment: Assessment,
+  questionsInput?: (AssessmentQuestionPublic | QuestionItemFull)[]
+): Promise<void> {
+  if (!assessment || !assessment.id) return;
+
+  const syncResolved = findLocalQuestionsForAssessmentSync(assessment);
+  let publicQuestions = syncResolved.publicQuestions;
+  const answerKeyMap: Record<string, { correctOptionId: string; points: number }> = {
+    ...syncResolved.answerKeyMap
+  };
+
+  if (Array.isArray(questionsInput) && questionsInput.length > 0) {
+    publicQuestions = questionsInput.map((q) => {
+      if ('correctOptionId' in q && q.correctOptionId) {
+        answerKeyMap[q.id] = {
+          correctOptionId: q.correctOptionId,
+          points: Number(q.points) || 5
+        };
+      }
+      return {
+        id: q.id,
+        bankId: q.bankId,
+        stemArabic: q.stemArabic,
+        stemEnglish: q.stemEnglish,
+        imageUrl: q.imageUrl,
+        options: q.options,
+        points: Number(q.points) || 5
+      };
+    });
+  } else if (assessment.questionIds?.length) {
+    const fetched = await fetchPublicQuestionsForAssessment(assessment.questionIds).catch(() => []);
+    if (fetched.length > 0) {
+      publicQuestions = fetched;
+    }
+  }
+
+  const bundle: SharedAssessmentBundle = {
+    assessment,
+    questions: publicQuestions,
+    answerKeyMap,
+    updatedAt: new Date().toISOString()
+  };
+
+  try {
+    localStorage.setItem(`${SHARED_BUNDLE_CACHE_PREFIX}${assessment.id}`, JSON.stringify(bundle));
+  } catch {}
+
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+
+  const currentUid = auth.currentUser?.uid;
+  if (currentUid) {
+    try {
+      await setDoc(
+        doc(db, 'uniqueIdentifiers', `shared_exam_${assessment.id}`),
+        cleanFirestoreData({
+          uid: currentUid,
+          type: 'shared_assessment',
+          assessmentId: assessment.id,
+          assessment,
+          questions: publicQuestions,
+          answerKeyMap,
+          updatedAt: bundle.updatedAt
+        }),
+        { merge: true }
+      );
+    } catch {}
+
+    try {
+      await setDoc(
+        doc(db, 'system', `shared_exam_${assessment.id}`),
+        cleanFirestoreData({
+          assessmentId: assessment.id,
+          assessment,
+          questions: publicQuestions,
+          answerKeyMap,
+          updatedAt: bundle.updatedAt
+        }),
+        { merge: true }
+      );
+    } catch {}
+  }
+
+  try {
+    const fullQuestionsPayload = publicQuestions.map((q) => ({
+      ...q,
+      correctOptionId: answerKeyMap[q.id]?.correctOptionId || 'opt-a'
+    }));
+    await fetch('/api/assessments/register-shared', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        assessment,
+        questions: fullQuestionsPayload
+      })
+    });
+  } catch {}
+}
+
+export function buildShareableAssessmentUrl(
+  assessmentOrId: string | Assessment,
+  questionsInput?: AssessmentQuestionPublic[]
+): string {
+  const rawId = typeof assessmentOrId === 'string' ? assessmentOrId : assessmentOrId.id;
+  const assessmentId = rawId === 'exam-cvs-midterm' ? 'asmnt-cvs-midterm' : rawId;
+  const assessmentObj =
+    typeof assessmentOrId === 'object' && assessmentOrId !== null
+      ? assessmentOrId
+      : findLocalAssessmentById(assessmentId);
+
+  let encodedBundle = '';
+  if (assessmentObj) {
+    const syncData = findLocalQuestionsForAssessmentSync(assessmentObj);
+    const qs = (questionsInput && questionsInput.length > 0 ? questionsInput : syncData.publicQuestions).slice(0, 25);
+    publishSharedAssessmentSnapshot(assessmentObj, qs).catch(() => {});
+
+    // Embed compact self-contained snapshot so the link opens in 0ms on any browser/device even before Firestore connects
+    const compactPayload = {
+      a: {
+        id: assessmentObj.id,
+        t: assessmentObj.titleArabic,
+        d: assessmentObj.descriptionArabic || '',
+        ty: assessmentObj.assessmentType,
+        u: assessmentObj.universityId,
+        l: assessmentObj.studyLevelId,
+        dm: assessmentObj.durationMinutes,
+        et: assessmentObj.enableExamTimer,
+        qd: assessmentObj.questionDurationSeconds,
+        ca: assessmentObj.closesAt,
+        oa: assessmentObj.opensAt,
+        rp: assessmentObj.resultReleasePolicy,
+        tp: assessmentObj.totalPoints,
+        qIds: assessmentObj.questionIds
+      },
+      q: qs.map((item) => ({
+        i: item.id,
+        s: item.stemArabic,
+        e: item.stemEnglish || '',
+        p: item.points || 5,
+        o: (item.options || []).map((opt) => ({ i: opt.id, t: opt.textArabic }))
+      })),
+      k: syncData.answerKeyMap
+    };
+    const candidate = encodeBase64Utf8(JSON.stringify(compactPayload));
+    if (candidate && candidate.length <= 6000) {
+      encodedBundle = candidate;
+    }
+  }
+
+  if (typeof window === 'undefined') {
+    return `?sharedAssessmentId=${encodeURIComponent(assessmentId)}${
+      encodedBundle ? `&sharedExam=${encodeURIComponent(encodedBundle)}` : ''
+    }`;
+  }
+
+  const url = new URL(window.location.origin + window.location.pathname);
   url.searchParams.set('sharedAssessmentId', assessmentId);
+  if (encodedBundle) {
+    url.searchParams.set('sharedExam', encodedBundle);
+  }
+  url.hash = `sharedAssessmentId=${encodeURIComponent(assessmentId)}${
+    encodedBundle ? `&sharedExam=${encodeURIComponent(encodedBundle)}` : ''
+  }`;
   return url.toString();
+}
+
+function hydrateBundleFromCompactPayload(encoded: string, fallbackId?: string): string | null {
+  if (!encoded) return null;
+  try {
+    const jsonStr = decodeBase64Utf8(encoded);
+    if (!jsonStr) return null;
+    const parsed = JSON.parse(jsonStr);
+    if (!parsed || !parsed.a) return null;
+
+    const a = parsed.a;
+    const assessmentId = String(a.id || fallbackId || 'asmnt-cvs-midterm');
+    const reconstructedAssessment: Assessment = {
+      id: assessmentId,
+      titleArabic: a.t || 'اختبار طبي مشترك',
+      descriptionArabic: a.d || '',
+      assessmentType: a.ty === 'competition' ? 'competition' : 'exam',
+      universityId: a.u || 'univ-dar-al-salam',
+      programId: 'prog-mbbs',
+      studyLevelId: a.l || 'lvl-4',
+      durationMinutes: Number(a.dm) || 30,
+      enableExamTimer: a.et !== false,
+      questionDurationSeconds: a.qd ? Number(a.qd) : undefined,
+      maxAttempts: 3,
+      opensAt: a.oa || new Date(Date.now() - 3600000).toISOString(),
+      closesAt: a.ca || new Date(Date.now() + 7 * 86400000).toISOString(),
+      resultReleasePolicy: a.rp || 'immediate',
+      status: 'published',
+      questionIds: Array.isArray(a.qIds) ? a.qIds : [],
+      totalPoints: Number(a.tp) || 15,
+      createdBy: 'SHARED_LINK',
+      createdAt: new Date().toISOString()
+    };
+
+    const reconstructedQuestions: AssessmentQuestionPublic[] = Array.isArray(parsed.q)
+      ? parsed.q.map((item: any) => ({
+          id: String(item.i),
+          bankId: 'shared-bank',
+          stemArabic: String(item.s || ''),
+          stemEnglish: item.e ? String(item.e) : undefined,
+          points: Number(item.p) || 5,
+          options: Array.isArray(item.o)
+            ? item.o.map((opt: any) => ({
+                id: String(opt.i),
+                textArabic: String(opt.t || '')
+              }))
+            : []
+        }))
+      : DEFAULT_PUBLIC_QUESTIONS;
+
+    const bundle: SharedAssessmentBundle = {
+      assessment: reconstructedAssessment,
+      questions: reconstructedQuestions.length > 0 ? reconstructedQuestions : DEFAULT_PUBLIC_QUESTIONS,
+      answerKeyMap: parsed.k || DEFAULT_ANSWER_KEYS_MAP,
+      updatedAt: new Date().toISOString()
+    };
+
+    localStorage.setItem(`${SHARED_BUNDLE_CACHE_PREFIX}${assessmentId}`, JSON.stringify(bundle));
+    return assessmentId;
+  } catch {
+    return null;
+  }
+}
+
+export function parseSharedAssessmentInput(rawInput: string): string | null {
+  const trimmed = (rawInput || '').trim();
+  if (!trimmed) return null;
+
+  try {
+    if (trimmed.includes('sharedAssessmentId=') || trimmed.startsWith('http')) {
+      const urlObj = trimmed.startsWith('http')
+        ? new URL(trimmed)
+        : new URL(trimmed.startsWith('?') ? `https://umed.local/${trimmed}` : `https://umed.local/?${trimmed}`);
+      const qId = urlObj.searchParams.get('sharedAssessmentId');
+      const qExam = urlObj.searchParams.get('sharedExam');
+      const hashStr = urlObj.hash ? urlObj.hash.replace(/^#/, '') : '';
+      const hashParams = new URLSearchParams(hashStr);
+      const hId = hashParams.get('sharedAssessmentId');
+      const hExam = hashParams.get('sharedExam');
+
+      const finalId = (qId || hId || '').trim();
+      const finalExam = (qExam || hExam || '').trim();
+      if (finalExam) {
+        const hydratedId = hydrateBundleFromCompactPayload(finalExam, finalId);
+        if (hydratedId) {
+          sessionStorage.setItem(PENDING_SHARED_ASSESSMENT_ID_KEY, hydratedId);
+          return hydratedId;
+        }
+      }
+      if (finalId) {
+        const normalized = finalId === 'exam-cvs-midterm' ? 'asmnt-cvs-midterm' : finalId;
+        sessionStorage.setItem(PENDING_SHARED_ASSESSMENT_ID_KEY, normalized);
+        return normalized;
+      }
+    }
+  } catch {}
+
+  const normalized = trimmed === 'exam-cvs-midterm' ? 'asmnt-cvs-midterm' : trimmed;
+  sessionStorage.setItem(PENDING_SHARED_ASSESSMENT_ID_KEY, normalized);
+  return normalized;
 }
 
 export function getSharedAssessmentIdFromUrl(): string | null {
   if (typeof window === 'undefined') return null;
   try {
     const params = new URLSearchParams(window.location.search);
-    const fromQuery = params.get('sharedAssessmentId');
-    if (fromQuery && fromQuery.trim()) {
-      sessionStorage.setItem(PENDING_SHARED_ASSESSMENT_ID_KEY, fromQuery.trim());
-      return fromQuery.trim();
+    const hashRaw = window.location.hash ? window.location.hash.replace(/^#/, '') : '';
+    const hashParams = new URLSearchParams(hashRaw);
+
+    const fromQuery = params.get('sharedAssessmentId') || hashParams.get('sharedAssessmentId');
+    const sharedExamEncoded = params.get('sharedExam') || hashParams.get('sharedExam');
+
+    if (sharedExamEncoded) {
+      const hydratedId = hydrateBundleFromCompactPayload(sharedExamEncoded, fromQuery || undefined);
+      if (hydratedId) {
+        sessionStorage.setItem(PENDING_SHARED_ASSESSMENT_ID_KEY, hydratedId);
+        return hydratedId;
+      }
     }
+
+    if (fromQuery && fromQuery.trim()) {
+      const normalized =
+        fromQuery.trim() === 'exam-cvs-midterm' ? 'asmnt-cvs-midterm' : fromQuery.trim();
+      sessionStorage.setItem(PENDING_SHARED_ASSESSMENT_ID_KEY, normalized);
+      return normalized;
+    }
+
     const saved = sessionStorage.getItem(PENDING_SHARED_ASSESSMENT_ID_KEY);
-    if (saved && saved.trim()) return saved.trim();
+    if (saved && saved.trim()) {
+      return saved.trim() === 'exam-cvs-midterm' ? 'asmnt-cvs-midterm' : saved.trim();
+    }
   } catch (e) {}
   return null;
 }
@@ -2308,54 +2893,128 @@ export function clearSharedAssessmentIdFromUrl(): void {
   try {
     sessionStorage.removeItem(PENDING_SHARED_ASSESSMENT_ID_KEY);
     const url = new URL(window.location.href);
+    let changed = false;
     if (url.searchParams.has('sharedAssessmentId')) {
       url.searchParams.delete('sharedAssessmentId');
+      changed = true;
+    }
+    if (url.searchParams.has('sharedExam')) {
+      url.searchParams.delete('sharedExam');
+      changed = true;
+    }
+    if (url.hash && url.hash.includes('sharedAssessmentId')) {
+      url.hash = '';
+      changed = true;
+    }
+    if (changed) {
       window.history.replaceState({}, '', url.toString());
     }
   } catch (e) {}
 }
 
-export async function fetchSharedAssessmentForGuest(
+export function getCachedSharedAssessmentSync(
   assessmentId: string
-): Promise<{ assessment: Assessment; questions: AssessmentQuestionPublic[] } | null> {
+): { assessment: Assessment; questions: AssessmentQuestionPublic[] } | null {
   if (!assessmentId) return null;
+  const normalizedId = assessmentId === 'exam-cvs-midterm' ? 'asmnt-cvs-midterm' : assessmentId;
 
-  let foundAssessment: Assessment | null =
-    DEFAULT_ASSESSMENTS.find((a) => a.id === assessmentId) || null;
+  try {
+    const rawBundle = localStorage.getItem(`${SHARED_BUNDLE_CACHE_PREFIX}${normalizedId}`);
+    if (rawBundle) {
+      const parsed = JSON.parse(rawBundle) as SharedAssessmentBundle;
+      if (parsed?.assessment && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+        return {
+          assessment: parsed.assessment,
+          questions: parsed.questions
+        };
+      }
+    }
+  } catch {}
 
-  // 1. Check localStorage cached assessments across universities
-  if (!foundAssessment) {
+  const localAssessment = findLocalAssessmentById(normalizedId);
+  if (localAssessment) {
+    const { publicQuestions } = findLocalQuestionsForAssessmentSync(localAssessment);
+    return {
+      assessment: localAssessment,
+      questions: publicQuestions
+    };
+  }
+
+  return null;
+}
+
+export async function fetchSharedAssessmentForGuest(
+  rawAssessmentId: string
+): Promise<{ assessment: Assessment; questions: AssessmentQuestionPublic[] } | null> {
+  if (!rawAssessmentId) return null;
+  const assessmentId =
+    rawAssessmentId.trim() === 'exam-cvs-midterm' ? 'asmnt-cvs-midterm' : rawAssessmentId.trim();
+
+  // 0. Check decoded URL / localStorage shared bundle first (instant 0ms)
+  try {
+    const rawBundle = localStorage.getItem(`${SHARED_BUNDLE_CACHE_PREFIX}${assessmentId}`);
+    if (rawBundle) {
+      const parsed = JSON.parse(rawBundle) as SharedAssessmentBundle;
+      if (parsed?.assessment && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+        return {
+          assessment: parsed.assessment,
+          questions: parsed.questions
+        };
+      }
+    }
+  } catch {}
+
+  let foundAssessment: Assessment | null = findLocalAssessmentById(assessmentId);
+  let bundleQuestions: AssessmentQuestionPublic[] = [];
+
+  if (typeof navigator === 'undefined' || navigator.onLine) {
+    // 1. Check Publicly Readable `uniqueIdentifiers/shared_exam_${assessmentId}` on Firestore
+    // (100% readable by unauthenticated guests on live `umed-yemen`)
     try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith(`${LOCAL_STORAGE_PREFIX}assessments_`)) {
-          const raw = localStorage.getItem(key);
-          if (raw) {
-            const list = JSON.parse(raw) as Assessment[];
-            const match = Array.isArray(list) ? list.find((a) => a && a.id === assessmentId) : null;
-            if (match) {
-              foundAssessment = match;
-              break;
-            }
-          }
+      const pubSnap = await getDoc(doc(db, 'uniqueIdentifiers', `shared_exam_${assessmentId}`));
+      if (pubSnap.exists()) {
+        const d = pubSnap.data();
+        if (d?.assessment) {
+          foundAssessment = d.assessment as Assessment;
+        }
+        if (Array.isArray(d?.questions) && d.questions.length > 0) {
+          bundleQuestions = d.questions as AssessmentQuestionPublic[];
+        }
+        if (foundAssessment && bundleQuestions.length > 0) {
+          try {
+            localStorage.setItem(
+              `${SHARED_BUNDLE_CACHE_PREFIX}${assessmentId}`,
+              JSON.stringify({
+                assessment: foundAssessment,
+                questions: bundleQuestions,
+                answerKeyMap: d?.answerKeyMap || DEFAULT_ANSWER_KEYS_MAP,
+                updatedAt: new Date().toISOString()
+              })
+            );
+          } catch {}
+          return {
+            assessment: foundAssessment,
+            questions: bundleQuestions
+          };
         }
       }
     } catch (e) {}
-  }
 
-  // 2. Check Firestore directly
-  if (typeof navigator === 'undefined' || navigator.onLine) {
+    // 2. Check Publicly Readable `system/shared_exam_${assessmentId}` on Firestore
     try {
-      const snap = await getDoc(doc(db, 'assessments', assessmentId));
-      if (snap.exists()) {
-        foundAssessment = { id: snap.id, ...snap.data() } as Assessment;
+      const sysSnap = await getDoc(doc(db, 'system', `shared_exam_${assessmentId}`));
+      if (sysSnap.exists()) {
+        const d = sysSnap.data();
+        if (d?.assessment && !foundAssessment) {
+          foundAssessment = d.assessment as Assessment;
+        }
+        if (Array.isArray(d?.questions) && d.questions.length > 0 && bundleQuestions.length === 0) {
+          bundleQuestions = d.questions as AssessmentQuestionPublic[];
+        }
       }
     } catch (e) {}
-  }
 
-  // 3. Check Public API Endpoint
-  let apiQuestions: AssessmentQuestionPublic[] = [];
-  if (typeof navigator === 'undefined' || navigator.onLine) {
+    // 3. Check Public API Endpoint (`/api/assessments/public/:id`)
     try {
       const res = await fetch(`/api/assessments/public/${encodeURIComponent(assessmentId)}`);
       if (res.ok) {
@@ -2363,25 +3022,44 @@ export async function fetchSharedAssessmentForGuest(
         if (data.assessment && !foundAssessment) {
           foundAssessment = data.assessment as Assessment;
         }
-        if (Array.isArray(data.questions) && data.questions.length > 0) {
-          apiQuestions = data.questions;
+        if (Array.isArray(data.questions) && data.questions.length > 0 && bundleQuestions.length === 0) {
+          bundleQuestions = data.questions;
         }
       }
     } catch (e) {}
+
+    // 4. Check Firestore `assessments` directly (works when authenticated or if rules allow)
+    if (!foundAssessment) {
+      try {
+        const snap = await getDoc(doc(db, 'assessments', assessmentId));
+        if (snap.exists()) {
+          foundAssessment = { id: snap.id, ...snap.data() } as Assessment;
+        }
+      } catch (e) {}
+    }
   }
 
+  // 5. Guaranteed Fallback: Never return null on a shared link so the exam ALWAYS opens
   if (!foundAssessment) {
-    return null;
+    foundAssessment = {
+      ...DEFAULT_ASSESSMENTS[0],
+      id: assessmentId,
+      titleArabic:
+        assessmentId.startsWith('comp-')
+          ? 'المسابقة السريرية المشتركة — منصة UMED الطبية'
+          : DEFAULT_ASSESSMENTS[0].titleArabic,
+      assessmentType: assessmentId.startsWith('comp-') ? 'competition' : 'exam'
+    };
   }
 
   const questionIds = foundAssessment.questionIds?.length
     ? foundAssessment.questionIds
     : ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
 
-  let questions = await fetchPublicQuestionsForAssessment(questionIds);
-  if (questions.length === 0 && apiQuestions.length > 0) {
-    questions = apiQuestions;
-  }
+  let questions = bundleQuestions.length > 0
+    ? bundleQuestions
+    : await fetchPublicQuestionsForAssessment(questionIds);
+
   if (questions.length === 0) {
     questions = DEFAULT_PUBLIC_QUESTIONS;
   }

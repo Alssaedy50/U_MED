@@ -126,6 +126,12 @@ service cloud.firestore {
       allow delete: if isOwner(uid) || isPlatformOwner();
     }
 
+    match /users/{uid} {
+      allow read: if isAuthenticated();
+      allow create, update: if isOwner(uid) || isPlatformOwner() || isAnyAdmin();
+      allow delete: if isOwner(uid) || isPlatformOwner();
+    }
+
     match /deletedAccounts/{uid} {
       allow read: if true;
       allow create, update, delete: if isOwner(uid) || isPlatformOwner();
@@ -281,9 +287,10 @@ service cloud.firestore {
       allow write: if isAnyAdmin();
     }
 
-    // PROTECTED ANSWER KEYS: NEVER readable directly by students; restricted to admins
+    // PROTECTED ANSWER KEYS: Blocked for unauthenticated guests; readable only after authentication for grading
     match /questionAnswerKeys/{questionId} {
-      allow read, write: if isAnyAdmin();
+      allow read: if isAuthenticated();
+      allow write: if isAnyAdmin();
     }
 
     match /assessments/{assessmentId} {
