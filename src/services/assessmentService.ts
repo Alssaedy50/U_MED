@@ -30,6 +30,7 @@ import {
   AssessmentResult, 
   AssessmentType,
   AssessmentStatus,
+  ResultReleasePolicy,
   ParsedQuestionDraft
 } from '../types/umed.ts';
 import { computeQuestionFingerprint } from './mcqBulkParser.ts';
@@ -954,8 +955,109 @@ export async function updateAssessmentStatus(
 }
 
 // ---------------------------------------------------------------------------
-// 3. Student Assessment Engine Functions (Firestore + Trusted API Hybrid)
+// 3. Student Assessment Engine Functions (Firestore + Trusted API + Offline Outbox)
 // ---------------------------------------------------------------------------
+
+export interface OfflineExamSubmissionRecord {
+  attemptId: string;
+  assessmentId: string;
+  uid: string;
+  studentNameArabic: string;
+  answers: Record<string, string>;
+  resultReleasePolicy: ResultReleasePolicy;
+  questionIds: string[];
+  totalPoints: number;
+  queuedAt: string;
+  type: 'progress' | 'final_submit';
+}
+
+const OFFLINE_EXAM_OUTBOX_KEY = 'umed_offline_exam_submissions_v1';
+const examSyncListeners = new Set<(pendingCount: number, isSyncing: boolean) => void>();
+let isFlushingExamOutbox = false;
+let examAutoSyncStarted = false;
+
+function readOfflineExamOutbox(): OfflineExamSubmissionRecord[] {
+  try {
+    const raw = localStorage.getItem(OFFLINE_EXAM_OUTBOX_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {}
+  return [];
+}
+
+function writeOfflineExamOutbox(records: OfflineExamSubmissionRecord[]): void {
+  try {
+    localStorage.setItem(OFFLINE_EXAM_OUTBOX_KEY, JSON.stringify(records));
+  } catch (e) {}
+  notifyExamSyncListeners();
+}
+
+function notifyExamSyncListeners(): void {
+  const count = readOfflineExamOutbox().length;
+  examSyncListeners.forEach((cb) => {
+    try {
+      cb(count, isFlushingExamOutbox);
+    } catch (e) {}
+  });
+}
+
+export function getPendingOfflineExamSyncCount(): number {
+  return readOfflineExamOutbox().length;
+}
+
+export function subscribeToExamOfflineSync(
+  callback: (pendingCount: number, isSyncing: boolean) => void
+): () => void {
+  examSyncListeners.add(callback);
+  callback(readOfflineExamOutbox().length, isFlushingExamOutbox);
+  return () => {
+    examSyncListeners.delete(callback);
+  };
+}
+
+function saveLocalStudentAttempt(uid: string, attempt: AssessmentAttempt): void {
+  try {
+    const key = `${LOCAL_STORAGE_PREFIX}attempts_${uid}`;
+    const raw = localStorage.getItem(key);
+    const existing: AssessmentAttempt[] = raw ? JSON.parse(raw) : [];
+    const updated = [attempt, ...existing.filter((a) => a.id !== attempt.id)];
+    localStorage.setItem(key, JSON.stringify(updated));
+  } catch (e) {}
+}
+
+function readLocalStudentAttempts(uid: string): AssessmentAttempt[] {
+  try {
+    const key = `${LOCAL_STORAGE_PREFIX}attempts_${uid}`;
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {}
+  return [];
+}
+
+/**
+ * Silently prefetches and caches public questions for published assessments
+ * so students can start and complete exams even if internet disconnects.
+ */
+export async function prefetchAssessmentsForOffline(assessments: Assessment[]): Promise<void> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+  for (const assessment of assessments) {
+    if (!assessment?.questionIds?.length) continue;
+    try {
+      const qs = await fetchPublicQuestionsForAssessment(assessment.questionIds);
+      if (qs.length > 0) {
+        localStorage.setItem(
+          `${LOCAL_STORAGE_PREFIX}cached_questions_${assessment.id}`,
+          JSON.stringify(qs)
+        );
+      }
+    } catch (e) {}
+  }
+}
 
 export async function getPublishedAssessmentsForStudent(
   universityId: string, 
@@ -965,6 +1067,8 @@ export async function getPublishedAssessmentsForStudent(
   const filtered = all.filter(
     a => a.status === 'published' && (a.studyLevelId === studyLevelId || !a.studyLevelId || a.studyLevelId === 'ALL')
   );
+  // Trigger background offline caching for these published assessments
+  prefetchAssessmentsForOffline(filtered).catch(() => {});
   return filtered;
 }
 
@@ -972,24 +1076,40 @@ export async function fetchPublicQuestionsForAssessment(questionIds: string[]): 
   const defaultMap: Record<string, AssessmentQuestionPublic> = {};
   DEFAULT_PUBLIC_QUESTIONS.forEach(q => { defaultMap[q.id] = q; });
 
-  // Fetch all questions in parallel for fast exam start!
+  // Fetch all questions in parallel with local offline cache fallback
   const fetched = await Promise.all(
     questionIds.map(async (qId) => {
+      const cacheKey = `${LOCAL_STORAGE_PREFIX}public_q_${qId}`;
       try {
-        const snap = await getDoc(doc(db, 'assessmentQuestions', qId));
-        if (snap.exists()) {
-          const d = snap.data() as AssessmentQuestionPublic;
-          return {
-            id: d.id || qId,
-            bankId: d.bankId,
-            stemArabic: d.stemArabic,
-            stemEnglish: d.stemEnglish,
-            imageUrl: d.imageUrl,
-            options: d.options,
-            points: Number(d.points) || 5
-          } as AssessmentQuestionPublic;
+        if (typeof navigator === 'undefined' || navigator.onLine) {
+          const snap = await getDoc(doc(db, 'assessmentQuestions', qId));
+          if (snap.exists()) {
+            const d = snap.data() as AssessmentQuestionPublic;
+            const item: AssessmentQuestionPublic = {
+              id: d.id || qId,
+              bankId: d.bankId,
+              stemArabic: d.stemArabic,
+              stemEnglish: d.stemEnglish,
+              imageUrl: d.imageUrl,
+              options: d.options,
+              points: Number(d.points) || 5
+            };
+            try {
+              localStorage.setItem(cacheKey, JSON.stringify(item));
+            } catch (e) {}
+            return item;
+          }
         }
       } catch (e) {}
+
+      // Fallback to cached public question in localStorage when offline
+      try {
+        const cachedRaw = localStorage.getItem(cacheKey);
+        if (cachedRaw) {
+          return JSON.parse(cachedRaw) as AssessmentQuestionPublic;
+        }
+      } catch (e) {}
+
       return defaultMap[qId] || null;
     })
   );
@@ -1017,10 +1137,18 @@ export async function startAttemptServer(
     ? assessmentObj.questionIds
     : ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
 
-  // Fetch public questions from Firestore first
-  const firestoreQuestions = await fetchPublicQuestionsForAssessment(questionIds);
+  // Fetch public questions from Firestore or offline local cache
+  let firestoreQuestions = await fetchPublicQuestionsForAssessment(questionIds);
+  if (firestoreQuestions.length === 0) {
+    try {
+      const cachedSet = localStorage.getItem(`${LOCAL_STORAGE_PREFIX}cached_questions_${assessmentId}`);
+      if (cachedSet) {
+        firestoreQuestions = JSON.parse(cachedSet) as AssessmentQuestionPublic[];
+      }
+    } catch (e) {}
+  }
 
-  // Check existing attempts for this student to resume active attempt or calculate cumulative attemptNumber
+  // Check existing attempts for this student (merged remote + local offline attempts)
   const existingUserAttempts = (await getStudentAttempts(uid)).filter(
     (a) => a.assessmentId === assessmentId
   );
@@ -1048,32 +1176,34 @@ export async function startAttemptServer(
   let attempt: AssessmentAttempt | null = null;
   let serverQuestions: AssessmentQuestionPublic[] = [];
 
-  try {
-    const res = await fetch('/api/assessments/start-attempt', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-      },
-      body: JSON.stringify({
-        assessmentId,
-        durationMinutes,
-        maxAttempts,
-        questionIds,
-        uid
-      })
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.success && data.attempt) {
-        attempt = {
-          ...data.attempt,
-          attemptNumber: Math.max(Number(data.attempt.attemptNumber) || 1, nextAttemptNumber)
-        };
-        serverQuestions = data.questions || [];
+  if (typeof navigator === 'undefined' || navigator.onLine) {
+    try {
+      const res = await fetch('/api/assessments/start-attempt', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          assessmentId,
+          durationMinutes,
+          maxAttempts,
+          questionIds,
+          uid
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.attempt) {
+          attempt = {
+            ...data.attempt,
+            attemptNumber: Math.max(Number(data.attempt.attemptNumber) || 1, nextAttemptNumber)
+          };
+          serverQuestions = data.questions || [];
+        }
       }
-    }
-  } catch (e) {}
+    } catch (e) {}
+  }
 
   if (!attempt) {
     const expiresAt = new Date(now.getTime() + durationMinutes * 60 * 1000).toISOString();
@@ -1090,12 +1220,23 @@ export async function startAttemptServer(
     };
   }
 
-  // Persist attempt to Firestore
-  try {
-    await setDoc(doc(db, 'assessmentAttempts', attempt.id), attempt);
-  } catch (e) {}
+  // Always persist attempt locally first so offline progress survives refreshes
+  saveLocalStudentAttempt(uid, attempt);
+
+  // Persist attempt to Firestore when online
+  if (typeof navigator === 'undefined' || navigator.onLine) {
+    try {
+      await setDoc(doc(db, 'assessmentAttempts', attempt.id), attempt);
+    } catch (e) {}
+  }
 
   const questionsToUse = serverQuestions.length > 0 ? serverQuestions : firestoreQuestions;
+  try {
+    localStorage.setItem(
+      `${LOCAL_STORAGE_PREFIX}cached_questions_${assessmentId}`,
+      JSON.stringify(questionsToUse)
+    );
+  } catch (e) {}
 
   return {
     attempt,
@@ -1105,8 +1246,30 @@ export async function startAttemptServer(
 
 export async function saveProgressServer(attemptId: string, answers: Record<string, string>): Promise<string> {
   const nowIso = new Date().toISOString();
+  const uid = auth.currentUser?.uid || 'student-user';
 
-  // Save to Firestore
+  // 1. Always save progress immediately to local storage so zero answers are lost offline
+  try {
+    const localAttempts = readLocalStudentAttempts(uid);
+    const target = localAttempts.find((a) => a.id === attemptId);
+    if (target) {
+      saveLocalStudentAttempt(uid, {
+        ...target,
+        answers,
+        lastSavedAt: nowIso
+      });
+    }
+    localStorage.setItem(
+      `${LOCAL_STORAGE_PREFIX}progress_${attemptId}`,
+      JSON.stringify({ attemptId, uid, answers, lastSavedAt: nowIso })
+    );
+  } catch (e) {}
+
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return nowIso;
+  }
+
+  // 2. Save to Firestore when online
   try {
     await updateDoc(doc(db, 'assessmentAttempts', attemptId), {
       answers,
@@ -1114,7 +1277,7 @@ export async function saveProgressServer(attemptId: string, answers: Record<stri
     });
   } catch (e) {}
 
-  // Also sync with backend API
+  // 3. Sync with backend API
   try {
     const token = await getIdTokenSafe();
     const res = await fetch('/api/assessments/save-progress', {
@@ -1142,6 +1305,7 @@ export async function submitAttemptServer(
 ): Promise<{
   result: AssessmentResult;
   isReleased: boolean;
+  queuedOffline?: boolean;
 }> {
   const token = await getIdTokenSafe();
   const uid = auth.currentUser?.uid || 'student-user';
@@ -1151,39 +1315,86 @@ export async function submitAttemptServer(
   const questionIds = assessmentObj?.questionIds?.length
     ? assessmentObj.questionIds
     : ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
+  const totalPoints = Number(assessmentObj?.totalPoints) || questionIds.length * 5;
 
   let finalResult: AssessmentResult | null = null;
+  let scoredOnServer = false;
 
-  // 1. Score via Trusted Backend API (where answer keys reside securely)
-  try {
-    const res = await fetch('/api/assessments/submit-attempt', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-      },
-      body: JSON.stringify({
-        attemptId,
-        assessmentId,
-        answers,
-        studentNameArabic: studentName,
-        resultReleasePolicy: releasePolicy,
-        questionIds
-      })
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.success && data.result) {
-        finalResult = data.result;
+  // 1. Score via Trusted Backend API (where answer keys reside securely) when online
+  if (typeof navigator === 'undefined' || navigator.onLine) {
+    try {
+      const res = await fetch('/api/assessments/submit-attempt', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          attemptId,
+          assessmentId,
+          answers,
+          studentNameArabic: studentName,
+          resultReleasePolicy: releasePolicy,
+          questionIds
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.result) {
+          finalResult = data.result;
+          scoredOnServer = true;
+        }
       }
-    }
-  } catch (e) {}
+    } catch (e) {}
+  }
 
-  // 2. Fallback if serverless API is unreachable
+  // 2. If offline or API unreachable, try client-side Firestore answer key grading if online, or queue in Offline Outbox
+  if (!finalResult && (typeof navigator === 'undefined' || navigator.onLine)) {
+    try {
+      const keyDocs = await Promise.all(
+        questionIds.map((qId) => getDoc(doc(db, 'questionAnswerKeys', qId)).catch(() => null))
+      );
+      const validKeys = keyDocs.filter((d) => d && d.exists());
+      if (validKeys.length > 0) {
+        let earned = 0;
+        let maxPts = 0;
+        validKeys.forEach((snap) => {
+          if (!snap) return;
+          const k = snap.data() as QuestionAnswerKey;
+          const pts = Number(k.points) || 5;
+          maxPts += pts;
+          if (answers[k.questionId] && answers[k.questionId] === k.correctOptionId) {
+            earned += pts;
+          }
+        });
+        const nowIso = new Date().toISOString();
+        const isReleased = releasePolicy === 'immediate';
+        const finalTotal = maxPts || totalPoints;
+        finalResult = {
+          id: `res-${attemptId}`,
+          attemptId,
+          assessmentId,
+          uid,
+          studentNameArabic: studentName,
+          score: earned,
+          totalPoints: finalTotal,
+          percentage: finalTotal > 0 ? Math.round((earned / finalTotal) * 100) : 0,
+          submittedAt: nowIso,
+          gradedAt: nowIso,
+          isReleased,
+          releasedAt: isReleased ? nowIso : undefined
+        };
+        scoredOnServer = true;
+      }
+    } catch (e) {}
+  }
+
+  const queuedOffline = !scoredOnServer;
+
+  // 3. Fallback offline provisional result + enqueue for automatic cloud grading when internet returns
   if (!finalResult) {
     const nowIso = new Date().toISOString();
     const isReleased = releasePolicy === 'immediate';
-    const totalPoints = Number(assessmentObj?.totalPoints) || questionIds.length * 5;
     finalResult = {
       id: `res-${attemptId}`,
       attemptId,
@@ -1198,20 +1409,40 @@ export async function submitAttemptServer(
       isReleased,
       releasedAt: isReleased ? nowIso : undefined
     };
+
+    const existingOutbox = readOfflineExamOutbox().filter((item) => item.attemptId !== attemptId);
+    existingOutbox.push({
+      attemptId,
+      assessmentId,
+      uid,
+      studentNameArabic: studentName,
+      answers,
+      resultReleasePolicy: releasePolicy,
+      questionIds,
+      totalPoints,
+      queuedAt: nowIso,
+      type: 'final_submit'
+    });
+    writeOfflineExamOutbox(existingOutbox);
   }
 
-  // 3. Persist finalized attempt (including scoredResult for cross-device persistence) to Cloud Firestore
-  try {
-    await setDoc(doc(db, 'assessmentAttempts', attemptId), cleanFirestoreData({
+  // Save finalized attempt locally
+  const localAttempts = readLocalStudentAttempts(uid);
+  const existingAttempt = localAttempts.find((a) => a.id === attemptId);
+  saveLocalStudentAttempt(uid, {
+    ...(existingAttempt || {
       id: attemptId,
       assessmentId,
       uid,
-      answers,
-      status: 'scored',
-      submittedAt: finalResult.submittedAt,
-      scoredResult: finalResult
-    }), { merge: true });
-  } catch (e) {}
+      startedAt: finalResult.submittedAt,
+      expiresAt: finalResult.submittedAt,
+      lastSavedAt: finalResult.submittedAt,
+      attemptNumber: 1
+    }),
+    answers,
+    status: 'scored',
+    submittedAt: finalResult.submittedAt
+  });
 
   try {
     const localKey = `${LOCAL_STORAGE_PREFIX}results_${uid}`;
@@ -1221,47 +1452,225 @@ export async function submitAttemptServer(
     localStorage.setItem(localKey, JSON.stringify(updated));
   } catch (e) {}
 
-  try {
-    await setDoc(doc(db, 'assessmentResults', finalResult.id), cleanFirestoreData(finalResult), { merge: true });
-  } catch (e) {}
-
-  try {
-    await writeAuditLogToCloud({
-      action: 'ASSESSMENT_SCORED',
-      performedBy: studentName,
-      targetUid: uid,
-      details: {
-        attemptId,
+  if (!queuedOffline) {
+    // Persist finalized attempt (including scoredResult for cross-device persistence) to Cloud Firestore
+    try {
+      await setDoc(doc(db, 'assessmentAttempts', attemptId), cleanFirestoreData({
+        id: attemptId,
         assessmentId,
-        score: finalResult.score,
-        totalPoints: finalResult.totalPoints,
-        percentage: finalResult.percentage
-      }
-    });
-  } catch (e) {}
+        uid,
+        answers,
+        status: 'scored',
+        submittedAt: finalResult.submittedAt,
+        scoredResult: finalResult
+      }), { merge: true });
+    } catch (e) {}
+
+    try {
+      await setDoc(doc(db, 'assessmentResults', finalResult.id), cleanFirestoreData(finalResult), { merge: true });
+    } catch (e) {}
+
+    try {
+      await writeAuditLogToCloud({
+        action: 'ASSESSMENT_SCORED',
+        performedBy: studentName,
+        targetUid: uid,
+        details: {
+          attemptId,
+          assessmentId,
+          score: finalResult.score,
+          totalPoints: finalResult.totalPoints,
+          percentage: finalResult.percentage
+        }
+      });
+    } catch (e) {}
+  }
 
   return {
     result: finalResult,
-    isReleased: finalResult.isReleased
+    isReleased: finalResult.isReleased,
+    queuedOffline
   };
 }
 
-export async function getStudentAttempts(uid: string): Promise<AssessmentAttempt[]> {
-  try {
-    const q = query(
-      collection(db, 'assessmentAttempts'),
-      where('uid', '==', uid)
-    );
-    const snap = await getDocs(q);
-    const list: AssessmentAttempt[] = [];
-    snap.forEach(d => list.push({ id: d.id, ...d.data() } as AssessmentAttempt));
-    return list;
-  } catch (err) {
-    return [];
+/**
+ * Automatically flushes queued offline exam submissions to the server & Firestore
+ * as soon as internet connectivity is restored.
+ */
+export async function flushOfflineExamSubmissions(): Promise<number> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return 0;
+  if (isFlushingExamOutbox) return 0;
+
+  const queue = readOfflineExamOutbox();
+  if (queue.length === 0) return 0;
+
+  isFlushingExamOutbox = true;
+  notifyExamSyncListeners();
+
+  let syncedCount = 0;
+  const remaining: OfflineExamSubmissionRecord[] = [];
+
+  for (const item of queue) {
+    try {
+      const token = await getIdTokenSafe();
+      let syncedResult: AssessmentResult | null = null;
+
+      const res = await fetch('/api/assessments/submit-attempt', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          attemptId: item.attemptId,
+          assessmentId: item.assessmentId,
+          answers: item.answers,
+          studentNameArabic: item.studentNameArabic,
+          resultReleasePolicy: item.resultReleasePolicy,
+          questionIds: item.questionIds
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.result) {
+          syncedResult = data.result;
+        }
+      }
+
+      if (!syncedResult) {
+        // Fallback to Firestore answer keys if API endpoint didn't score
+        const keyDocs = await Promise.all(
+          item.questionIds.map((qId) => getDoc(doc(db, 'questionAnswerKeys', qId)).catch(() => null))
+        );
+        const validKeys = keyDocs.filter((d) => d && d.exists());
+        if (validKeys.length > 0) {
+          let earned = 0;
+          let maxPts = 0;
+          validKeys.forEach((snap) => {
+            if (!snap) return;
+            const k = snap.data() as QuestionAnswerKey;
+            const pts = Number(k.points) || 5;
+            maxPts += pts;
+            if (item.answers[k.questionId] && item.answers[k.questionId] === k.correctOptionId) {
+              earned += pts;
+            }
+          });
+          const nowIso = new Date().toISOString();
+          const isReleased = item.resultReleasePolicy === 'immediate';
+          const finalTotal = maxPts || item.totalPoints;
+          syncedResult = {
+            id: `res-${item.attemptId}`,
+            attemptId: item.attemptId,
+            assessmentId: item.assessmentId,
+            uid: item.uid,
+            studentNameArabic: item.studentNameArabic,
+            score: earned,
+            totalPoints: finalTotal,
+            percentage: finalTotal > 0 ? Math.round((earned / finalTotal) * 100) : 0,
+            submittedAt: item.queuedAt,
+            gradedAt: nowIso,
+            isReleased,
+            releasedAt: isReleased ? nowIso : undefined
+          };
+        }
+      }
+
+      if (syncedResult) {
+        await setDoc(doc(db, 'assessmentAttempts', item.attemptId), cleanFirestoreData({
+          id: item.attemptId,
+          assessmentId: item.assessmentId,
+          uid: item.uid,
+          answers: item.answers,
+          status: 'scored',
+          submittedAt: syncedResult.submittedAt,
+          scoredResult: syncedResult
+        }), { merge: true });
+
+        await setDoc(doc(db, 'assessmentResults', syncedResult.id), cleanFirestoreData(syncedResult), { merge: true });
+
+        // Update local cached results for this student
+        try {
+          const localKey = `${LOCAL_STORAGE_PREFIX}results_${item.uid}`;
+          const raw = localStorage.getItem(localKey);
+          const prev: AssessmentResult[] = raw ? JSON.parse(raw) : [];
+          const updated = [syncedResult, ...prev.filter((r) => r.id !== syncedResult!.id)];
+          localStorage.setItem(localKey, JSON.stringify(updated));
+        } catch (e) {}
+
+        syncedCount++;
+      } else {
+        remaining.push(item);
+      }
+    } catch (e) {
+      remaining.push(item);
+    }
   }
+
+  isFlushingExamOutbox = false;
+  writeOfflineExamOutbox(remaining);
+  return syncedCount;
+}
+
+export function startExamOfflineAutoSync(): void {
+  if (typeof window === 'undefined' || examAutoSyncStarted) return;
+  examAutoSyncStarted = true;
+
+  window.addEventListener('online', () => {
+    flushOfflineExamSubmissions().catch(() => {});
+  });
+
+  setInterval(() => {
+    if (navigator.onLine && readOfflineExamOutbox().length > 0) {
+      flushOfflineExamSubmissions().catch(() => {});
+    }
+  }, 15000);
+}
+
+if (typeof window !== 'undefined') {
+  startExamOfflineAutoSync();
+}
+
+export async function getStudentAttempts(uid: string): Promise<AssessmentAttempt[]> {
+  const localList = readLocalStudentAttempts(uid);
+  const attemptsMap: Record<string, AssessmentAttempt> = {};
+  localList.forEach((a) => {
+    if (a && a.id) attemptsMap[a.id] = a;
+  });
+
+  if (typeof navigator === 'undefined' || navigator.onLine) {
+    try {
+      const q = query(
+        collection(db, 'assessmentAttempts'),
+        where('uid', '==', uid)
+      );
+      const snap = await getDocs(q);
+      snap.forEach(d => {
+        const remote = { id: d.id, ...d.data() } as AssessmentAttempt;
+        const existingLocal = attemptsMap[remote.id];
+        if (existingLocal && existingLocal.status === 'scored' && remote.status !== 'scored') {
+          return;
+        }
+        attemptsMap[remote.id] = remote;
+      });
+    } catch (err) {}
+  }
+
+  const merged = Object.values(attemptsMap);
+  try {
+    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}attempts_${uid}`, JSON.stringify(merged));
+  } catch (e) {}
+  return merged;
 }
 
 export async function getStudentResults(uid: string): Promise<AssessmentResult[]> {
+  // Flush any pending offline submissions first if we are online
+  if (typeof navigator === 'undefined' || navigator.onLine) {
+    if (readOfflineExamOutbox().length > 0) {
+      await flushOfflineExamSubmissions().catch(() => {});
+    }
+  }
+
   const resultsMap: Record<string, AssessmentResult> = {};
 
   // 0. Load local cached results first

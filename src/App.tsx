@@ -60,6 +60,11 @@ import StudentDashboard from './components/student/StudentDashboard.tsx';
 import StudentProfile from './components/student/StudentProfile.tsx';
 import GlobalNotificationWatcher from './components/notifications/GlobalNotificationWatcher.tsx';
 import NotificationCenterModal from './components/notifications/NotificationCenterModal.tsx';
+import {
+  PWAHeaderControls,
+  PWASidebarInstallCard,
+  PWASettingsCard
+} from './components/pwa/PWAInstallModalAndBanner.tsx';
 
 // Code-splitting admin heavy modules to minimize student initial bundle size
 const AcademicStructureManager = React.lazy(() => import('./components/admin/AcademicStructureManager.tsx'));
@@ -1332,6 +1337,8 @@ export default function App() {
                   <span>الإعدادات والحساب</span>
                 </button>
               </div>
+
+              <PWASidebarInstallCard />
             </div>
 
             {/* Sidebar User Card Footer */}
@@ -1420,6 +1427,8 @@ export default function App() {
                       )}
                     </button>
                   )}
+
+                  <PWAHeaderControls />
 
                   <button
                     onClick={() => setIsNotificationModalOpen(true)}
@@ -1620,6 +1629,9 @@ export default function App() {
               {/* TAB: SETTINGS, APPEARANCE, SYSTEM STATUS & ACCOUNT (الإعدادات والحساب) */}
               {activeTab === 'auth' && (
                 <div className="max-w-3xl mx-auto space-y-6">
+
+                  {/* 0. Installable App (PWA) & Offline Auto-Sync Panel */}
+                  <PWASettingsCard />
                   
                   {/* 1. Theme & Appearance Settings (الوضع الليلي والنهاري) */}
                   <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">

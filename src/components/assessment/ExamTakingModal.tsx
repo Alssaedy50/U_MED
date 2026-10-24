@@ -60,6 +60,7 @@ export default function ExamTakingModal({
   });
 
   const [result, setResult] = useState<AssessmentResult | null>(null);
+  const [queuedOfflineSubmit, setQueuedOfflineSubmit] = useState<boolean>(false);
   const saveTimeoutRef = useRef<any>(null);
 
   useEffect(() => {
@@ -97,7 +98,7 @@ export default function ExamTakingModal({
         console.warn('Auto-save error:', err);
         setSyncStatus('error');
       }
-    }, 600);
+    }, 450);
   };
 
   const handleFinalSubmit = async () => {
@@ -107,6 +108,7 @@ export default function ExamTakingModal({
 
     try {
       const res = await submitAttemptServer(attempt.id, answers, assessment, studentNameArabic);
+      setQueuedOfflineSubmit(Boolean(res.queuedOffline));
       setResult(res.result);
       onSubmitted(res.result);
     } catch (err: any) {
@@ -127,6 +129,7 @@ export default function ExamTakingModal({
   const currentQuestion = questions[currentQuestionIndex];
   const answeredCount = Object.keys(answers).length;
   const isTimerCritical = timeLeftSeconds <= 300;
+  const isCurrentlyOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex flex-col justify-between overflow-hidden text-slate-100 font-sans" dir="rtl">
@@ -147,7 +150,7 @@ export default function ExamTakingModal({
         </div>
 
         <div className="flex items-center gap-3 text-xs">
-          {/* Cloud Sync Status */}
+          {/* Cloud / Local Offline Sync Status */}
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300">
             {syncStatus === 'saving' && (
               <>
@@ -155,16 +158,22 @@ export default function ExamTakingModal({
                 <span className="text-amber-300">جاري الحفظ...</span>
               </>
             )}
-            {syncStatus === 'saved' && (
+            {syncStatus === 'saved' && isCurrentlyOnline && (
               <>
                 <CloudCheck className="w-3.5 h-3.5 text-teal-400" />
                 <span className="text-teal-300">تم الحفظ سحابياً ✓</span>
               </>
             )}
+            {syncStatus === 'saved' && !isCurrentlyOnline && (
+              <>
+                <CheckCircle2 className="w-3.5 h-3.5 text-amber-400" />
+                <span className="text-amber-300">محفوظ محلياً على جهازك (أوفلاين) ✓</span>
+              </>
+            )}
             {syncStatus === 'error' && (
               <>
                 <CloudOff className="w-3.5 h-3.5 text-rose-400" />
-                <span className="text-rose-300">إعادة المحاولة...</span>
+                <span className="text-rose-300">محفوظ محلياً — بانتظار الشبكة</span>
               </>
             )}
           </div>
@@ -204,11 +213,21 @@ export default function ExamTakingModal({
                 {assessment.assessmentType === 'competition' ? 'تمت المشاركة في المسابقة بنجاح!' : 'تم تسليم الاختبار بنجاح!'}
               </h3>
               <p className="text-slate-400 text-sm">
-                تم حفظ وتصحيح محاولتك سحابياً على خوادم المنصة الموثوقة.
+                {queuedOfflineSubmit
+                  ? 'تم حفظ إجاباتك النهائية بأمان على جهازك (وضع أوفلاين)، وسيتم رفعها وتصحيحها تلقائياً فور عودة الاتصال بالإنترنت.'
+                  : 'تم حفظ وتصحيح محاولتك سحابياً على خوادم المنصة الموثوقة.'}
               </p>
             </div>
 
-            {result.isReleased ? (
+            {queuedOfflineSubmit ? (
+              <div className="p-5 rounded-xl bg-amber-950/40 border border-amber-700/60 max-w-md mx-auto space-y-2 text-amber-200 text-xs">
+                <CloudOff className="w-6 h-6 mx-auto text-amber-400" />
+                <div className="font-bold text-sm">محاولتك محفوظة بالكامل وبانتظار عودة الإنترنت</div>
+                <p className="text-slate-300 leading-relaxed">
+                  لا تقلق! لن تضيع أي إجابة. بمجرد اتصال هاتفك بالإنترنت ستقوم المنصة بمزامنة إجاباتك ورصد درجتك المعتمدة تلقائياً وإشعارك فوراً.
+                </p>
+              </div>
+            ) : result.isReleased ? (
               <div className="p-6 rounded-xl bg-slate-950 border border-slate-800 max-w-sm mx-auto space-y-3">
                 <div className="text-slate-400 text-xs">النتيجة النهائية المعتمدة</div>
                 <div className="text-4xl font-extrabold text-teal-400 font-mono">

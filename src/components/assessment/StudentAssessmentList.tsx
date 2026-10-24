@@ -33,7 +33,9 @@ import {
   startAttemptServer, 
   getStudentAttempts, 
   getStudentResults,
-  subscribeToAssessments
+  subscribeToAssessments,
+  subscribeToExamOfflineSync,
+  prefetchAssessmentsForOffline
 } from '../../services/assessmentService.ts';
 import { syncNotificationsForAssessments } from '../../services/notificationService.ts';
 import ExamTakingModal from './ExamTakingModal.tsx';
@@ -64,6 +66,7 @@ export default function StudentAssessmentList({
   const [attempts, setAttempts] = useState<AssessmentAttempt[]>([]);
   const [results, setResults] = useState<AssessmentResult[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
+  const [pendingOfflineCount, setPendingOfflineCount] = useState<number>(0);
   const [statusMsg, setStatusMsg] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
 
   // Active Exam Session Modal States
@@ -114,6 +117,7 @@ export default function StudentAssessmentList({
     if (cached.length > 0) {
       setAssessments(cached);
       syncNotificationsForAssessments(uid, cached, universityId, studyLevelId);
+      prefetchAssessmentsForOffline(cached).catch(() => {});
     }
     loadData(cached.length === 0);
     const unsub = subscribeToAssessments(
@@ -124,11 +128,21 @@ export default function StudentAssessmentList({
         );
         setAssessments(published);
         syncNotificationsForAssessments(uid, published, universityId, studyLevelId);
+        prefetchAssessmentsForOffline(published).catch(() => {});
       },
       undefined,
       'published'
     );
-    return () => unsub();
+    const unsubOfflineSync = subscribeToExamOfflineSync((count, syncing) => {
+      setPendingOfflineCount(count);
+      if (count === 0 && !syncing) {
+        getStudentResults(uid).then((r) => setResults(r)).catch(() => {});
+      }
+    });
+    return () => {
+      unsub();
+      unsubOfflineSync();
+    };
   }, [universityId, studyLevelId, uid]);
 
   const handleStartAttempt = async (assessment: Assessment) => {
@@ -198,6 +212,17 @@ export default function StudentAssessmentList({
           </button>
         </div>
       </div>
+
+      {pendingOfflineCount > 0 && (
+        <div className="p-3.5 rounded-xl bg-amber-950/40 border border-amber-700/60 text-amber-200 text-xs flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <RefreshCw className="w-4 h-4 text-amber-400 animate-spin shrink-0" />
+            <span>
+              لديك ({pendingOfflineCount}) محاولة اختبار محفوظة محلياً (أوفلاين) — ستتم مزامنتها ورصد الدرجة سحابياً فور توفر الإنترنت.
+            </span>
+          </div>
+        </div>
+      )}
 
       {statusMsg && (
         <div className={`p-4 rounded-xl text-xs font-semibold flex items-center gap-2 border ${
