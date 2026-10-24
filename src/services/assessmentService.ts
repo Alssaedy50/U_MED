@@ -31,7 +31,8 @@ import {
   AssessmentType,
   AssessmentStatus,
   ResultReleasePolicy,
-  ParsedQuestionDraft
+  ParsedQuestionDraft,
+  LeaderboardNameMode
 } from '../types/umed.ts';
 import { computeQuestionFingerprint } from './mcqBulkParser.ts';
 import {
@@ -1297,11 +1298,19 @@ export async function saveProgressServer(attemptId: string, answers: Record<stri
   return nowIso;
 }
 
+export interface SubmitAttemptExtraOptions {
+  durationSeconds?: number;
+  studentDisplayNamePublic?: string;
+  studentUsername?: string;
+  leaderboardNameMode?: LeaderboardNameMode;
+}
+
 export async function submitAttemptServer(
   attemptId: string,
   answers: Record<string, string>,
   assessmentObj?: Assessment,
-  studentNameArabic?: string
+  studentNameArabic?: string,
+  extraOptions?: SubmitAttemptExtraOptions
 ): Promise<{
   result: AssessmentResult;
   isReleased: boolean;
@@ -1316,6 +1325,25 @@ export async function submitAttemptServer(
     ? assessmentObj.questionIds
     : ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
   const totalPoints = Number(assessmentObj?.totalPoints) || questionIds.length * 5;
+
+  // Resolve student's chosen leaderboard display identity
+  const savedIdentity = getStudentLeaderboardIdentity(uid);
+  const effectiveNameMode: LeaderboardNameMode =
+    extraOptions?.leaderboardNameMode || savedIdentity.leaderboardNameMode || 'full_name';
+  const effectiveUsername =
+    extraOptions?.studentUsername !== undefined ? extraOptions.studentUsername : savedIdentity.username;
+  const effectiveDisplayNamePublic =
+    extraOptions?.studentDisplayNamePublic ||
+    formatStudentLeaderboardName({
+      uid,
+      fullNameArabic: studentName,
+      username: effectiveUsername,
+      mode: effectiveNameMode
+    });
+  const effectiveDurationSeconds =
+    typeof extraOptions?.durationSeconds === 'number' && extraOptions.durationSeconds >= 0
+      ? Math.round(extraOptions.durationSeconds)
+      : undefined;
 
   let finalResult: AssessmentResult | null = null;
   let scoredOnServer = false;
@@ -1334,6 +1362,10 @@ export async function submitAttemptServer(
           assessmentId,
           answers,
           studentNameArabic: studentName,
+          studentDisplayNamePublic: effectiveDisplayNamePublic,
+          studentUsername: effectiveUsername,
+          leaderboardNameMode: effectiveNameMode,
+          durationSeconds: effectiveDurationSeconds,
           resultReleasePolicy: releasePolicy,
           questionIds
         })
@@ -1341,7 +1373,13 @@ export async function submitAttemptServer(
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.result) {
-          finalResult = data.result;
+          finalResult = {
+            ...data.result,
+            studentDisplayNamePublic: data.result.studentDisplayNamePublic || effectiveDisplayNamePublic,
+            studentUsername: data.result.studentUsername || effectiveUsername,
+            leaderboardNameMode: data.result.leaderboardNameMode || effectiveNameMode,
+            durationSeconds: data.result.durationSeconds ?? effectiveDurationSeconds
+          };
           scoredOnServer = true;
         }
       }
@@ -1376,6 +1414,10 @@ export async function submitAttemptServer(
           assessmentId,
           uid,
           studentNameArabic: studentName,
+          studentDisplayNamePublic: effectiveDisplayNamePublic,
+          studentUsername: effectiveUsername,
+          leaderboardNameMode: effectiveNameMode,
+          durationSeconds: effectiveDurationSeconds,
           score: earned,
           totalPoints: finalTotal,
           percentage: finalTotal > 0 ? Math.round((earned / finalTotal) * 100) : 0,
@@ -1401,6 +1443,10 @@ export async function submitAttemptServer(
       assessmentId,
       uid,
       studentNameArabic: studentName,
+      studentDisplayNamePublic: effectiveDisplayNamePublic,
+      studentUsername: effectiveUsername,
+      leaderboardNameMode: effectiveNameMode,
+      durationSeconds: effectiveDurationSeconds,
       score: 0,
       totalPoints,
       percentage: 0,
@@ -1441,7 +1487,8 @@ export async function submitAttemptServer(
     }),
     answers,
     status: 'scored',
-    submittedAt: finalResult.submittedAt
+    submittedAt: finalResult.submittedAt,
+    durationSeconds: effectiveDurationSeconds
   });
 
   try {
@@ -1450,6 +1497,14 @@ export async function submitAttemptServer(
     const prev: AssessmentResult[] = raw ? JSON.parse(raw) : [];
     const updated = [finalResult, ...prev.filter(r => r.id !== finalResult!.id)];
     localStorage.setItem(localKey, JSON.stringify(updated));
+  } catch (e) {}
+
+  try {
+    const lbKey = `${LOCAL_STORAGE_PREFIX}leaderboard_${assessmentId}`;
+    const rawLb = localStorage.getItem(lbKey);
+    const prevLb: AssessmentResult[] = rawLb ? JSON.parse(rawLb) : [];
+    const updatedLb = [finalResult, ...prevLb.filter(r => r.id !== finalResult!.id)];
+    localStorage.setItem(lbKey, JSON.stringify(updatedLb));
   } catch (e) {}
 
   if (!queuedOffline) {
@@ -1462,6 +1517,7 @@ export async function submitAttemptServer(
         answers,
         status: 'scored',
         submittedAt: finalResult.submittedAt,
+        durationSeconds: effectiveDurationSeconds,
         scoredResult: finalResult
       }), { merge: true });
     } catch (e) {}
@@ -1866,3 +1922,555 @@ export async function getAssessmentResultsForAdmin(assessmentId: string): Promis
     (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
   );
 }
+
+// ---------------------------------------------------------------------------
+// 4. Student Display Name / Username Visibility & Ranked Leaderboard Engine
+// ---------------------------------------------------------------------------
+
+export interface StudentLeaderboardIdentity {
+  username: string;
+  leaderboardNameMode: LeaderboardNameMode;
+}
+
+const LEADERBOARD_IDENTITY_PREFIX = 'umed_leaderboard_identity_';
+const GUEST_LEADERBOARD_IDENTITY_KEY = 'umed_guest_leaderboard_identity_v1';
+
+export function getStudentLeaderboardIdentity(uid?: string): StudentLeaderboardIdentity {
+  try {
+    if (uid) {
+      const raw = localStorage.getItem(`${LEADERBOARD_IDENTITY_PREFIX}${uid}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        return {
+          username: String(parsed.username || '').trim(),
+          leaderboardNameMode: (parsed.leaderboardNameMode as LeaderboardNameMode) || 'full_name'
+        };
+      }
+    }
+    const guestRaw = localStorage.getItem(GUEST_LEADERBOARD_IDENTITY_KEY);
+    if (guestRaw) {
+      const parsed = JSON.parse(guestRaw);
+      return {
+        username: String(parsed.username || '').trim(),
+        leaderboardNameMode: (parsed.leaderboardNameMode as LeaderboardNameMode) || 'full_name'
+      };
+    }
+  } catch (e) {}
+  return {
+    username: '',
+    leaderboardNameMode: 'full_name'
+  };
+}
+
+export function formatStudentLeaderboardName(params: {
+  uid?: string;
+  fullNameArabic?: string;
+  username?: string;
+  mode?: LeaderboardNameMode;
+}): string {
+  const rawFull = (params.fullNameArabic || 'طالب طب بشري').replace(/^د\.\s*/, '').trim() || 'طالب طب بشري';
+  const rawUser = (params.username || '').trim();
+  const mode: LeaderboardNameMode = params.mode || 'full_name';
+
+  if (mode === 'custom_username') {
+    if (rawUser) {
+      return rawUser.startsWith('@') ? rawUser : `@${rawUser}`;
+    }
+    return `د. ${rawFull}`;
+  }
+
+  if (mode === 'abbreviated') {
+    const parts = rawFull.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {
+      const first = parts[0];
+      const last = parts[parts.length - 1];
+      return `د. ${first} ${last.charAt(0)}.`;
+    }
+    return `د. ${rawFull}`;
+  }
+
+  if (mode === 'anonymous_code') {
+    const seed = params.uid || rawFull || 'UMED';
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) {
+      hash = (hash * 31 + seed.charCodeAt(i)) & 0xffff;
+    }
+    const code = hash.toString(16).toUpperCase().padStart(4, '0').slice(-4);
+    return `طبيب متميز #${code}`;
+  }
+
+  // Default: 'full_name'
+  return `د. ${rawFull}`;
+}
+
+export function resolveResultPublicDisplayName(result: AssessmentResult): string {
+  if (result.studentDisplayNamePublic && result.studentDisplayNamePublic.trim()) {
+    return result.studentDisplayNamePublic.trim();
+  }
+  return formatStudentLeaderboardName({
+    uid: result.uid,
+    fullNameArabic: result.studentNameArabic,
+    username: result.studentUsername,
+    mode: result.leaderboardNameMode || 'full_name'
+  });
+}
+
+export async function saveStudentLeaderboardIdentity(
+  uid: string | undefined,
+  identity: StudentLeaderboardIdentity,
+  fullNameArabic?: string
+): Promise<string> {
+  const cleaned: StudentLeaderboardIdentity = {
+    username: (identity.username || '').trim(),
+    leaderboardNameMode: identity.leaderboardNameMode || 'full_name'
+  };
+
+  try {
+    localStorage.setItem(GUEST_LEADERBOARD_IDENTITY_KEY, JSON.stringify(cleaned));
+    if (uid) {
+      localStorage.setItem(`${LEADERBOARD_IDENTITY_PREFIX}${uid}`, JSON.stringify(cleaned));
+    }
+  } catch (e) {}
+
+  const resolvedPublicName = formatStudentLeaderboardName({
+    uid,
+    fullNameArabic,
+    username: cleaned.username,
+    mode: cleaned.leaderboardNameMode
+  });
+
+  if (!uid) return resolvedPublicName;
+
+  // Update local cached results for this student
+  try {
+    const localKey = `${LOCAL_STORAGE_PREFIX}results_${uid}`;
+    const raw = localStorage.getItem(localKey);
+    if (raw) {
+      const prev: AssessmentResult[] = JSON.parse(raw);
+      const updated = prev.map((r) => ({
+        ...r,
+        studentDisplayNamePublic: resolvedPublicName,
+        studentUsername: cleaned.username,
+        leaderboardNameMode: cleaned.leaderboardNameMode
+      }));
+      localStorage.setItem(localKey, JSON.stringify(updated));
+    }
+  } catch (e) {}
+
+  if (typeof navigator === 'undefined' || navigator.onLine) {
+    // 1. Update UserProfile in Firestore
+    try {
+      await setDoc(
+        doc(db, 'users', uid),
+        cleanFirestoreData({
+          username: cleaned.username,
+          leaderboardNameMode: cleaned.leaderboardNameMode,
+          updatedAt: new Date().toISOString()
+        }),
+        { merge: true }
+      );
+    } catch (e) {}
+
+    // 2. Update existing assessmentResults in Firestore for this student
+    try {
+      const q = query(collection(db, 'assessmentResults'), where('uid', '==', uid));
+      const snap = await getDocs(q);
+      await Promise.all(
+        snap.docs.map((d) =>
+          updateDoc(doc(db, 'assessmentResults', d.id), {
+            studentDisplayNamePublic: resolvedPublicName,
+            studentUsername: cleaned.username,
+            leaderboardNameMode: cleaned.leaderboardNameMode
+          }).catch(() => {})
+        )
+      );
+    } catch (e) {}
+
+    // 3. Sync with backend results store
+    try {
+      const token = await getIdTokenSafe();
+      await fetch('/api/assessments/update-leaderboard-name', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          uid,
+          studentDisplayNamePublic: resolvedPublicName,
+          studentUsername: cleaned.username,
+          leaderboardNameMode: cleaned.leaderboardNameMode
+        })
+      });
+    } catch (e) {}
+  }
+
+  return resolvedPublicName;
+}
+
+/**
+ * Sorts and deduplicates results for the competitive student leaderboard:
+ * 1) Highest percentage DESC
+ * 2) Highest score DESC
+ * 3) Fastest completion durationSeconds ASC
+ * 4) Earliest submittedAt ASC
+ */
+export function sortResultsForLeaderboard(results: AssessmentResult[]): AssessmentResult[] {
+  const bestByStudent = new Map<string, AssessmentResult>();
+
+  for (const r of results) {
+    if (!r || !r.isReleased) continue;
+    const key = r.uid || r.id;
+    const existing = bestByStudent.get(key);
+    if (!existing) {
+      bestByStudent.set(key, r);
+      continue;
+    }
+
+    const rPct = Number(r.percentage) || 0;
+    const exPct = Number(existing.percentage) || 0;
+    if (rPct > exPct) {
+      bestByStudent.set(key, r);
+    } else if (rPct === exPct) {
+      const rScore = Number(r.score) || 0;
+      const exScore = Number(existing.score) || 0;
+      if (rScore > exScore) {
+        bestByStudent.set(key, r);
+      } else if (rScore === exScore) {
+        const rDur = typeof r.durationSeconds === 'number' ? r.durationSeconds : 999999;
+        const exDur = typeof existing.durationSeconds === 'number' ? existing.durationSeconds : 999999;
+        if (rDur < exDur) {
+          bestByStudent.set(key, r);
+        }
+      }
+    }
+  }
+
+  return Array.from(bestByStudent.values()).sort((a, b) => {
+    const pctDiff = (Number(b.percentage) || 0) - (Number(a.percentage) || 0);
+    if (pctDiff !== 0) return pctDiff;
+    const scoreDiff = (Number(b.score) || 0) - (Number(a.score) || 0);
+    if (scoreDiff !== 0) return scoreDiff;
+    const durA = typeof a.durationSeconds === 'number' ? a.durationSeconds : 999999;
+    const durB = typeof b.durationSeconds === 'number' ? b.durationSeconds : 999999;
+    if (durA !== durB) return durA - durB;
+    return new Date(a.submittedAt || 0).getTime() - new Date(b.submittedAt || 0).getTime();
+  });
+}
+
+export async function getAssessmentLeaderboard(assessmentId: string): Promise<AssessmentResult[]> {
+  const resultsMap: Record<string, AssessmentResult> = {};
+  const lbCacheKey = `${LOCAL_STORAGE_PREFIX}leaderboard_${assessmentId}`;
+
+  // 1. Load local cached leaderboard first
+  try {
+    const raw = localStorage.getItem(lbCacheKey);
+    if (raw) {
+      const cached: AssessmentResult[] = JSON.parse(raw);
+      cached.forEach((r) => {
+        if (r && r.id && r.isReleased) resultsMap[r.id] = r;
+      });
+    }
+  } catch (e) {}
+
+  // 2. Also include current user's local results for this assessment
+  try {
+    const currentUid = auth.currentUser?.uid;
+    if (currentUid) {
+      const ownRaw = localStorage.getItem(`${LOCAL_STORAGE_PREFIX}results_${currentUid}`);
+      if (ownRaw) {
+        const ownList: AssessmentResult[] = JSON.parse(ownRaw);
+        ownList.forEach((r) => {
+          if (r && r.id && r.assessmentId === assessmentId && r.isReleased) {
+            resultsMap[r.id] = r;
+          }
+        });
+      }
+    }
+  } catch (e) {}
+
+  if (typeof navigator === 'undefined' || navigator.onLine) {
+    // 3. Query Firestore assessmentResults
+    try {
+      const q = query(
+        collection(db, 'assessmentResults'),
+        where('assessmentId', '==', assessmentId)
+      );
+      const snap = await getDocs(q);
+      snap.forEach((d) => {
+        const data = { id: d.id, ...d.data() } as AssessmentResult;
+        if (data.isReleased) {
+          resultsMap[data.id] = data;
+        }
+      });
+    } catch (e) {}
+
+    // 4. Query Backend API results
+    try {
+      const res = await fetch(`/api/assessments/results?assessmentId=${encodeURIComponent(assessmentId)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.results)) {
+          data.results.forEach((r: AssessmentResult) => {
+            if (r && r.id && r.isReleased && !(r as any).isPendingRelease) {
+              resultsMap[r.id] = r;
+            }
+          });
+        }
+      }
+    } catch (e) {}
+  }
+
+  const sorted = sortResultsForLeaderboard(Object.values(resultsMap));
+  try {
+    localStorage.setItem(lbCacheKey, JSON.stringify(sorted));
+  } catch (e) {}
+
+  return sorted;
+}
+
+export function subscribeToAssessmentLeaderboard(
+  assessmentId: string,
+  onUpdate: (ranked: AssessmentResult[]) => void
+): () => void {
+  if (!assessmentId) return () => {};
+  try {
+    const q = query(
+      collection(db, 'assessmentResults'),
+      where('assessmentId', '==', assessmentId)
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const items: AssessmentResult[] = [];
+        snap.forEach((d) => {
+          const data = { id: d.id, ...d.data() } as AssessmentResult;
+          if (data.isReleased) items.push(data);
+        });
+        const ranked = sortResultsForLeaderboard(items);
+        if (ranked.length > 0) {
+          try {
+            localStorage.setItem(`${LOCAL_STORAGE_PREFIX}leaderboard_${assessmentId}`, JSON.stringify(ranked));
+          } catch (e) {}
+          onUpdate(ranked);
+        }
+      },
+      () => {}
+    );
+    return unsub;
+  } catch {
+    return () => {};
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 5. Shareable Trial Exam Link & Guest Solving with Mandatory Account Gate
+// ---------------------------------------------------------------------------
+
+export interface PendingGuestExamSubmission {
+  assessmentId: string;
+  assessment: Assessment;
+  answers: Record<string, string>;
+  startedAt: string;
+  submittedAt: string;
+  durationSeconds: number;
+  preferredUsername?: string;
+  preferredNameMode?: LeaderboardNameMode;
+}
+
+const PENDING_GUEST_SUBMISSION_KEY = 'umed_pending_guest_exam_submission_v1';
+const PENDING_SHARED_ASSESSMENT_ID_KEY = 'umed_pending_shared_assessment_id_v1';
+
+export function buildShareableAssessmentUrl(assessmentId: string): string {
+  if (typeof window === 'undefined') return `?sharedAssessmentId=${encodeURIComponent(assessmentId)}`;
+  const url = new URL(window.location.href);
+  url.searchParams.set('sharedAssessmentId', assessmentId);
+  return url.toString();
+}
+
+export function getSharedAssessmentIdFromUrl(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const fromQuery = params.get('sharedAssessmentId');
+    if (fromQuery && fromQuery.trim()) {
+      sessionStorage.setItem(PENDING_SHARED_ASSESSMENT_ID_KEY, fromQuery.trim());
+      return fromQuery.trim();
+    }
+    const saved = sessionStorage.getItem(PENDING_SHARED_ASSESSMENT_ID_KEY);
+    if (saved && saved.trim()) return saved.trim();
+  } catch (e) {}
+  return null;
+}
+
+export function clearSharedAssessmentIdFromUrl(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.removeItem(PENDING_SHARED_ASSESSMENT_ID_KEY);
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('sharedAssessmentId')) {
+      url.searchParams.delete('sharedAssessmentId');
+      window.history.replaceState({}, '', url.toString());
+    }
+  } catch (e) {}
+}
+
+export async function fetchSharedAssessmentForGuest(
+  assessmentId: string
+): Promise<{ assessment: Assessment; questions: AssessmentQuestionPublic[] } | null> {
+  if (!assessmentId) return null;
+
+  let foundAssessment: Assessment | null =
+    DEFAULT_ASSESSMENTS.find((a) => a.id === assessmentId) || null;
+
+  // 1. Check localStorage cached assessments across universities
+  if (!foundAssessment) {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(`${LOCAL_STORAGE_PREFIX}assessments_`)) {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            const list = JSON.parse(raw) as Assessment[];
+            const match = Array.isArray(list) ? list.find((a) => a && a.id === assessmentId) : null;
+            if (match) {
+              foundAssessment = match;
+              break;
+            }
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  // 2. Check Firestore directly
+  if (typeof navigator === 'undefined' || navigator.onLine) {
+    try {
+      const snap = await getDoc(doc(db, 'assessments', assessmentId));
+      if (snap.exists()) {
+        foundAssessment = { id: snap.id, ...snap.data() } as Assessment;
+      }
+    } catch (e) {}
+  }
+
+  // 3. Check Public API Endpoint
+  let apiQuestions: AssessmentQuestionPublic[] = [];
+  if (typeof navigator === 'undefined' || navigator.onLine) {
+    try {
+      const res = await fetch(`/api/assessments/public/${encodeURIComponent(assessmentId)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.assessment && !foundAssessment) {
+          foundAssessment = data.assessment as Assessment;
+        }
+        if (Array.isArray(data.questions) && data.questions.length > 0) {
+          apiQuestions = data.questions;
+        }
+      }
+    } catch (e) {}
+  }
+
+  if (!foundAssessment) {
+    return null;
+  }
+
+  const questionIds = foundAssessment.questionIds?.length
+    ? foundAssessment.questionIds
+    : ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
+
+  let questions = await fetchPublicQuestionsForAssessment(questionIds);
+  if (questions.length === 0 && apiQuestions.length > 0) {
+    questions = apiQuestions;
+  }
+  if (questions.length === 0) {
+    questions = DEFAULT_PUBLIC_QUESTIONS;
+  }
+
+  return {
+    assessment: foundAssessment,
+    questions
+  };
+}
+
+export function savePendingGuestExamSubmission(submission: PendingGuestExamSubmission): void {
+  try {
+    localStorage.setItem(PENDING_GUEST_SUBMISSION_KEY, JSON.stringify(submission));
+    if (submission.preferredUsername !== undefined || submission.preferredNameMode !== undefined) {
+      localStorage.setItem(
+        GUEST_LEADERBOARD_IDENTITY_KEY,
+        JSON.stringify({
+          username: submission.preferredUsername || '',
+          leaderboardNameMode: submission.preferredNameMode || 'full_name'
+        })
+      );
+    }
+  } catch (e) {}
+}
+
+export function getPendingGuestExamSubmission(): PendingGuestExamSubmission | null {
+  try {
+    const raw = localStorage.getItem(PENDING_GUEST_SUBMISSION_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as PendingGuestExamSubmission;
+      if (parsed && parsed.assessmentId && parsed.assessment) {
+        return parsed;
+      }
+    }
+  } catch (e) {}
+  return null;
+}
+
+export function clearPendingGuestExamSubmission(): void {
+  try {
+    localStorage.removeItem(PENDING_GUEST_SUBMISSION_KEY);
+  } catch (e) {}
+}
+
+/**
+ * Automatically grades and records a pending guest trial exam submission
+ * as soon as the guest creates a mandatory account or logs in.
+ */
+export async function claimAndGradePendingGuestSubmission(
+  uid: string,
+  studentNameArabic: string
+): Promise<{ result: AssessmentResult; assessment: Assessment } | null> {
+  const pending = getPendingGuestExamSubmission();
+  if (!pending) return null;
+
+  try {
+    // Save student's preferred leaderboard identity if they picked one during guest mode
+    const mode: LeaderboardNameMode = pending.preferredNameMode || 'full_name';
+    const username = (pending.preferredUsername || '').trim();
+    const publicName = await saveStudentLeaderboardIdentity(
+      uid,
+      { username, leaderboardNameMode: mode },
+      studentNameArabic
+    );
+
+    const attemptId = `att-guest-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const graded = await submitAttemptServer(
+      attemptId,
+      pending.answers || {},
+      pending.assessment,
+      studentNameArabic,
+      {
+        durationSeconds: pending.durationSeconds,
+        studentDisplayNamePublic: publicName,
+        studentUsername: username,
+        leaderboardNameMode: mode
+      }
+    );
+
+    clearPendingGuestExamSubmission();
+    clearSharedAssessmentIdFromUrl();
+
+    return {
+      result: graded.result,
+      assessment: pending.assessment
+    };
+  } catch (err) {
+    console.warn('Failed to claim and grade guest submission:', err);
+    return null;
+  }
+}
+

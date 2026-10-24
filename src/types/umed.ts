@@ -33,11 +33,19 @@ export interface UserRoleDoc {
   assignedByRole?: UserRole;
 }
 
+export type LeaderboardNameMode =
+  | 'full_name'
+  | 'custom_username'
+  | 'abbreviated'
+  | 'anonymous_code';
+
 export interface UserProfile {
   uid: string;
   email: string;
   displayNameArabic: string;
   displayNameEnglish?: string;
+  username?: string;
+  leaderboardNameMode?: LeaderboardNameMode;
   phone?: string;
   academicStudentNumber?: string;
   avatarUrl?: string;
@@ -490,7 +498,12 @@ export interface Assessment {
   programId: string;
   studyLevelId: string;
   courseOfferingId?: string;
-  durationMinutes: number; // e.g. 45
+  durationMinutes: number; // e.g. 45 (0 = untimed/open)
+  enableExamTimer?: boolean; // true = timed full exam, false = untimed/open
+  questionDurationSeconds?: number; // optional timer per question in seconds (0 = disabled)
+  availabilityDurationHours?: number; // optional availability duration before closing
+  allowTrialSharing?: boolean; // allow shareable trial link where guests solve & register to see score
+  showLeaderboard?: boolean; // display ranked results leaderboard to students
   maxAttempts: number; // usually 1 for exams, 1 or more for competitions
   opensAt: string; // ISO 8601
   closesAt: string; // ISO 8601
@@ -516,6 +529,7 @@ export interface AssessmentAttempt {
   answers: Record<string, string>; // questionId -> selectedOptionId (progressively saved)
   lastSavedAt: string;
   attemptNumber: number;
+  durationSeconds?: number;
 }
 
 export interface AssessmentResult {
@@ -524,6 +538,10 @@ export interface AssessmentResult {
   assessmentId: string;
   uid: string;
   studentNameArabic: string;
+  studentDisplayNamePublic?: string;
+  studentUsername?: string;
+  leaderboardNameMode?: LeaderboardNameMode;
+  durationSeconds?: number;
   academicStudentNumber?: string;
   score: number;
   totalPoints: number;

@@ -24,7 +24,11 @@ import {
   Upload,
   Wifi,
   WifiOff,
-  RefreshCw
+  RefreshCw,
+  Share2,
+  Check,
+  Timer,
+  Clock
 } from 'lucide-react';
 import { 
   QuestionBank, 
@@ -57,7 +61,9 @@ import {
   getAssessmentResultsForAdmin, 
   releaseAssessmentResults,
   flushQuestionOutbox,
-  subscribeToQuestionSyncState
+  subscribeToQuestionSyncState,
+  buildShareableAssessmentUrl,
+  resolveResultPublicDisplayName
 } from '../../services/assessmentService.ts';
 import { fetchStudyLevels, fetchPrograms, fetchColleges, fetchUniversities } from '../../services/academicService.ts';
 import { getRoleLabelArabic } from '../../services/batchGovernanceService.ts';
@@ -129,10 +135,14 @@ export default function AssessmentManager({
   const [studyLevelId, setStudyLevelId] = useState<string>(assignedStudyLevelId || 'lvl-4');
   const [selectedBankForAssessment, setSelectedBankForAssessment] = useState<string>('');
   const [durationMinutes, setDurationMinutes] = useState<number>(45);
+  const [enableExamTimer, setEnableExamTimer] = useState<boolean>(true);
+  const [questionDurationSeconds, setQuestionDurationSeconds] = useState<number>(0);
+  const [availabilityDurationHours, setAvailabilityDurationHours] = useState<number>(336);
   const [maxAttempts, setMaxAttempts] = useState<number>(1);
   const [releasePolicy, setReleasePolicy] = useState<ResultReleasePolicy>('immediate');
   const [opensAt, setOpensAt] = useState<string>(new Date().toISOString().slice(0, 16));
   const [closesAt, setClosesAt] = useState<string>(new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 16));
+  const [copiedAssessmentShareId, setCopiedAssessmentShareId] = useState<string | null>(null);
 
   // Edit Assessment Modal State
   const [editingAssessment, setEditingAssessment] = useState<Assessment | null>(null);
@@ -433,7 +443,12 @@ export default function AssessmentManager({
           universityId,
           programId: 'prog-mbbs',
           studyLevelId,
-          durationMinutes: Number(durationMinutes),
+          durationMinutes: enableExamTimer ? Number(durationMinutes) : 0,
+          enableExamTimer,
+          questionDurationSeconds: Number(questionDurationSeconds) || 0,
+          availabilityDurationHours: Number(availabilityDurationHours) || 336,
+          allowTrialSharing: true,
+          showLeaderboard: true,
           maxAttempts: Number(maxAttempts),
           opensAt: new Date(opensAt).toISOString(),
           closesAt: new Date(closesAt).toISOString(),
@@ -492,7 +507,10 @@ export default function AssessmentManager({
           ...editingAssessment,
           titleArabic: editingAssessment.titleArabic.trim(),
           descriptionArabic: editingAssessment.descriptionArabic?.trim() || '',
-          durationMinutes: Number(editingAssessment.durationMinutes) || 30,
+          enableExamTimer: editingAssessment.enableExamTimer !== false,
+          durationMinutes: editingAssessment.enableExamTimer === false ? 0 : (Number(editingAssessment.durationMinutes) || 30),
+          questionDurationSeconds: Number(editingAssessment.questionDurationSeconds) || 0,
+          availabilityDurationHours: Number(editingAssessment.availabilityDurationHours) || 336,
           maxAttempts: Number(editingAssessment.maxAttempts) || 1,
           questionIds: updatedQuestionIds,
           totalPoints: updatedTotalPoints,
@@ -1261,16 +1279,50 @@ export default function AssessmentManager({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div>
-                  <label className="text-xs text-slate-400 block mb-1">مدة الاختبار (بالدقائق)</label>
-                  <input
-                    type="number"
-                    value={durationMinutes}
-                    onChange={(e) => setDurationMinutes(Number(e.target.value))}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-mono"
-                    min={5}
-                  />
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs text-slate-400">مؤقت الاختبار الكلي</label>
+                    <label className="flex items-center gap-1.5 text-[11px] text-teal-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={enableExamTimer}
+                        onChange={(e) => setEnableExamTimer(e.target.checked)}
+                        className="rounded accent-teal-500"
+                      />
+                      <span>{enableExamTimer ? 'مفعل' : 'وقت مفتوح'}</span>
+                    </label>
+                  </div>
+                  {enableExamTimer ? (
+                    <input
+                      type="number"
+                      value={durationMinutes}
+                      onChange={(e) => setDurationMinutes(Number(e.target.value))}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-mono"
+                      min={5}
+                      placeholder="المدة بالدقائق"
+                    />
+                  ) : (
+                    <div className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-emerald-400 font-bold">
+                      بدون مؤقت كلي (مفتوح)
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">مؤقت اختياري لكل سؤال</label>
+                  <select
+                    value={questionDurationSeconds}
+                    onChange={(e) => setQuestionDurationSeconds(Number(e.target.value))}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-amber-300 font-bold"
+                  >
+                    <option value={0}>بدون مؤقت لكل سؤال</option>
+                    <option value={30}>30 ثانية لكل سؤال</option>
+                    <option value={45}>45 ثانية لكل سؤال</option>
+                    <option value={60}>60 ثانية (دقيقة) لكل سؤال</option>
+                    <option value={90}>90 ثانية لكل سؤال</option>
+                    <option value={120}>120 ثانية (دقيقتان) لكل سؤال</option>
+                  </select>
                 </div>
 
                 <div>
@@ -1298,26 +1350,62 @@ export default function AssessmentManager({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">تاريخ ووقت الفتح</label>
-                  <input
-                    type="datetime-local"
-                    value={opensAt}
-                    onChange={(e) => setOpensAt(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-mono"
-                    dir="ltr"
-                  />
+              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3.5 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="text-xs font-bold text-slate-300">
+                    مدة توفر الاختبار قبل الإغلاق التلقائي:
+                  </label>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {[
+                      { hours: 6, label: '6 ساعات' },
+                      { hours: 24, label: '24 ساعة (يوم)' },
+                      { hours: 72, label: '3 أيام' },
+                      { hours: 168, label: '7 أيام' },
+                      { hours: 336, label: '14 يوماً' },
+                      { hours: 720, label: '30 يوماً' }
+                    ].map((preset) => (
+                      <button
+                        key={preset.hours}
+                        type="button"
+                        onClick={() => {
+                          setAvailabilityDurationHours(preset.hours);
+                          const openDate = opensAt ? new Date(opensAt).getTime() : Date.now();
+                          const nextClose = new Date(openDate + preset.hours * 3600000);
+                          setClosesAt(nextClose.toISOString().slice(0, 16));
+                        }}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${
+                          availabilityDurationHours === preset.hours
+                            ? 'bg-teal-600 text-white border-teal-500'
+                            : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">تاريخ ووقت الإغلاق</label>
-                  <input
-                    type="datetime-local"
-                    value={closesAt}
-                    onChange={(e) => setClosesAt(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-mono"
-                    dir="ltr"
-                  />
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs text-slate-400 block mb-1">تاريخ ووقت الفتح</label>
+                    <input
+                      type="datetime-local"
+                      value={opensAt}
+                      onChange={(e) => setOpensAt(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white font-mono"
+                      dir="ltr"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400 block mb-1">تاريخ ووقت الإغلاق</label>
+                    <input
+                      type="datetime-local"
+                      value={closesAt}
+                      onChange={(e) => setClosesAt(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white font-mono"
+                      dir="ltr"
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -1395,9 +1483,12 @@ export default function AssessmentManager({
 
                 <div className="text-xs text-slate-400 grid grid-cols-2 gap-2 bg-slate-950/70 p-3 rounded-xl border border-slate-800/80">
                   <div>المستوى: <span className="text-teal-300 font-semibold">{getLevelLabel(a.studyLevelId)}</span></div>
-                  <div>المدة: <span className="text-slate-200 font-mono">{a.durationMinutes} د</span> • الأسئلة: <span className="text-slate-200 font-mono">{a.questionIds?.length || 3}</span></div>
-                  <div>المحاولات: <span className="text-slate-200 font-mono">{a.maxAttempts}</span></div>
-                  <div>النتائج: <span className="text-slate-200 font-semibold">{a.resultReleasePolicy === 'immediate' ? 'فوري' : a.resultReleasePolicy === 'manual' ? 'يدوي' : 'بعد الإغلاق'}</span></div>
+                  <div>
+                    المدة: <span className="text-slate-200 font-mono">{a.enableExamTimer === false || !a.durationMinutes ? 'وقت مفتوح' : `${a.durationMinutes} د`}</span>
+                    {a.questionDurationSeconds ? <span className="text-amber-300 font-mono"> • {a.questionDurationSeconds}ث/سؤال</span> : null}
+                  </div>
+                  <div>الأسئلة: <span className="text-slate-200 font-mono">{a.questionIds?.length || 3}</span> • المحاولات: <span className="text-slate-200 font-mono">{a.maxAttempts}</span></div>
+                  <div>النتائج: <span className="text-slate-200 font-semibold">{a.resultReleasePolicy === 'immediate' ? 'فوري بالترتيب' : a.resultReleasePolicy === 'manual' ? 'يدوي' : 'بعد الإغلاق'}</span></div>
                 </div>
 
                 {confirmDeleteAssessmentId === a.id && (
@@ -1420,18 +1511,45 @@ export default function AssessmentManager({
                   </div>
                 )}
 
-                <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
-                  <button
-                    onClick={() => {
-                      setSelectedAssessmentForResults(a);
-                      setActiveTab('results');
-                      getAssessmentResultsForAdmin(a.id).then(setResults);
-                    }}
-                    className="px-3 py-1.5 rounded-lg bg-blue-950/80 hover:bg-blue-900 text-blue-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                  >
-                    <Eye className="w-3.5 h-3.5" />
-                    <span>عرض النتائج</span>
-                  </button>
+                <div className="pt-2 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => {
+                        setSelectedAssessmentForResults(a);
+                        setActiveTab('results');
+                        getAssessmentResultsForAdmin(a.id).then(setResults);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-blue-950/80 hover:bg-blue-900 text-blue-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>عرض النتائج بالترتيب</span>
+                    </button>
+
+                    <button
+                      onClick={async () => {
+                        const url = buildShareableAssessmentUrl(a.id);
+                        try {
+                          await navigator.clipboard.writeText(url);
+                        } catch {}
+                        setCopiedAssessmentShareId(a.id);
+                        setTimeout(() => setCopiedAssessmentShareId(null), 2500);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-500/30 text-indigo-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                      title="نسخ رابط مشاركة الاختبار التجريبي"
+                    >
+                      {copiedAssessmentShareId === a.id ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>تم نسخ الرابط ✓</span>
+                        </>
+                      ) : (
+                        <>
+                          <Share2 className="w-3.5 h-3.5 text-indigo-400" />
+                          <span>مشاركة تجريبي</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
 
                   <button
                     onClick={() => handleReleaseResults(a.id)}
@@ -1508,7 +1626,9 @@ export default function AssessmentManager({
                 <table className="w-full text-right text-xs">
                   <thead className="bg-slate-950 text-slate-400 border-b border-slate-800">
                     <tr>
-                      <th className="p-3">اسم الطالب</th>
+                      <th className="p-3">الترتيب</th>
+                      <th className="p-3">اسم الطالب (الرسمي)</th>
+                      <th className="p-3">الاسم الظاهر للطلاب</th>
                       <th className="p-3">الدرجة</th>
                       <th className="p-3">النسبة %</th>
                       <th className="p-3">تاريخ التسليم</th>
@@ -1516,21 +1636,31 @@ export default function AssessmentManager({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 text-slate-200">
-                    {results.map(r => (
-                      <tr key={r.id} className="hover:bg-slate-800/40">
-                        <td className="p-3 font-bold">{r.studentNameArabic}</td>
-                        <td className="p-3 font-mono text-teal-400">{r.score} / {r.totalPoints}</td>
-                        <td className="p-3 font-mono font-bold">{r.percentage}%</td>
-                        <td className="p-3 font-mono text-slate-400">{new Date(r.submittedAt).toLocaleString('ar-YE')}</td>
-                        <td className="p-3">
-                          <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
-                            r.isReleased ? 'bg-teal-500/20 text-teal-300' : 'bg-amber-500/20 text-amber-300'
-                          }`}>
-                            {r.isReleased ? 'تم الإفراج ✓' : 'معلق'}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
+                    {[...results]
+                      .sort((a, b) => {
+                        const pctDiff = (Number(b.percentage) || 0) - (Number(a.percentage) || 0);
+                        if (pctDiff !== 0) return pctDiff;
+                        const scoreDiff = (Number(b.score) || 0) - (Number(a.score) || 0);
+                        if (scoreDiff !== 0) return scoreDiff;
+                        return (Number(a.durationSeconds) || 999999) - (Number(b.durationSeconds) || 999999);
+                      })
+                      .map((r, idx) => (
+                        <tr key={r.id} className="hover:bg-slate-800/40">
+                          <td className="p-3 font-mono font-extrabold text-amber-400">#{idx + 1}</td>
+                          <td className="p-3 font-bold">{r.studentNameArabic}</td>
+                          <td className="p-3 text-teal-300 font-semibold">{resolveResultPublicDisplayName(r)}</td>
+                          <td className="p-3 font-mono text-teal-400">{r.score} / {r.totalPoints}</td>
+                          <td className="p-3 font-mono font-bold">{r.percentage}%</td>
+                          <td className="p-3 font-mono text-slate-400">{new Date(r.submittedAt).toLocaleString('ar-YE')}</td>
+                          <td className="p-3">
+                            <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                              r.isReleased ? 'bg-teal-500/20 text-teal-300' : 'bg-amber-500/20 text-amber-300'
+                            }`}>
+                              {r.isReleased ? 'تم الإفراج ✓' : 'معلق'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
                   </tbody>
                 </table>
               </div>
@@ -1809,17 +1939,51 @@ export default function AssessmentManager({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div>
-                  <label className="text-slate-400 block mb-1">المدة (دقائق)</label>
-                  <input
-                    type="number"
-                    value={editingAssessment.durationMinutes}
-                    onChange={(e) => setEditingAssessment({ ...editingAssessment, durationMinutes: Number(e.target.value) })}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
-                    min={5}
-                  />
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-slate-400">مؤقت الاختبار الكلي</label>
+                    <label className="flex items-center gap-1 text-[11px] text-teal-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={editingAssessment.enableExamTimer !== false}
+                        onChange={(e) => setEditingAssessment({ ...editingAssessment, enableExamTimer: e.target.checked })}
+                        className="rounded accent-teal-500"
+                      />
+                      <span>{editingAssessment.enableExamTimer !== false ? 'مفعل' : 'وقت مفتوح'}</span>
+                    </label>
+                  </div>
+                  {editingAssessment.enableExamTimer !== false ? (
+                    <input
+                      type="number"
+                      value={editingAssessment.durationMinutes}
+                      onChange={(e) => setEditingAssessment({ ...editingAssessment, durationMinutes: Number(e.target.value) })}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                      min={5}
+                    />
+                  ) : (
+                    <div className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-emerald-400 font-bold">
+                      بدون مؤقت كلي (مفتوح)
+                    </div>
+                  )}
                 </div>
+
+                <div>
+                  <label className="text-slate-400 block mb-1">مؤقت لكل سؤال (اختياري)</label>
+                  <select
+                    value={editingAssessment.questionDurationSeconds || 0}
+                    onChange={(e) => setEditingAssessment({ ...editingAssessment, questionDurationSeconds: Number(e.target.value) })}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-amber-300 font-bold"
+                  >
+                    <option value={0}>بدون مؤقت لكل سؤال</option>
+                    <option value={30}>30 ثانية / سؤال</option>
+                    <option value={45}>45 ثانية / سؤال</option>
+                    <option value={60}>60 ثانية / سؤال</option>
+                    <option value={90}>90 ثانية / سؤال</option>
+                    <option value={120}>120 ثانية / سؤال</option>
+                  </select>
+                </div>
+
                 <div>
                   <label className="text-slate-400 block mb-1">أقصى عدد محاولات</label>
                   <input
@@ -1841,6 +2005,39 @@ export default function AssessmentManager({
                     <option value="after_close">بعد إغلاق الاختبار</option>
                     <option value="manual">إعلان يدوي</option>
                   </select>
+                </div>
+              </div>
+
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-slate-300 font-bold">تمديد مدة توفر الاختبار قبل الإغلاق:</span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      { hours: 24, label: '+24 ساعة' },
+                      { hours: 72, label: '+3 أيام' },
+                      { hours: 168, label: '+7 أيام' },
+                      { hours: 336, label: '+14 يوماً' }
+                    ].map((p) => (
+                      <button
+                        key={p.hours}
+                        type="button"
+                        onClick={() => {
+                          const nextClose = new Date(Date.now() + p.hours * 3600000).toISOString();
+                          setEditingAssessment({
+                            ...editingAssessment,
+                            availabilityDurationHours: p.hours,
+                            closesAt: nextClose
+                          });
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-teal-950 border border-slate-800 text-teal-300 text-[11px] font-bold"
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="text-[11px] text-slate-400">
+                  تاريخ الإغلاق المحدد: <strong className="text-white font-mono">{new Date(editingAssessment.closesAt).toLocaleString('ar-YE')}</strong>
                 </div>
               </div>
             </div>

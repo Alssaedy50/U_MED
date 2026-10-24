@@ -955,7 +955,7 @@ app.post('/api/assessments/submit-attempt', optionalAuth, (req: AuthenticatedReq
     const attempt = attemptsStore[attemptId];
     const now = new Date();
 
-    // Enforce deadline if attempt exists
+    // Enforce deadline if attempt exists and timer was enabled
     if (attempt?.expiresAt) {
       const expiresTime = new Date(attempt.expiresAt).getTime();
       const gracePeriodMs = 120_000; // 2 minutes grace period for network latency
@@ -978,6 +978,7 @@ app.post('/api/assessments/submit-attempt', optionalAuth, (req: AuthenticatedReq
 
     // Score STRICTLY against the questions assigned to this attempt
     const targetQuestionIds: string[] =
+      (Array.isArray(req.body?.questionIds) && req.body.questionIds.length > 0 ? req.body.questionIds : null) ||
       (Array.isArray(attempt?.questionIds) && attempt.questionIds.length > 0 ? attempt.questionIds : null) ||
       (storedAssessment?.questionIds?.length ? storedAssessment.questionIds : null) ||
       ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
@@ -1000,12 +1001,23 @@ app.post('/api/assessments/submit-attempt', optionalAuth, (req: AuthenticatedReq
     const policy = storedAssessment?.resultReleasePolicy || resultReleasePolicy || 'immediate';
     const isReleased = policy === 'immediate';
 
+    const computedDurationSeconds =
+      typeof req.body?.durationSeconds === 'number' && req.body.durationSeconds >= 0
+        ? Math.round(req.body.durationSeconds)
+        : attempt?.startedAt
+        ? Math.max(1, Math.round((now.getTime() - new Date(attempt.startedAt).getTime()) / 1000))
+        : undefined;
+
     const result = {
       id: `res-${attemptId}`,
       attemptId,
       assessmentId: effectiveAssessmentId,
       uid,
       studentNameArabic: studentName,
+      studentDisplayNamePublic: req.body?.studentDisplayNamePublic || undefined,
+      studentUsername: req.body?.studentUsername || undefined,
+      leaderboardNameMode: req.body?.leaderboardNameMode || undefined,
+      durationSeconds: computedDurationSeconds,
       score,
       totalPoints,
       percentage,
@@ -1021,6 +1033,7 @@ app.post('/api/assessments/submit-attempt', optionalAuth, (req: AuthenticatedReq
     if (attempt) {
       attempt.status = 'scored';
       attempt.submittedAt = nowIso;
+      attempt.durationSeconds = computedDurationSeconds;
       saveJsonSafe(ATTEMPTS_FILE, attemptsStore);
     }
 
@@ -1038,6 +1051,79 @@ app.post('/api/assessments/submit-attempt', optionalAuth, (req: AuthenticatedReq
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'فشل تصحيح وتسليم الاختبار' });
+  }
+});
+
+// 12b. Public Shared Assessment & Sanitized Questions Endpoint (For Trial Exam Links)
+app.get('/api/assessments/public/:assessmentId', (req: Request, res: Response) => {
+  try {
+    const { assessmentId } = req.params;
+    const storedAssessment = assessmentsStore[assessmentId] || null;
+    const questionIds: string[] =
+      storedAssessment?.questionIds?.length
+        ? storedAssessment.questionIds
+        : ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
+
+    const resolvedQuestions = questionIds
+      .map((id) => questionsStore[id])
+      .filter(Boolean)
+      .map((q) => ({
+        id: q.id,
+        bankId: q.bankId,
+        stemArabic: q.stemArabic,
+        stemEnglish: q.stemEnglish,
+        imageUrl: q.imageUrl,
+        options: q.options,
+        points: q.points || 5
+      }));
+
+    const publicQuestions =
+      resolvedQuestions.length > 0
+        ? resolvedQuestions
+        : DEFAULT_QUESTIONS.map((q) => ({
+            id: q.id,
+            bankId: q.bankId,
+            stemArabic: q.stemArabic,
+            stemEnglish: q.stemEnglish,
+            options: q.options,
+            points: q.points
+          }));
+
+    res.json({
+      success: true,
+      assessment: storedAssessment,
+      questions: publicQuestions
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'فشل جلب الاختبار المشترك' });
+  }
+});
+
+// 12c. Update Student Leaderboard Identity across Server Results Store
+app.post('/api/assessments/update-leaderboard-name', optionalAuth, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const uid = req.user?.uid || req.body?.uid;
+    if (!uid) return res.status(400).json({ error: 'معرف الطالب مطلوب' });
+
+    const { studentDisplayNamePublic, studentUsername, leaderboardNameMode } = req.body;
+    let updatedCount = 0;
+
+    Object.values(resultsStore).forEach((resObj: any) => {
+      if (resObj && resObj.uid === uid) {
+        if (studentDisplayNamePublic !== undefined) resObj.studentDisplayNamePublic = studentDisplayNamePublic;
+        if (studentUsername !== undefined) resObj.studentUsername = studentUsername;
+        if (leaderboardNameMode !== undefined) resObj.leaderboardNameMode = leaderboardNameMode;
+        updatedCount++;
+      }
+    });
+
+    if (updatedCount > 0) {
+      saveJsonSafe(RESULTS_FILE, resultsStore);
+    }
+
+    res.json({ success: true, updatedCount });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'فشل تحديث اسم العرض في لوحة الترتيب' });
   }
 });
 

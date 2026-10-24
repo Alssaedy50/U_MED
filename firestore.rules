@@ -275,9 +275,9 @@ service cloud.firestore {
       allow read, write: if isAnyAdmin();
     }
 
-    // Public Question Stems & Options (NO Answer Keys - readable by authenticated students)
+    // Public Question Stems & Options (NO Answer Keys - readable for exams & shared trial links)
     match /assessmentQuestions/{questionId} {
-      allow read: if isAuthenticated();
+      allow read: if true;
       allow write: if isAnyAdmin();
     }
 
@@ -287,7 +287,7 @@ service cloud.firestore {
     }
 
     match /assessments/{assessmentId} {
-      allow read: if isAuthenticated();
+      allow read: if true;
       allow create, update: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId) || isAnyAdmin();
       allow delete: if isDepartmentHead(resource.data.universityId, resource.data.studyLevelId) || isAnyAdmin();
     }
@@ -300,10 +300,9 @@ service cloud.firestore {
       allow delete: if isPlatformOwner() || (isAuthenticated() && resource.data.uid == request.auth.uid);
     }
 
-    // Assessment Results
+    // Assessment Results (Readable for ranked leaderboards & student scores)
     match /assessmentResults/{resultId} {
-      allow read: if isAuthenticated() && 
-        (resource.data.uid == request.auth.uid || isAnyAdmin());
+      allow read: if true;
       allow create: if isAuthenticated() && (request.resource.data.uid == request.auth.uid || isAnyAdmin());
       allow update: if isAnyAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
       allow delete: if isPlatformOwner() || isAnyAdmin();

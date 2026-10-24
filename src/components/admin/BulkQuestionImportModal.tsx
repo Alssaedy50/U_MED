@@ -106,6 +106,8 @@ export default function BulkQuestionImportModal({
     bank.studyLevelId || defaultStudyLevelId || 'lvl-4'
   );
   const [publishDurationMinutes, setPublishDurationMinutes] = useState<number>(30);
+  const [publishQuestionSeconds, setPublishQuestionSeconds] = useState<number>(0);
+  const [publishAvailabilityHours, setPublishAvailabilityHours] = useState<number>(168);
 
   // Saving & Optional AI states
   const [saving, setSaving] = useState<boolean>(false);
@@ -508,6 +510,9 @@ export default function BulkQuestionImportModal({
         const qIds = activeQuestions.map((q) => q.id);
         const totalPoints = activeQuestions.reduce((sum, q) => sum + (Number(q.points) || 5), 0);
 
+        const durationVal = Number(publishDurationMinutes) || 0;
+        const availHours = Number(publishAvailabilityHours) || 168;
+
         publishedAssessment = await createAssessment(
           {
             assessmentType: strictAssessmentType,
@@ -519,10 +524,15 @@ export default function BulkQuestionImportModal({
             universityId: bank.universityId || 'univ-dar-al-salam',
             programId: bank.programId || 'prog-mbbs',
             studyLevelId: publishStudyLevelId || bank.studyLevelId || defaultStudyLevelId || 'lvl-4',
-            durationMinutes: Math.max(5, Number(publishDurationMinutes) || (strictAssessmentType === 'competition' ? 15 : 30)),
+            durationMinutes: durationVal,
+            enableExamTimer: durationVal > 0,
+            questionDurationSeconds: Number(publishQuestionSeconds) || 0,
+            availabilityDurationHours: availHours,
+            allowTrialSharing: true,
+            showLeaderboard: true,
             maxAttempts: strictAssessmentType === 'competition' ? 1 : 2,
             opensAt: new Date(Date.now() - 60000).toISOString(),
-            closesAt: new Date(Date.now() + 30 * 86400000).toISOString(),
+            closesAt: new Date(Date.now() + availHours * 3600000).toISOString(),
             resultReleasePolicy: 'immediate',
             status: 'published',
             questionIds: qIds,
@@ -1209,7 +1219,7 @@ export default function BulkQuestionImportModal({
                       value={publishTitle}
                       onChange={(e) => setPublishTitle(e.target.value)}
                       placeholder={publishMode === 'competition_only' ? 'عنوان المسابقة الطبية...' : 'عنوان الاختبار الأكاديمي...'}
-                      className="flex-1 min-w-[140px] px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-teal-500"
+                      className="flex-1 min-w-[130px] px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-teal-500"
                     />
                     <select
                       value={publishStudyLevelId}
@@ -1222,17 +1232,42 @@ export default function BulkQuestionImportModal({
                         </option>
                       ))}
                     </select>
-                    <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1">
-                      <input
-                        type="number"
-                        min={5}
-                        max={240}
-                        value={publishDurationMinutes}
-                        onChange={(e) => setPublishDurationMinutes(Number(e.target.value) || 30)}
-                        className="w-10 bg-transparent text-xs text-amber-300 font-mono font-bold text-center focus:outline-none"
-                      />
-                      <span className="text-[10px] text-slate-400">دقيقة</span>
-                    </div>
+                    <select
+                      value={publishDurationMinutes}
+                      onChange={(e) => setPublishDurationMinutes(Number(e.target.value))}
+                      className="px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-[11px] text-amber-300 font-bold"
+                      title="مؤقت الاختبار كاملاً"
+                    >
+                      <option value={0}>مؤقت كلي: مفتوح</option>
+                      <option value={10}>مؤقت: 10 دقائق</option>
+                      <option value={15}>مؤقت: 15 دقيقة</option>
+                      <option value={30}>مؤقت: 30 دقيقة</option>
+                      <option value={45}>مؤقت: 45 دقيقة</option>
+                      <option value={60}>مؤقت: 60 دقيقة</option>
+                    </select>
+                    <select
+                      value={publishQuestionSeconds}
+                      onChange={(e) => setPublishQuestionSeconds(Number(e.target.value))}
+                      className="px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-[11px] text-indigo-300 font-bold"
+                      title="مؤقت اختياري لكل سؤال"
+                    >
+                      <option value={0}>سؤال: بدون مؤقت</option>
+                      <option value={30}>30ث / سؤال</option>
+                      <option value={45}>45ث / سؤال</option>
+                      <option value={60}>60ث / سؤال</option>
+                      <option value={90}>90ث / سؤال</option>
+                    </select>
+                    <select
+                      value={publishAvailabilityHours}
+                      onChange={(e) => setPublishAvailabilityHours(Number(e.target.value))}
+                      className="px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-[11px] text-emerald-300 font-bold"
+                      title="مدة توفر الاختبار قبل الإغلاق"
+                    >
+                      <option value={24}>متاح: 24 ساعة</option>
+                      <option value={72}>متاح: 3 أيام</option>
+                      <option value={168}>متاح: 7 أيام</option>
+                      <option value={720}>متاح: 30 يوماً</option>
+                    </select>
                   </div>
                 )}
               </div>
