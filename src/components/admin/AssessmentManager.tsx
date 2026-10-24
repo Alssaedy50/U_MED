@@ -28,12 +28,14 @@ import {
   Share2,
   Check,
   Timer,
-  Clock
+  Clock,
+  Play
 } from 'lucide-react';
 import { 
   QuestionBank, 
   QuestionItemFull, 
   Assessment, 
+  AssessmentQuestionPublic,
   AssessmentType, 
   AssessmentStatus,
   ResultReleasePolicy, 
@@ -61,13 +63,16 @@ import {
   getAssessmentResultsForAdmin, 
   releaseAssessmentResults,
   flushQuestionOutbox,
+  flushOfflineAssessmentOutbox,
   subscribeToQuestionSyncState,
   buildShareableAssessmentUrl,
-  resolveResultPublicDisplayName
+  resolveResultPublicDisplayName,
+  getQuestionsForAssessmentPreview
 } from '../../services/assessmentService.ts';
 import { fetchStudyLevels, fetchPrograms, fetchColleges, fetchUniversities } from '../../services/academicService.ts';
 import { getRoleLabelArabic } from '../../services/batchGovernanceService.ts';
 import BulkQuestionImportModal from './BulkQuestionImportModal.tsx';
+import ExamTakingModal from '../assessment/ExamTakingModal.tsx';
 
 interface AssessmentManagerProps {
   universityId: string;
@@ -142,7 +147,12 @@ export default function AssessmentManager({
   const [releasePolicy, setReleasePolicy] = useState<ResultReleasePolicy>('immediate');
   const [opensAt, setOpensAt] = useState<string>(new Date().toISOString().slice(0, 16));
   const [closesAt, setClosesAt] = useState<string>(new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 16));
+  const [initialAssessmentStatus, setInitialAssessmentStatus] = useState<AssessmentStatus>('published');
   const [copiedAssessmentShareId, setCopiedAssessmentShareId] = useState<string | null>(null);
+  const [previewAssessmentModal, setPreviewAssessmentModal] = useState<{
+    assessment: Assessment;
+    questions: AssessmentQuestionPublic[];
+  } | null>(null);
 
   // Edit Assessment Modal State
   const [editingAssessment, setEditingAssessment] = useState<Assessment | null>(null);
@@ -453,7 +463,7 @@ export default function AssessmentManager({
           opensAt: new Date(opensAt).toISOString(),
           closesAt: new Date(closesAt).toISOString(),
           resultReleasePolicy: releasePolicy,
-          status: 'published',
+          status: initialAssessmentStatus,
           questionIds: qIds,
           totalPoints: totalPts,
           createdBy: 'ADMIN'
@@ -465,15 +475,30 @@ export default function AssessmentManager({
       setTitleArabic('');
       setDescArabic('');
       setShowNewAssessmentForm(false);
+      const isCurrentlyOffline = typeof navigator !== 'undefined' && !navigator.onLine;
       setStatusMsg({
         type: 'success',
-        text:
-          assessmentType === 'competition'
-            ? `تم نشر المسابقة الطبية فقط ("${created.titleArabic}") وربط الأسئلة بنجاح ✓`
-            : `تم نشر الاختبار الأكاديمي فقط ("${created.titleArabic}") وربط الأسئلة بنجاح ✓`
+        text: isCurrentlyOffline
+          ? `تم إنشاء وتجهيز "${created.titleArabic}" محلياً بدون إنترنت (${initialAssessmentStatus === 'draft' ? 'مسودة للفحص' : 'جاهز'}) مع إمكانية فحصه وإنشاء رابط مشاركته فوراً ✓`
+          : assessmentType === 'competition'
+          ? `تم حفظ المسابقة الطبية ("${created.titleArabic}") وربط الأسئلة بنجاح ✓`
+          : `تم حفظ الاختبار الأكاديمي ("${created.titleArabic}") وربط الأسئلة بنجاح ✓`
       });
     } catch (err: any) {
-      setStatusMsg({ type: 'error', text: err.message || 'فشل النشر' });
+      setStatusMsg({ type: 'error', text: err.message || 'فشل الحفظ' });
+    }
+  };
+
+  const handlePreviewAndTestAssessment = async (asmnt: Assessment) => {
+    setStatusMsg(null);
+    try {
+      const previewQuestions = await getQuestionsForAssessmentPreview(asmnt);
+      setPreviewAssessmentModal({
+        assessment: asmnt,
+        questions: previewQuestions
+      });
+    } catch (err: any) {
+      setStatusMsg({ type: 'error', text: 'تعذر تحميل أسئلة الاختبار للمعاينة' });
     }
   };
 
@@ -1247,7 +1272,7 @@ export default function AssessmentManager({
                 />
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label className="text-xs text-slate-400 block mb-1">المستوى الدراسي المستهدف</label>
                   <select
@@ -1275,6 +1300,18 @@ export default function AssessmentManager({
                         {b.titleArabic}
                       </option>
                     ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">حالة التقييم عند الإنشاء (يدعم الأوفلاين)</label>
+                  <select
+                    value={initialAssessmentStatus}
+                    onChange={(e) => setInitialAssessmentStatus(e.target.value as AssessmentStatus)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-teal-300 font-bold"
+                  >
+                    <option value="published">منشور فوراً وجاهز للرابط (Published)</option>
+                    <option value="draft">مسودة للتجهيز والفحص أولاً (Draft)</option>
                   </select>
                 </div>
               </div>
@@ -1512,7 +1549,17 @@ export default function AssessmentManager({
                 )}
 
                 <div className="pt-2 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handlePreviewAndTestAssessment(a)}
+                      className="px-3 py-1.5 rounded-lg bg-teal-950/90 hover:bg-teal-900 border border-teal-500/40 text-teal-200 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                      title="فحص وتجربة حل الاختبار الآن (يعمل أونلاين وأوفلاين)"
+                    >
+                      <Play className="w-3.5 h-3.5 text-teal-400" />
+                      <span>فحص وتجربة الاختبار</span>
+                    </button>
+
                     <button
                       onClick={() => {
                         setSelectedAssessmentForResults(a);
@@ -1532,10 +1579,14 @@ export default function AssessmentManager({
                           await navigator.clipboard.writeText(url);
                         } catch {}
                         setCopiedAssessmentShareId(a.id);
+                        setStatusMsg({
+                          type: 'success',
+                          text: `تم إنشاء ونسخ رابط الاختبار المشترك ("${a.titleArabic}") بنجاح — يحتوي الرابط على حزمة الأسئلة المشفرة ويعمل فوراً حتى إن تم إنشاؤه أوفلاين ✓`
+                        });
                         setTimeout(() => setCopiedAssessmentShareId(null), 2500);
                       }}
                       className="px-3 py-1.5 rounded-lg bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-500/30 text-indigo-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                      title="نسخ رابط مشاركة الاختبار التجريبي"
+                      title="إنشاء ونسخ رابط مشاركة الاختبار التجريبي (يعمل أونلاين وأوفلاين)"
                     >
                       {copiedAssessmentShareId === a.id ? (
                         <>
@@ -1545,7 +1596,7 @@ export default function AssessmentManager({
                       ) : (
                         <>
                           <Share2 className="w-3.5 h-3.5 text-indigo-400" />
-                          <span>مشاركة تجريبي</span>
+                          <span>إنشاء رابط الاختبار</span>
                         </>
                       )}
                     </button>
@@ -2093,6 +2144,37 @@ export default function AssessmentManager({
                   ? 'تمت المزامنة السحابية فوراً ✓'
                   : 'محفوظ محلياً وسيتم مزامنته تلقائياً فور توفر الإنترنت'
               }`
+            });
+          }}
+        />
+      )}
+
+      {/* MODAL: OFFLINE/ONLINE LIVE EXAM TESTING & PREVIEW FOR ADMIN/OWNER */}
+      {previewAssessmentModal && (
+        <ExamTakingModal
+          assessment={previewAssessmentModal.assessment}
+          attempt={{
+            id: `att-admin-preview-${previewAssessmentModal.assessment.id}-${Date.now()}`,
+            assessmentId: previewAssessmentModal.assessment.id,
+            uid: 'admin-preview',
+            attemptNumber: 1,
+            startedAt: new Date().toISOString(),
+            expiresAt: new Date(
+              Date.now() + (Number(previewAssessmentModal.assessment.durationMinutes) || 30) * 60000
+            ).toISOString(),
+            answers: {},
+            lastSavedAt: new Date().toISOString(),
+            status: 'in_progress'
+          }}
+          questions={previewAssessmentModal.questions}
+          studentNameArabic="معاينة وفحص المسؤول"
+          uid="admin-preview"
+          isGuestMode={false}
+          onClose={() => setPreviewAssessmentModal(null)}
+          onSubmitted={(res) => {
+            setStatusMsg({
+              type: 'success',
+              text: `اكتمل فحص الاختبار ("${previewAssessmentModal.assessment.titleArabic}") بنجاح — النتيجة التجريبية: ${res.score}/${res.totalPoints} (${res.percentage}%) ✓`
             });
           }}
         />

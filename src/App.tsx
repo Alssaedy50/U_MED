@@ -79,6 +79,16 @@ import {
   PWASidebarInstallCard,
   PWASettingsCard
 } from './components/pwa/PWAInstallModalAndBanner.tsx';
+import {
+  PlatformBrandingAndPolicies,
+  getCachedPlatformSettings,
+  subscribeToPlatformSettings
+} from './services/platformSettingsService.ts';
+import {
+  PlatformLogoBadge,
+  PlatformOwnerSettingsCard,
+  PlatformLegalAndContactModal
+} from './components/settings/PlatformOwnerSettingsModalAndCard.tsx';
 
 // Code-splitting admin heavy modules to minimize student initial bundle size
 const AcademicStructureManager = React.lazy(() => import('./components/admin/AcademicStructureManager.tsx'));
@@ -231,6 +241,22 @@ export default function App() {
   } | null>(null);
   const [claimedLeaderboard, setClaimedLeaderboard] = useState<AssessmentResult[]>([]);
 
+  // Global Platform Branding, Terms/Privacy & Contact Settings (Managed strictly by Platform Owner)
+  const [platformSettings, setPlatformSettings] = useState<PlatformBrandingAndPolicies>(() =>
+    getCachedPlatformSettings()
+  );
+  const [legalContactModalState, setLegalContactModalState] = useState<{
+    isOpen: boolean;
+    initialTab: 'terms' | 'privacy' | 'contact';
+  }>({ isOpen: false, initialTab: 'contact' });
+
+  useEffect(() => {
+    const unsub = subscribeToPlatformSettings((updated) => {
+      setPlatformSettings(updated);
+    });
+    return () => unsub();
+  }, []);
+
   useEffect(() => {
     const unsub = subscribeToAppNotifications((list) => {
       const unread = list.filter((n) => !n.read).length;
@@ -343,6 +369,13 @@ export default function App() {
   // True when an authorized leader (Platform Owner, University Owner, Batch Rep, or Dept Head) is in Leadership mode
   const isAdminMode = Boolean(
     isAuthorizedAdmin && activeRole !== 'student'
+  );
+  const isStrictPlatformOwner = Boolean(
+    isAuthorizedAdmin &&
+      (realRole === 'platform_owner' ||
+        roleDoc?.role === 'platform_owner' ||
+        isPrimaryOwnerEmail(user?.email) ||
+        userProfile?.isPrimaryOwner)
   );
   const isOwnerMode = Boolean(isAuthorizedAdmin && activeRole === 'platform_owner' && realRole === 'platform_owner');
   const isUniversityAdminOrOwner = Boolean(
@@ -916,7 +949,7 @@ export default function App() {
         <div className="min-h-[100dvh] flex items-center justify-center p-4 overflow-y-auto">
           <div className="max-w-md w-full my-auto bg-slate-900/80 border border-slate-800 rounded-2xl p-8 sm:p-10 text-center space-y-3 shadow-2xl">
             <RefreshCw className="w-8 h-8 animate-spin text-teal-400 mx-auto" />
-            <h2 className="text-sm font-bold text-white">جارٍ استعادة جلستك النشطة في منصة UMED</h2>
+            <h2 className="text-sm font-bold text-white">جارٍ استعادة جلستك النشطة في {platformSettings.platformNameArabic}</h2>
             <p className="text-xs text-slate-400">يرجى الانتظار لحظة ريثما يتم التحقق من بيانات الحساب والقيد الأكاديمي</p>
           </div>
         </div>
@@ -925,12 +958,13 @@ export default function App() {
         <div className="min-h-[100dvh] flex flex-col justify-start sm:justify-center py-6 sm:py-10 px-3.5 sm:px-6 overflow-y-auto">
           <div className="max-w-md w-full mx-auto my-auto bg-slate-900/90 border border-slate-800 rounded-2xl p-5 sm:p-8 shadow-2xl space-y-5">
             <div className="text-center space-y-2">
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center mx-auto text-white font-black text-2xl shadow-lg shadow-teal-500/20">
-                U
+              <div className="flex justify-center">
+                <PlatformLogoBadge settings={platformSettings} size="lg" />
               </div>
-              <h1 className="text-lg font-bold text-white">UMED — منصة التعليم الطبي اليمنية</h1>
+              <h1 className="text-lg font-bold text-white">{platformSettings.platformNameArabic}</h1>
               <p className="text-xs text-slate-400">
-                سجّل دخولك أو أنشئ حسابك الأكاديمي للوصول إلى محاضرات البلوكات والاختبارات والمسابقات الطبية
+                {platformSettings.platformTaglineArabic ||
+                  'سجّل دخولك أو أنشئ حسابك الأكاديمي للوصول إلى محاضرات البلوكات والاختبارات والمسابقات الطبية'}
               </p>
             </div>
 
@@ -1259,6 +1293,33 @@ export default function App() {
               </svg>
               <span>الدخول بحساب Google</span>
             </button>
+
+            {/* Footer Legal & Contact Links for Visitors */}
+            <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-center gap-2 text-[11px] text-slate-400">
+              <button
+                type="button"
+                onClick={() => setLegalContactModalState({ isOpen: true, initialTab: 'terms' })}
+                className="hover:text-teal-300 transition-colors underline underline-offset-4"
+              >
+                شروط الاستخدام
+              </button>
+              <span className="text-slate-700">•</span>
+              <button
+                type="button"
+                onClick={() => setLegalContactModalState({ isOpen: true, initialTab: 'privacy' })}
+                className="hover:text-teal-300 transition-colors underline underline-offset-4"
+              >
+                سياسة الخصوصية
+              </button>
+              <span className="text-slate-700">•</span>
+              <button
+                type="button"
+                onClick={() => setLegalContactModalState({ isOpen: true, initialTab: 'contact' })}
+                className="hover:text-amber-300 font-bold transition-colors underline underline-offset-4"
+              >
+                تواصل مع المنصة
+              </button>
+            </div>
           </div>
         </div>
       ) : isAccountArchived ? (
@@ -1504,13 +1565,13 @@ export default function App() {
           >
             {/* Top Brand Header inside Sidebar */}
             <div className="p-4 border-b border-slate-800 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center shadow-lg shadow-teal-500/20 text-white font-black text-xl shrink-0">
-                  U
-                </div>
-                <div>
-                  <div className="font-bold text-sm text-white leading-tight">منصة UMED الطبية</div>
-                  <div className="text-[11px] text-teal-400 font-semibold mt-0.5">
+              <div className="flex items-center gap-3 min-w-0">
+                <PlatformLogoBadge settings={platformSettings} size="md" />
+                <div className="min-w-0">
+                  <div className="font-bold text-sm text-white leading-tight truncate">
+                    {platformSettings.platformNameArabic}
+                  </div>
+                  <div className="text-[11px] text-teal-400 font-semibold mt-0.5 truncate">
                     {activeRole === 'platform_owner'
                       ? 'بوابة مالك المنصة'
                       : activeRole === 'university_admin'
@@ -1739,6 +1800,16 @@ export default function App() {
                 >
                   <Settings className="w-4 h-4 shrink-0" />
                   <span>الإعدادات والحساب</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setLegalContactModalState({ isOpen: true, initialTab: 'contact' });
+                    setSidebarOpen(false);
+                  }}
+                  className="w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-teal-300 hover:bg-slate-800/60 transition-all"
+                >
+                  <Phone className="w-4 h-4 text-teal-400 shrink-0" />
+                  <span>التواصل والشروط والخصوصية</span>
                 </button>
               </div>
 
@@ -2081,6 +2152,53 @@ export default function App() {
               {/* TAB: SETTINGS, APPEARANCE, SYSTEM STATUS & ACCOUNT (الإعدادات والحساب) */}
               {activeTab === 'auth' && (
                 <div className="max-w-3xl mx-auto space-y-6">
+
+                  {/* EXCLUSIVE PLATFORM OWNER BRANDING, TERMS/PRIVACY & CONTACT CHANNELS CONSOLE */}
+                  {isStrictPlatformOwner && (
+                    <PlatformOwnerSettingsCard
+                      ownerEmail={user.email || user.uid}
+                      settings={platformSettings}
+                      onOpenPreviewModal={(tab) =>
+                        setLegalContactModalState({ isOpen: true, initialTab: tab })
+                      }
+                    />
+                  )}
+
+                  {/* Quick Legal & Contact Channels Access Card for All Users */}
+                  <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <PlatformLogoBadge settings={platformSettings} size="md" />
+                      <div>
+                        <h3 className="text-sm font-bold text-white">{platformSettings.platformNameArabic}</h3>
+                        <p className="text-[11px] text-slate-400">
+                          {platformSettings.platformTaglineArabic}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setLegalContactModalState({ isOpen: true, initialTab: 'terms' })}
+                        className="px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-200 font-semibold transition-colors"
+                      >
+                        شروط الاستخدام
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLegalContactModalState({ isOpen: true, initialTab: 'privacy' })}
+                        className="px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-200 font-semibold transition-colors"
+                      >
+                        سياسة الخصوصية
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLegalContactModalState({ isOpen: true, initialTab: 'contact' })}
+                        className="px-3 py-1.5 rounded-xl bg-teal-600/20 hover:bg-teal-600/30 border border-teal-500/40 text-teal-300 font-bold transition-colors"
+                      >
+                        تواصل مع المنصة
+                      </button>
+                    </div>
+                  </div>
 
                   {/* 0. Installable App (PWA) & Offline Auto-Sync Panel */}
                   <PWASettingsCard />
@@ -2443,6 +2561,14 @@ export default function App() {
         onClose={() => setIsNotificationModalOpen(false)}
         onNavigateTab={handleNotificationNavigation}
         isDarkMode={isDarkMode}
+      />
+
+      {/* Platform Terms of Use, Privacy Policy & Contact Channels Modal */}
+      <PlatformLegalAndContactModal
+        isOpen={legalContactModalState.isOpen}
+        initialTab={legalContactModalState.initialTab}
+        settings={platformSettings}
+        onClose={() => setLegalContactModalState((prev) => ({ ...prev, isOpen: false }))}
       />
     </div>
   );

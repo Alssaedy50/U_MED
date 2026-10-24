@@ -770,6 +770,112 @@ async function ensureAssessmentsInitialized(universityId: string): Promise<Asses
   return current;
 }
 
+interface PendingOfflineAssessmentSyncItem {
+  assessment: Assessment;
+  bankQuestions?: QuestionItemFull[];
+  queuedAt: string;
+}
+
+const OFFLINE_ASSESSMENTS_OUTBOX_KEY = 'umed_offline_assessments_outbox_v1';
+
+function enqueueOfflineAssessmentSync(assessment: Assessment, bankQuestions?: QuestionItemFull[]): void {
+  try {
+    const raw = localStorage.getItem(OFFLINE_ASSESSMENTS_OUTBOX_KEY);
+    const list: PendingOfflineAssessmentSyncItem[] = raw ? JSON.parse(raw) : [];
+    const filtered = Array.isArray(list) ? list.filter((i) => i.assessment?.id !== assessment.id) : [];
+    filtered.push({
+      assessment,
+      bankQuestions,
+      queuedAt: new Date().toISOString()
+    });
+    localStorage.setItem(OFFLINE_ASSESSMENTS_OUTBOX_KEY, JSON.stringify(filtered));
+  } catch {}
+}
+
+export async function flushOfflineAssessmentOutbox(): Promise<number> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return 0;
+  try {
+    const raw = localStorage.getItem(OFFLINE_ASSESSMENTS_OUTBOX_KEY);
+    if (!raw) return 0;
+    const list: PendingOfflineAssessmentSyncItem[] = JSON.parse(raw);
+    if (!Array.isArray(list) || list.length === 0) return 0;
+
+    let syncedCount = 0;
+    const remaining: PendingOfflineAssessmentSyncItem[] = [];
+
+    for (const item of list) {
+      if (!item?.assessment?.id) continue;
+      try {
+        await setDoc(doc(db, 'assessments', item.assessment.id), cleanFirestoreData(item.assessment), { merge: true });
+        if (Array.isArray(item.bankQuestions) && item.bankQuestions.length > 0) {
+          await Promise.all(
+            item.bankQuestions.map(async (q) => {
+              await setDoc(doc(db, 'assessmentQuestions', q.id), cleanFirestoreData({
+                id: q.id,
+                bankId: q.bankId,
+                stemArabic: q.stemArabic,
+                stemEnglish: q.stemEnglish || '',
+                options: q.options,
+                points: Number(q.points) || 5
+              }), { merge: true });
+              await setDoc(doc(db, 'questionAnswerKeys', q.id), cleanFirestoreData({
+                questionId: q.id,
+                assessmentId: item.assessment.id,
+                correctOptionId: q.correctOptionId,
+                explanationArabic: q.explanationArabic || '',
+                points: Number(q.points) || 5
+              }), { merge: true });
+            })
+          );
+        }
+        const token = await getIdTokenSafe();
+        await fetch('/api/admin/sync-assessment-questions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({ assessment: item.assessment, questions: item.bankQuestions || [] })
+        }).catch(() => {});
+        await publishSharedAssessmentSnapshot(item.assessment, item.bankQuestions);
+        syncedCount++;
+      } catch {
+        remaining.push(item);
+      }
+    }
+
+    if (remaining.length === 0) {
+      localStorage.removeItem(OFFLINE_ASSESSMENTS_OUTBOX_KEY);
+    } else {
+      localStorage.setItem(OFFLINE_ASSESSMENTS_OUTBOX_KEY, JSON.stringify(remaining));
+    }
+    return syncedCount;
+  } catch {
+    return 0;
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => {
+    flushOfflineAssessmentOutbox().catch(() => {});
+  });
+}
+
+export async function getQuestionsForAssessmentPreview(
+  assessment: Assessment
+): Promise<AssessmentQuestionPublic[]> {
+  const localResolved = findLocalQuestionsForAssessmentSync(assessment);
+  if (localResolved.publicQuestions.length > 0 && (typeof navigator !== 'undefined' && !navigator.onLine)) {
+    return localResolved.publicQuestions;
+  }
+  const qIds = assessment.questionIds?.length ? assessment.questionIds : ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
+  try {
+    const fetched = await fetchPublicQuestionsForAssessment(qIds);
+    if (fetched.length > 0) return fetched;
+  } catch {}
+  return localResolved.publicQuestions.length > 0 ? localResolved.publicQuestions : DEFAULT_PUBLIC_QUESTIONS;
+}
+
 export async function createAssessment(
   assessment: Omit<Assessment, 'id' | 'createdAt'>,
   bankQuestions?: QuestionItemFull[]
@@ -787,6 +893,21 @@ export async function createAssessment(
     createdAt: now
   };
 
+  // Always persist locally and prepare self-contained bundle first (works 100% offline in 0ms)
+  try {
+    const updated = [newAssessment, ...existing.filter(a => a.id !== id)];
+    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}assessments_${assessment.universityId}`, JSON.stringify(updated));
+    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}assessments_init_${assessment.universityId}`, 'true');
+  } catch (e) {}
+
+  publishSharedAssessmentSnapshot(newAssessment, bankQuestions).catch(() => {});
+
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    enqueueOfflineAssessmentSync(newAssessment, bankQuestions);
+    return newAssessment;
+  }
+
+  let cloudSynced = false;
   try {
     await setDoc(doc(db, 'assessments', id), cleanFirestoreData(newAssessment));
     if (Array.isArray(bankQuestions) && bankQuestions.length > 0) {
@@ -810,13 +931,10 @@ export async function createAssessment(
         })
       );
     }
-  } catch (err) {}
-
-  try {
-    const updated = [newAssessment, ...existing.filter(a => a.id !== id)];
-    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}assessments_${assessment.universityId}`, JSON.stringify(updated));
-    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}assessments_init_${assessment.universityId}`, 'true');
-  } catch (e) {}
+    cloudSynced = true;
+  } catch (err) {
+    enqueueOfflineAssessmentSync(newAssessment, bankQuestions);
+  }
 
   try {
     const token = await getIdTokenSafe();
@@ -828,9 +946,9 @@ export async function createAssessment(
       },
       body: JSON.stringify({ assessment: newAssessment, questions: bankQuestions || [] })
     });
-  } catch (e) {}
-
-  publishSharedAssessmentSnapshot(newAssessment, bankQuestions).catch(() => {});
+  } catch (e) {
+    if (!cloudSynced) enqueueOfflineAssessmentSync(newAssessment, bankQuestions);
+  }
 
   return newAssessment;
 }
@@ -870,6 +988,21 @@ export async function updateAssessment(
   });
 
   try {
+    const updatedList = existing.some(a => a.id === assessmentId)
+      ? existing.map(a => a.id === assessmentId ? updatedAssessment : a)
+      : [updatedAssessment, ...existing];
+    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}assessments_${updatedAssessment.universityId}`, JSON.stringify(updatedList));
+    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}assessments_init_${updatedAssessment.universityId}`, 'true');
+  } catch (e) {}
+
+  publishSharedAssessmentSnapshot(updatedAssessment, bankQuestions).catch(() => {});
+
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    enqueueOfflineAssessmentSync(updatedAssessment, bankQuestions);
+    return updatedAssessment;
+  }
+
+  try {
     await setDoc(doc(db, 'assessments', assessmentId), cleanFirestoreData(updatedAssessment), { merge: true });
     if (Array.isArray(bankQuestions) && bankQuestions.length > 0) {
       await Promise.all(
@@ -893,16 +1026,8 @@ export async function updateAssessment(
       );
     }
   } catch (err) {
-    console.warn('Firestore updateAssessment fallback:', err);
+    enqueueOfflineAssessmentSync(updatedAssessment, bankQuestions);
   }
-
-  try {
-    const updatedList = existing.some(a => a.id === assessmentId)
-      ? existing.map(a => a.id === assessmentId ? updatedAssessment : a)
-      : [updatedAssessment, ...existing];
-    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}assessments_${updatedAssessment.universityId}`, JSON.stringify(updatedList));
-    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}assessments_init_${updatedAssessment.universityId}`, 'true');
-  } catch (e) {}
 
   try {
     const token = await getIdTokenSafe();
@@ -915,8 +1040,6 @@ export async function updateAssessment(
       body: JSON.stringify({ assessment: updatedAssessment, questions: bankQuestions || [] })
     });
   } catch (e) {}
-
-  publishSharedAssessmentSnapshot(updatedAssessment, bankQuestions).catch(() => {});
 
   return updatedAssessment;
 }
@@ -1394,26 +1517,29 @@ export async function submitAttemptServer(
     } catch (e) {}
   }
 
-  // 2. If offline or API unreachable, try client-side Firestore answer key grading or bundle fallback keys
-  if (!finalResult && (typeof navigator === 'undefined' || navigator.onLine)) {
+  // 2. If offline or API unreachable, try client-side Firestore answer key grading or local bundle fallback keys
+  if (!finalResult) {
     try {
-      const keyDocs = await Promise.all(
-        questionIds.map((qId) => getDoc(doc(db, 'questionAnswerKeys', qId)).catch(() => null))
-      );
-      const validKeys = keyDocs.filter((d) => d && d.exists());
       const resolvedKeyMap: Record<string, { correctOptionId: string; points: number }> = {
         ...fallbackAnswerKeys
       };
-      validKeys.forEach((snap) => {
-        if (!snap) return;
-        const k = snap.data() as QuestionAnswerKey;
-        if (k && k.questionId && k.correctOptionId) {
-          resolvedKeyMap[k.questionId] = {
-            correctOptionId: k.correctOptionId,
-            points: Number(k.points) || 5
-          };
-        }
-      });
+
+      if (typeof navigator === 'undefined' || navigator.onLine) {
+        const keyDocs = await Promise.all(
+          questionIds.map((qId) => getDoc(doc(db, 'questionAnswerKeys', qId)).catch(() => null))
+        );
+        const validKeys = keyDocs.filter((d) => d && d.exists());
+        validKeys.forEach((snap) => {
+          if (!snap) return;
+          const k = snap.data() as QuestionAnswerKey;
+          if (k && k.questionId && k.correctOptionId) {
+            resolvedKeyMap[k.questionId] = {
+              correctOptionId: k.correctOptionId,
+              points: Number(k.points) || 5
+            };
+          }
+        });
+      }
 
       if (Object.keys(resolvedKeyMap).length > 0) {
         let earned = 0;
@@ -1447,14 +1573,16 @@ export async function submitAttemptServer(
           isReleased,
           releasedAt: isReleased ? nowIso : undefined
         };
-        scoredOnServer = true;
+        if (typeof navigator === 'undefined' || navigator.onLine) {
+          scoredOnServer = true;
+        }
       }
     } catch (e) {}
   }
 
   const queuedOffline = !scoredOnServer;
 
-  // 3. Fallback offline provisional result + enqueue for automatic cloud grading when internet returns
+  // 3. Fallback offline provisional result + enqueue for automatic cloud grading/sync when internet returns
   if (!finalResult) {
     const nowIso = new Date().toISOString();
     const isReleased = releasePolicy === 'immediate';
@@ -1476,7 +1604,10 @@ export async function submitAttemptServer(
       isReleased,
       releasedAt: isReleased ? nowIso : undefined
     };
+  }
 
+  if (queuedOffline) {
+    const nowIso = new Date().toISOString();
     const existingOutbox = readOfflineExamOutbox().filter((item) => item.attemptId !== attemptId);
     existingOutbox.push({
       attemptId,
