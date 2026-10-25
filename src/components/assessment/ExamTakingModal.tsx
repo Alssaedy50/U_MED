@@ -1444,31 +1444,39 @@ export default function ExamTakingModal({
 
       {/* 3. Footer Bar Navigation */}
       {!result && !showMandatoryGuestGate && hasStartedSolving && (
-        <footer className="bg-slate-900 border-t border-slate-800 p-4 flex items-center justify-between gap-3 shadow-xl">
+        <footer 
+          className="bg-slate-900 border-t border-slate-800 px-3 py-2.5 sm:px-4 sm:py-3.5 flex items-center justify-between gap-2 shadow-xl shrink-0"
+          style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
+        >
           <button
             onClick={() => setCurrentQuestionIndex(prev => Math.max(0, prev - 1))}
             disabled={currentQuestionIndex === 0}
-            className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+            className="min-h-[42px] px-3 sm:px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition-colors shrink-0 active:scale-95"
+            title="السؤال السابق"
           >
-            <ChevronRight className="w-4 h-4" />
-            <span>السؤال السابق</span>
+            <ChevronRight className="w-4 h-4 shrink-0" />
+            <span className="hidden sm:inline">السؤال السابق</span>
+            <span className="sm:hidden">السابق</span>
           </button>
 
           <button
             onClick={() => setShowConfirmSubmit(true)}
-            className="px-5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-2 transition-colors shadow-lg shadow-teal-900/40"
+            className="min-h-[42px] flex-1 max-w-sm px-3 sm:px-5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 sm:gap-2 transition-colors shadow-lg shadow-teal-900/40 active:scale-95"
           >
-            <Send className="w-4 h-4" />
-            <span>إظهار النتيجة وتسليم الاختبار</span>
+            <Send className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+            <span className="hidden sm:inline">إظهار النتيجة وتسليم الاختبار</span>
+            <span className="sm:hidden">تسليم الاختبار</span>
           </button>
 
           <button
             onClick={() => setCurrentQuestionIndex(prev => Math.min(questions.length - 1, prev + 1))}
             disabled={currentQuestionIndex === questions.length - 1}
-            className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+            className="min-h-[42px] px-3 sm:px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition-colors shrink-0 active:scale-95"
+            title="السؤال التالي"
           >
-            <span>السؤال التالي</span>
-            <ChevronLeft className="w-4 h-4" />
+            <span className="hidden sm:inline">السؤال التالي</span>
+            <span className="sm:hidden">التالي</span>
+            <ChevronLeft className="w-4 h-4 shrink-0" />
           </button>
         </footer>
       )}

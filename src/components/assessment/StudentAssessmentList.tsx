@@ -109,6 +109,15 @@ export default function StudentAssessmentList({
   const [startingAttempt, setStartingAttempt] = useState<string | null>(null);
   const [downloadingExamId, setDownloadingExamId] = useState<string | null>(null);
 
+  // Dedicated Exam Booklet Download Modal State
+  const [downloadModalAssessment, setDownloadModalAssessment] = useState<{
+    assessment: Assessment;
+    result?: AssessmentResult;
+  } | null>(null);
+
+  // Dedicated Identity Preference Modal State
+  const [showIdentityModal, setShowIdentityModal] = useState<boolean>(false);
+
   // Share Trial Exam Modal State
   const [sharingAssessment, setSharingAssessment] = useState<Assessment | null>(null);
   const [copiedShareId, setCopiedShareId] = useState<string | null>(null);
@@ -391,80 +400,30 @@ export default function StudentAssessmentList({
           </div>
         </div>
 
-        {/* Student Display Name / Username Visibility Bar */}
-        <div className="bg-slate-950/90 border border-slate-800/90 rounded-xl p-3.5 flex flex-col gap-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-xs">
-              <UserCheck className="w-4 h-4 text-teal-400 shrink-0" />
-              <span className="text-slate-300">اسمك الظاهر أمام الطلاب في لوحة الترتيب:</span>
-              <span className="px-2.5 py-0.5 rounded-lg bg-teal-500/20 border border-teal-500/40 text-teal-300 font-bold">
-                {previewPublicName}
+        {/* Compact Student Display Name / Leaderboard Identity Strip */}
+        <div className="bg-slate-950/90 border border-slate-800/90 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2 text-xs flex-wrap">
+            <UserCheck className="w-4 h-4 text-teal-400 shrink-0" />
+            <span className="text-slate-400">اسمك في لوحة الشرف:</span>
+            <span className="px-2.5 py-0.5 rounded-lg bg-teal-500/20 border border-teal-500/40 text-teal-300 font-bold">
+              {previewPublicName}
+            </span>
+            {identitySavedBanner && (
+              <span className="text-[11px] text-emerald-400 font-bold flex items-center gap-1">
+                <Check className="w-3.5 h-3.5" />
+                تم التحديث ✓
               </span>
-              {identitySavedBanner && (
-                <span className="text-[11px] text-emerald-400 font-bold flex items-center gap-1">
-                  <Check className="w-3.5 h-3.5" />
-                  تم الحفظ وتحديث الترتيب!
-                </span>
-              )}
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setShowIdentityEditor((prev) => !prev)}
-              className="text-xs font-bold text-amber-400 hover:text-amber-300 flex items-center gap-1 bg-amber-500/10 border border-amber-500/30 px-3 py-1 rounded-lg transition-colors"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>{showIdentityEditor ? 'إخفاء إعدادات الاسم' : 'تخصيص اسم العرض / اللقب'}</span>
-            </button>
+            )}
           </div>
 
-          {showIdentityEditor && (
-            <div className="pt-2 border-t border-slate-800/80 space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
-                {[
-                  { id: 'full_name', label: 'الاسم الكامل الرسمي', hint: 'يظهر اسمك الحقيقي كاملاً' },
-                  { id: 'custom_username', label: 'اسم مستخدم مخصص (@)', hint: 'اختر لقباً تنافسياً مميزاً' },
-                  { id: 'abbreviated', label: 'الاسم المختصر', hint: 'الاسم الأول + أول حرف من اللقب' },
-                  { id: 'anonymous_code', label: 'لقب طبي مشفر', hint: 'مشاركة تنافسية بخصوصية تامة' }
-                ].map((opt) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    disabled={savingIdentity}
-                    onClick={() => handleSaveIdentityPreference(opt.id as LeaderboardNameMode, customUsername)}
-                    className={`p-2.5 rounded-xl border text-right transition-all ${
-                      nameMode === opt.id
-                        ? 'bg-teal-950/80 border-teal-500 text-teal-200 ring-1 ring-teal-500/30'
-                        : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="text-xs font-bold">{opt.label}</div>
-                    <div className="text-[10px] text-slate-400 mt-0.5">{opt.hint}</div>
-                  </button>
-                ))}
-              </div>
-
-              {nameMode === 'custom_username' && (
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                  <input
-                    type="text"
-                    value={customUsername}
-                    onChange={(e) => setCustomUsername(e.target.value)}
-                    placeholder="اكتب اسم المستخدم أو اللقب التنافسي (مثال: Dr_Cardio_Yemen)"
-                    className="flex-1 px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white focus:border-teal-500 focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    disabled={savingIdentity}
-                    onClick={() => handleSaveIdentityPreference('custom_username', customUsername)}
-                    className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold transition-colors"
-                  >
-                    {savingIdentity ? 'جاري الحفظ...' : 'اعتماد اللقب التنافسي'}
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={() => setShowIdentityModal(true)}
+            className="text-xs font-bold text-amber-400 hover:text-amber-300 flex items-center gap-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 px-3 py-1.5 rounded-xl transition-all"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+            <span>تخصيص اللقب أو اسم العرض</span>
+          </button>
         </div>
       </div>
 
@@ -601,57 +560,27 @@ export default function StudentAssessmentList({
                   </div>
                 </div>
 
-                {/* Score Banner & Post-Exam Download Bar if completed */}
+                {/* Score Banner if completed */}
                 {userResult && (
                   userResult.isReleased ? (
-                    <div className="p-3.5 rounded-xl bg-teal-950/60 border border-teal-800/60 space-y-2.5 text-xs text-teal-200">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Award className="w-4 h-4 text-teal-400" />
-                          <span>درجتك المعتمدة: <strong className="font-mono text-sm">{userResult.score}/{userResult.totalPoints}</strong></span>
-                        </div>
-                        <span className="font-mono font-bold bg-teal-500/20 px-2 py-0.5 rounded text-teal-300">
-                          {userResult.percentage}%
-                        </span>
+                    <div className="p-3 rounded-xl bg-teal-950/60 border border-teal-800/60 flex items-center justify-between text-xs text-teal-200">
+                      <div className="flex items-center gap-2">
+                        <Award className="w-4 h-4 text-teal-400 shrink-0" />
+                        <span>درجتك المعتمدة: <strong className="font-mono text-sm">{userResult.score}/{userResult.totalPoints}</strong></span>
                       </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1 border-t border-teal-800/50">
-                        <button
-                          type="button"
-                          disabled={downloadingExamId !== null}
-                          onClick={() => handleQuickDownloadExamFile(assessment, userResult, 'solved')}
-                          className="py-1.5 px-2.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors shadow-xs"
-                        >
-                          <Download className="w-3.5 h-3.5 shrink-0" />
-                          <span>
-                            {downloadingExamId === `${assessment.id}-solved`
-                              ? 'جارٍ التحميل...'
-                              : 'تحميل ملف الاختبار محلولاً'}
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          disabled={downloadingExamId !== null}
-                          onClick={() => handleQuickDownloadExamFile(assessment, userResult, 'blank')}
-                          className="py-1.5 px-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-teal-700/50 text-teal-200 text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors"
-                        >
-                          <FileText className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                          <span>
-                            {downloadingExamId === `${assessment.id}-blank`
-                              ? 'جارٍ التحميل...'
-                              : 'تحميل نسخة غير محلولة'}
-                          </span>
-                        </button>
-                      </div>
+                      <span className="font-mono font-bold bg-teal-500/20 px-2.5 py-0.5 rounded-lg text-teal-300">
+                        {userResult.percentage}%
+                      </span>
                     </div>
                   ) : (
                     <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-800/50 flex items-center gap-2 text-xs text-amber-300">
                       <Lock className="w-4 h-4 shrink-0" />
-                      <span>تم تسليم المحاولة بنجاح — ستظهر الدرجة وملف المراجعة فور إعلان النتائج رسمياً من الكلية.</span>
+                      <span>تم تسليم المحاولة بنجاح — ستظهر الدرجة وملف المراجعة فور إعلان النتائج رسمياً.</span>
                     </div>
                   )
                 )}
 
-                {/* Action Buttons: Start Exam + Review Result + Ranked Leaderboard + Share Trial Exam */}
+                {/* Primary Action Button (Start Exam or Review Result) */}
                 <div className="space-y-2">
                   <button
                     onClick={() =>
@@ -660,20 +589,20 @@ export default function StudentAssessmentList({
                         : handleStartAttempt(assessment)
                     }
                     disabled={(!isOpen && !userResult) || (hasMaxAttempts && !userResult) || startingAttempt === assessment.id}
-                    className={`w-full py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+                    className={`w-full py-3 px-4 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 transition-all ${
                       isOpen && !hasMaxAttempts
                         ? activeTab === 'competition'
                           ? 'bg-amber-600 hover:bg-amber-500 text-white shadow-lg shadow-amber-900/30'
                           : 'bg-teal-600 hover:bg-teal-500 text-white shadow-lg shadow-teal-900/30'
                         : hasMaxAttempts && userResult
-                        ? 'bg-teal-950/90 hover:bg-teal-900 border border-teal-500/50 text-teal-200'
+                        ? 'bg-teal-950/90 hover:bg-teal-900 border border-teal-500/50 text-teal-200 shadow-md'
                         : 'bg-slate-800 text-slate-500 cursor-not-allowed'
                     }`}
                   >
                     {startingAttempt === assessment.id ? (
                       <>
                         <RefreshCw className="w-4 h-4 animate-spin" />
-                        <span>جارٍ تجهيز جلسة الاختبار...</span>
+                        <span>جارٍ فتح الاختبار...</span>
                       </>
                     ) : hasMaxAttempts && userResult ? (
                       <>
@@ -700,34 +629,36 @@ export default function StudentAssessmentList({
                     )}
                   </button>
 
-                  {userResult && !hasMaxAttempts && (
-                    <button
-                      type="button"
-                      onClick={() => handleOpenCompletedExamReview(assessment, userResult)}
-                      className="w-full py-2 rounded-xl bg-slate-950 hover:bg-slate-800 border border-teal-500/30 text-teal-300 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
-                    >
-                      <Award className="w-3.5 h-3.5 text-teal-400" />
-                      <span>عرض نتيجتك السابقة ومراجعة وتحميل الاختبار</span>
-                    </button>
-                  )}
-
-                  <div className="grid grid-cols-2 gap-2">
+                  {/* Secondary Action Toolbar: 3 Clean Equal Buttons */}
+                  <div className="grid grid-cols-3 gap-1.5 pt-0.5">
                     <button
                       type="button"
                       onClick={() => setLeaderboardAssessment(assessment)}
-                      className="py-2 px-3 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-amber-300 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+                      className="py-2 px-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-amber-300 text-[11px] font-bold flex items-center justify-center gap-1 transition-colors"
+                      title="عرض لوحة الترتيب وقائمة المتصدرين"
                     >
-                      <Trophy className="w-3.5 h-3.5 text-amber-400" />
-                      <span>الترتيب والنتائج</span>
+                      <Trophy className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <span className="truncate">الترتيب</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setDownloadModalAssessment({ assessment, result: userResult })}
+                      className="py-2 px-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-teal-500/30 text-teal-300 text-[11px] font-bold flex items-center justify-center gap-1 transition-colors"
+                      title="تحميل ملف الاختبار للمذاكرة والمراجعة الذاتية"
+                    >
+                      <Download className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                      <span className="truncate">تحميل الملف</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => setSharingAssessment(assessment)}
-                      className="py-2 px-3 rounded-xl bg-indigo-950/50 hover:bg-indigo-900/60 border border-indigo-500/30 text-indigo-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+                      className="py-2 px-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-indigo-500/30 text-indigo-200 text-[11px] font-bold flex items-center justify-center gap-1 transition-colors"
+                      title="مشاركة رابط الاختبار مع الزملاء"
                     >
-                      <Share2 className="w-3.5 h-3.5 text-indigo-400" />
-                      <span>مشاركة مع الزملاء</span>
+                      <Share2 className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                      <span className="truncate">مشاركة</span>
                     </button>
                   </div>
                 </div>
@@ -958,6 +889,200 @@ export default function StudentAssessmentList({
                 className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold"
               >
                 إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Dedicated Exam Booklet Download Modal Sheet */}
+      {downloadModalAssessment && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto" dir="rtl">
+          <div className="bg-slate-900 border border-teal-500/40 rounded-2xl p-5 sm:p-6 max-w-lg w-full my-auto space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Download className="w-5 h-5 text-teal-400" />
+                <div>
+                  <h3 className="text-sm font-extrabold text-white">تحميل ملف الاختبار الكامل</h3>
+                  <p className="text-[11px] text-teal-300 truncate max-w-xs">{downloadModalAssessment.assessment.titleArabic}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setDownloadModalAssessment(null)}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              اختر صيغة الملف التي ترغب بتحميلها. يتم حفظ الملف بصيغة مستقلة وتنسيق طبي أنيق يعمل على هاتفك بدون إنترنت وقابل للحفظ كـ PDF أو الطباعة المباشرة:
+            </p>
+
+            <div className="space-y-3">
+              {/* Option 1: Solved copy */}
+              <div className="p-4 rounded-xl bg-teal-950/40 border border-teal-500/40 space-y-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="font-extrabold text-xs sm:text-sm text-teal-200 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4 text-teal-400 shrink-0" />
+                      <span>نسخة المذاكرة المحلولة (مع التعليلات)</span>
+                    </div>
+                    <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
+                      تتضمن جميع الأسئلة، إجابتك، الإجابة الصحيحة المعتمدة مميزة باللون الأخضر، والتعليل الطبي والسريري المفصل لكل سؤال.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={downloadingExamId !== null}
+                  onClick={async () => {
+                    await handleQuickDownloadExamFile(
+                      downloadModalAssessment.assessment,
+                      downloadModalAssessment.result,
+                      'solved'
+                    );
+                    setDownloadModalAssessment(null);
+                  }}
+                  className="w-full mt-1 py-2 px-3 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center justify-center gap-2 transition-colors shadow-md"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>
+                    {downloadingExamId === `${downloadModalAssessment.assessment.id}-solved`
+                      ? 'جارٍ تجهيز وتحميل الملف...'
+                      : 'تحميل نسخة المذاكرة المحلولة الآن'}
+                  </span>
+                </button>
+              </div>
+
+              {/* Option 2: Blank practice copy */}
+              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="font-extrabold text-xs sm:text-sm text-white flex items-center gap-1.5">
+                      <FileText className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>نسخة التدريب الذاتي (غير محلولة)</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                      تتضمن جميع الأسئلة والخيارات فارغة للتدريب وإعادة الاختبار بنفسك، مع جدول مفتاح الإجابات (Answer Key) في نهاية الملف للمراجعة.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={downloadingExamId !== null}
+                  onClick={async () => {
+                    await handleQuickDownloadExamFile(
+                      downloadModalAssessment.assessment,
+                      downloadModalAssessment.result,
+                      'blank'
+                    );
+                    setDownloadModalAssessment(null);
+                  }}
+                  className="w-full mt-1 py-2 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center justify-center gap-2 transition-colors border border-slate-700"
+                >
+                  <FileText className="w-4 h-4 text-amber-400" />
+                  <span>
+                    {downloadingExamId === `${downloadModalAssessment.assessment.id}-blank`
+                      ? 'جارٍ تجهيز وتحميل الملف...'
+                      : 'تحميل نسخة التدريب غير المحلولة'}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            <div className="pt-2 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setDownloadModalAssessment(null)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Dedicated Identity Preference Modal Sheet */}
+      {showIdentityModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto" dir="rtl">
+          <div className="bg-slate-900 border border-teal-500/40 rounded-2xl p-5 sm:p-6 max-w-lg w-full my-auto space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-amber-400" />
+                <h3 className="text-sm font-extrabold text-white">تخصيص اسم العرض في لوحة الترتيب والمنافسة</h3>
+              </div>
+              <button
+                onClick={() => setShowIdentityModal(false)}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-teal-950/40 border border-teal-500/30 text-xs text-center space-y-1">
+              <span className="text-[11px] text-slate-400 block">معاينة ظهور اسمك أمام زملائك في قائمة المتصدرين:</span>
+              <div className="text-base font-black text-teal-300 font-mono pt-0.5">{previewPublicName}</div>
+            </div>
+
+            <div className="space-y-2">
+              <span className="text-xs font-bold text-slate-300 block">اختر نمط الاسم المفضل:</span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {[
+                  { id: 'full_name', label: 'الاسم الكامل الرسمي', hint: 'يظهر اسمك الحقيقي المسجل في الكلية كاملاً' },
+                  { id: 'custom_username', label: 'اسم مستخدم مخصص (@)', hint: 'اختر لقباً طبياً تنافسياً مميزاً' },
+                  { id: 'abbreviated', label: 'الاسم المختصر', hint: 'الاسم الأول مع الحرف الأول من اللقب' },
+                  { id: 'anonymous_code', label: 'لقب طبي مشفر', hint: 'مشاركة ومنافسة بخصوصية وسرية تامة' }
+                ].map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    disabled={savingIdentity}
+                    onClick={() => handleSaveIdentityPreference(opt.id as LeaderboardNameMode, customUsername)}
+                    className={`p-3 rounded-xl border text-right transition-all flex flex-col justify-between ${
+                      nameMode === opt.id
+                        ? 'bg-teal-950/80 border-teal-500 text-teal-200 ring-1 ring-teal-500/40 shadow-sm'
+                        : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="text-xs font-bold">{opt.label}</div>
+                    <div className="text-[10px] text-slate-400 mt-1 leading-normal">{opt.hint}</div>
+                  </button>
+                ))}
+              </div>
+
+              {nameMode === 'custom_username' && (
+                <div className="pt-2 space-y-2">
+                  <label className="block text-xs font-bold text-slate-300">اكتب اسم المستخدم أو اللقب التنافسي:</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={customUsername}
+                      onChange={(e) => setCustomUsername(e.target.value)}
+                      placeholder="مثال: Dr_Cardio_Yemen"
+                      className="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white focus:border-teal-500 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      disabled={savingIdentity}
+                      onClick={() => handleSaveIdentityPreference('custom_username', customUsername)}
+                      className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold transition-colors shrink-0"
+                    >
+                      {savingIdentity ? 'جاري الحفظ...' : 'اعتماد'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="pt-3 border-t border-slate-800 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowIdentityModal(false)}
+                className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold"
+              >
+                تم واعتماد
               </button>
             </div>
           </div>

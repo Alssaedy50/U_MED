@@ -21,7 +21,8 @@ import {
   Bell,
   UserCheck,
   ExternalLink,
-  Download
+  Download,
+  X
 } from 'lucide-react';
 import { 
   StudentEnrollment, 
@@ -171,6 +172,7 @@ export default function StudentDashboard({
   });
   const [downloadingNotifId, setDownloadingNotifId] = useState<string | null>(null);
   const [showBlockPopup, setShowBlockPopup] = useState<boolean>(false);
+  const [activeBatchNotifModal, setActiveBatchNotifModal] = useState<BatchNotification | null>(null);
 
   useEffect(() => {
     setInternalTab(activeSection);
@@ -581,13 +583,14 @@ export default function StudentDashboard({
                 {batchNotifications.slice(0, 6).map((notif) => (
                   <div
                     key={notif.id}
-                    className={`p-3.5 rounded-xl border text-xs space-y-2 ${
+                    className={`p-3.5 rounded-xl border text-xs space-y-2 transition-all hover:border-slate-700 cursor-pointer ${
                       notif.category === 'urgent'
-                        ? 'bg-rose-950/30 border-rose-800/70'
+                        ? 'bg-rose-950/25 border-rose-800/60'
                         : notif.category === 'exam'
-                        ? 'bg-amber-950/25 border-amber-800/60'
-                        : 'bg-slate-950 border-slate-800'
+                        ? 'bg-amber-950/20 border-amber-800/50'
+                        : 'bg-slate-950 border-slate-800/80'
                     }`}
+                    onClick={() => setActiveBatchNotifModal(notif)}
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
@@ -615,34 +618,24 @@ export default function StudentDashboard({
                       </span>
                     </div>
 
-                    <p className="text-slate-300 leading-relaxed whitespace-pre-line">{notif.message}</p>
+                    <p className="text-slate-300 leading-relaxed line-clamp-2">{notif.message}</p>
 
                     <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-slate-800/80 text-[11px]">
                       <span className="text-slate-400">
                         المرسل: <strong className="text-teal-300">{notif.authorNameArabic}</strong>
                       </span>
 
-                      {notif.attachmentUrl && (
-                        <button
-                          type="button"
-                          disabled={downloadingNotifId === notif.id}
-                          onClick={() => handleOpenNotificationAttachment(notif)}
-                          className="px-3 py-1 rounded-lg bg-teal-600/20 hover:bg-teal-600/30 text-teal-300 border border-teal-500/40 font-bold flex items-center gap-1.5 transition-colors"
-                        >
-                          {notif.attachmentType === 'link' ? (
-                            <ExternalLink className="w-3.5 h-3.5" />
-                          ) : (
-                            <Download className="w-3.5 h-3.5" />
-                          )}
-                          <span>
-                            {downloadingNotifId === notif.id
-                              ? 'جارٍ الفتح...'
-                              : notif.attachmentLabel
-                              ? `فتح المرفق: ${notif.attachmentLabel}`
-                              : 'فتح المرفق / الرابط المرسل'}
+                      <div className="flex items-center gap-2">
+                        {notif.attachmentUrl && (
+                          <span className="px-2 py-0.5 rounded bg-teal-950 text-teal-300 border border-teal-800 text-[10px] font-bold">
+                            يحتوي مرفقاً 📎
                           </span>
-                        </button>
-                      )}
+                        )}
+                        <span className="text-teal-400 hover:text-teal-300 font-bold text-[11px] flex items-center gap-1">
+                          <span>عرض كامل الإشعار</span>
+                          <ChevronRight className="w-3 h-3 rotate-180" />
+                        </span>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -850,6 +843,99 @@ export default function StudentDashboard({
             </button>
           </div>
 
+        </div>
+      )}
+
+      {/* Detailed Batch Notification Sheet Modal */}
+      {activeBatchNotifModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto overscroll-contain" dir="rtl">
+          <div className="bg-slate-900 border border-indigo-500/40 sm:rounded-2xl rounded-t-2xl max-w-lg w-full max-h-[88dvh] flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom sm:slide-in-from-bottom-0 sm:fade-in duration-200">
+            {/* Header */}
+            <div className="p-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <span
+                  className={`px-2 py-0.5 rounded text-[10px] font-bold shrink-0 ${
+                    activeBatchNotifModal.category === 'urgent'
+                      ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                      : activeBatchNotifModal.category === 'exam'
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                      : 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
+                  }`}
+                >
+                  {activeBatchNotifModal.category === 'urgent'
+                    ? 'عاجل'
+                    : activeBatchNotifModal.category === 'exam'
+                    ? 'اختبار / مسابقة'
+                    : activeBatchNotifModal.category === 'data_shared'
+                    ? 'داتا مشتركة'
+                    : 'إشعار الدفعة'}
+                </span>
+                <h3 className="text-sm font-bold text-white truncate">{activeBatchNotifModal.title}</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveBatchNotifModal(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-5 overflow-y-auto space-y-4 text-xs">
+              <div className="flex items-center justify-between text-[11px] text-slate-400 pb-2 border-b border-slate-800/80">
+                <span>
+                  المرسل: <strong className="text-teal-300 font-semibold">{activeBatchNotifModal.authorNameArabic}</strong>
+                </span>
+                <span className="font-mono text-slate-400">
+                  {new Date(activeBatchNotifModal.createdAt).toLocaleString('ar-YE')}
+                </span>
+              </div>
+
+              <div className="bg-slate-950/80 p-4 rounded-xl border border-slate-800 text-slate-200 text-xs sm:text-sm leading-relaxed whitespace-pre-line">
+                {activeBatchNotifModal.message}
+              </div>
+
+              {activeBatchNotifModal.attachmentUrl && (
+                <div className="p-3.5 rounded-xl bg-teal-950/30 border border-teal-800/50 space-y-2">
+                  <div className="text-[11px] font-bold text-teal-300 flex items-center gap-1.5">
+                    <Download className="w-3.5 h-3.5 text-teal-400" />
+                    <span>الملف أو الرابط المرفق مع هذا الإشعار:</span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={downloadingNotifId === activeBatchNotifModal.id}
+                    onClick={() => handleOpenNotificationAttachment(activeBatchNotifModal)}
+                    className="w-full py-2.5 px-4 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-md shadow-teal-900/30 transition-all"
+                  >
+                    {activeBatchNotifModal.attachmentType === 'link' ? (
+                      <ExternalLink className="w-4 h-4" />
+                    ) : (
+                      <Download className="w-4 h-4" />
+                    )}
+                    <span>
+                      {downloadingNotifId === activeBatchNotifModal.id
+                        ? 'جارٍ فتح المرفق...'
+                        : activeBatchNotifModal.attachmentLabel
+                        ? `فتح وتحميل: ${activeBatchNotifModal.attachmentLabel}`
+                        : 'فتح / تحميل المرفق الآن'}
+                    </span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-3.5 bg-slate-950 border-t border-slate-800 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setActiveBatchNotifModal(null)}
+                className="py-2 px-5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

@@ -2061,7 +2061,7 @@ export default function App() {
             </header>
 
             {/* Page Content Viewport */}
-            <main className="flex-1 max-w-6xl w-full mx-auto px-3.5 py-4 sm:px-6 sm:py-6 space-y-4">
+            <main className="flex-1 max-w-6xl w-full mx-auto px-3.5 py-4 pb-28 sm:px-6 sm:py-6 sm:pb-8 space-y-4">
               
               {/* Claimed Guest Trial Exam Result Celebration Banner (shown right after mandatory account creation) */}
               {claimedGuestOutcome && (
@@ -2678,6 +2678,143 @@ export default function App() {
               )}
 
             </main>
+
+            {/* Sleek Mobile Bottom Navigation Bar (< lg viewports) */}
+            <nav 
+              className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 shadow-2xl px-1 sm:px-3 pt-1.5"
+              style={{ paddingBottom: 'max(0.45rem, env(safe-area-inset-bottom))' }}
+              aria-label="التنقل السريع للهواتف"
+            >
+              <div className="flex items-center justify-around gap-1 max-w-lg mx-auto">
+                {!isAdminMode ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('student_dashboard')}
+                      className={`flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-all ${
+                        activeTab === 'student_dashboard'
+                          ? 'text-teal-400 font-bold bg-teal-500/10'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <BookOpen className="w-4 h-4 mb-0.5" />
+                      <span className="text-[10px] leading-tight">الرئيسية</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('student_library')}
+                      className={`flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-all ${
+                        activeTab === 'student_library'
+                          ? 'text-teal-400 font-bold bg-teal-500/10'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <FileText className="w-4 h-4 mb-0.5" />
+                      <span className="text-[10px] leading-tight">المكتبة</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('student_assessments')}
+                      className={`flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-all ${
+                        activeTab === 'student_assessments'
+                          ? 'text-teal-400 font-bold bg-teal-500/10'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <Trophy className="w-4 h-4 mb-0.5" />
+                      <span className="text-[10px] leading-tight">الاختبارات</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('student_profile')}
+                      className={`flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-all ${
+                        activeTab === 'student_profile'
+                          ? 'text-teal-400 font-bold bg-teal-500/10'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <UserCheck className="w-4 h-4 mb-0.5" />
+                      <span className="text-[10px] leading-tight">حسابي</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setSidebarOpen(true)}
+                      className="flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl text-slate-400 hover:text-slate-200 transition-all"
+                    >
+                      <Menu className="w-4 h-4 mb-0.5" />
+                      <span className="text-[10px] leading-tight">المزيد</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('academic')}
+                      className={`flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-all ${
+                        activeTab === 'academic'
+                          ? 'text-teal-400 font-bold bg-teal-500/10'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <Building2 className="w-4 h-4 mb-0.5" />
+                      <span className="text-[10px] leading-tight">الهيكل</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('content_manager')}
+                      className={`flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-all ${
+                        activeTab === 'content_manager'
+                          ? 'text-teal-400 font-bold bg-teal-500/10'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <BookOpen className="w-4 h-4 mb-0.5" />
+                      <span className="text-[10px] leading-tight">المحتوى</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('assessments_manager')}
+                      className={`flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-all ${
+                        activeTab === 'assessments_manager'
+                          ? 'text-teal-400 font-bold bg-teal-500/10'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <Trophy className="w-4 h-4 mb-0.5" />
+                      <span className="text-[10px] leading-tight">الاختبارات</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('enrollment_queue')}
+                      className={`flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-all ${
+                        activeTab === 'enrollment_queue'
+                          ? 'text-teal-400 font-bold bg-teal-500/10'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <Users className="w-4 h-4 mb-0.5" />
+                      <span className="text-[10px] leading-tight">الطلبات</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setSidebarOpen(true)}
+                      className="flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl text-slate-400 hover:text-slate-200 transition-all"
+                    >
+                      <Menu className="w-4 h-4 mb-0.5" />
+                      <span className="text-[10px] leading-tight">القائمة</span>
+                    </button>
+                  </>
+                )}
+              </div>
+            </nav>
           </div>
         </div>
       )}
