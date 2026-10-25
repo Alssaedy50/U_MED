@@ -33,7 +33,8 @@ import {
   fetchUniversities, 
   fetchColleges, 
   fetchPrograms, 
-  fetchStudyLevels 
+  fetchStudyLevels,
+  saveUserAcademicContext
 } from '../../services/academicService.ts';
 import { submitEnrollmentRequest, verifyAcademicStudentNumberAvailable } from '../../services/enrollmentService.ts';
 import { useAuth } from '../../context/AuthContext.tsx';
@@ -247,6 +248,20 @@ export default function RegisterEnrollment({
         academicStudentNumber: academicNumber,
         academicYear,
         policy
+      });
+
+      const foundCol = colleges.find(c => c.id === selectedCollegeId);
+      const foundProg = programs.find(p => p.id === selectedProgramId);
+      saveUserAcademicContext({
+        universityId: selectedUniversityId,
+        universityName: selectedUniversity?.nameArabic,
+        collegeId: selectedCollegeId,
+        collegeName: foundCol?.nameArabic,
+        programId: selectedProgramId,
+        programName: foundProg?.nameArabic,
+        studyLevelId: selectedLevelId,
+        studyLevelName: selectedLevel?.titleArabic,
+        strictScope: true
       });
 
       onEnrollmentComplete(enrollment);

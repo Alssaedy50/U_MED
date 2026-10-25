@@ -627,7 +627,7 @@ app.post('/api/admin/sync-assessment-questions', requireAdmin, (req: Authenticat
 
     if (Array.isArray(questions)) {
       questions.forEach((q: QuestionItemFull) => {
-        if (q && q.id && q.stemArabic && (q.questionType === 'essay' || (Array.isArray(q.options) && q.correctOptionId))) {
+        if (q && q.id && q.stemArabic && (q.questionType === 'essay' || q.questionType === 'fill_blank' || (Array.isArray(q.options) && q.correctOptionId))) {
           const existing = questionsStore[q.id];
           const existingTime = existing?.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
           const incomingTime = q.updatedAt ? new Date(q.updatedAt).getTime() : Date.now();
@@ -840,9 +840,15 @@ app.post('/api/admin/generate-smart-exam', requireAdmin, async (req: Authenticat
       mode = 'generate_new',
       language = 'ar',
       assessmentType = 'exam',
+      questionTypeMode = 'hybrid',
+      isDynamicQuestionCount = true,
       title = '',
       topic = 'القلب والأوعية الدموية (Cardiovascular System)',
-      studyLevelName = 'المستوى الرابع',
+      universityName = '',
+      collegeName = '',
+      programName = '',
+      studyLevelName = 'المستوى الثاني',
+      blockName = '',
       batchName = '',
       durationMinutes = 30,
       questionDurationSeconds = 45,
@@ -850,6 +856,7 @@ app.post('/api/admin/generate-smart-exam', requireAdmin, async (req: Authenticat
       optionsCount = 4,
       trueFalseCount = 1,
       essayCount = 1,
+      fillBlankCount = 1,
       difficultyMix = 'clinical_usmle',
       includeOptionRationales = true,
       rawContentToConvert = ''
@@ -880,16 +887,23 @@ app.post('/api/admin/generate-smart-exam', requireAdmin, async (req: Authenticat
       mode,
       language,
       assessmentType,
+      questionTypeMode,
+      isDynamicQuestionCount: Boolean(isDynamicQuestionCount),
       title,
       topic,
+      universityName,
+      collegeName,
+      programName,
       studyLevelName,
+      blockName,
       batchName,
       durationMinutes: Number(durationMinutes) || 30,
       questionDurationSeconds: Number(questionDurationSeconds) || 45,
-      mcqCount: Math.min(Math.max(Number(mcqCount) || 5, 1), 30),
+      mcqCount: Math.min(Math.max(Number(mcqCount) || 5, 0), 50),
       optionsCount: Number(optionsCount) === 5 ? 5 : 4,
-      trueFalseCount: Math.min(Math.max(Number(trueFalseCount) || 0, 0), 15),
-      essayCount: Math.min(Math.max(Number(essayCount) || 0, 0), 10),
+      trueFalseCount: Math.min(Math.max(Number(trueFalseCount) || 0, 0), 30),
+      essayCount: Math.min(Math.max(Number(essayCount) || 0, 0), 20),
+      fillBlankCount: Math.min(Math.max(Number(fillBlankCount) || 0, 0), 30),
       difficultyMix,
       includeOptionRationales: Boolean(includeOptionRationales)
     });
@@ -1148,6 +1162,23 @@ app.post('/api/assessments/submit-attempt', optionalAuth, (req: AuthenticatedReq
 
         if (qType === 'essay') {
           isCorrect = studentAns.trim().length > 10;
+          if (isCorrect) score += qPoints;
+        } else if (qType === 'fill_blank') {
+          const cleanStudent = studentAns.trim().toLowerCase();
+          const modelRaw = (q?.modelAnswerArabic || '').trim().toLowerCase();
+          if (cleanStudent) {
+            if (!modelRaw) {
+              isCorrect = cleanStudent.length >= 1;
+            } else {
+              const accepted = modelRaw
+                .split(/[\/|،,;]/)
+                .map((s) => s.trim())
+                .filter(Boolean);
+              isCorrect =
+                accepted.some((acc) => cleanStudent === acc || cleanStudent.includes(acc) || acc.includes(cleanStudent)) ||
+                cleanStudent === modelRaw;
+            }
+          }
           if (isCorrect) score += qPoints;
         } else {
           const correctId = q?.correctOptionId || key?.correctOptionId || '';

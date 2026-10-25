@@ -356,8 +356,33 @@ export interface BatchNotification {
 
 export type AssessmentType = 'exam' | 'competition';
 export type AssessmentLanguage = 'ar' | 'en' | 'bilingual';
+export type QuestionType = 'mcq' | 'true_false' | 'essay' | 'fill_blank';
+export type BankQuestionTypeMode = 'hybrid' | 'mcq' | 'true_false' | 'essay' | 'fill_blank';
 export type ResultReleasePolicy = 'immediate' | 'after_close' | 'manual';
 export type AssessmentStatus = 'draft' | 'published' | 'closed';
+
+export interface UserAcademicContext {
+  universityId: string;
+  universityNameArabic?: string;
+  universityName?: string;
+  collegeId: string;
+  collegeNameArabic?: string;
+  collegeName?: string;
+  programId: string;
+  programNameArabic?: string;
+  programName?: string;
+  studyLevelId: string;
+  studyLevelNameArabic?: string;
+  studyLevelName?: string;
+  studyPeriodId?: string;
+  studyPeriodNameArabic?: string;
+  studyPeriodName?: string;
+  blockName?: string;
+  courseOfferingId?: string;
+  courseNameArabic?: string;
+  strictScope: boolean;
+  updatedAt: string;
+}
 
 export interface QuestionBank {
   id: string;
@@ -365,16 +390,18 @@ export interface QuestionBank {
   titleEnglish?: string;
   descriptionArabic?: string;
   language?: AssessmentLanguage; // 'ar' | 'en' | 'bilingual'
+  questionTypeMode?: BankQuestionTypeMode; // 'hybrid' | 'mcq' | 'true_false' | 'essay' | 'fill_blank'
   universityId: string;
+  collegeId?: string;
   programId?: string;
   studyLevelId?: string;
+  studyPeriodId?: string;
+  blockName?: string;
   courseOfferingId?: string;
   createdBy: string;
   createdAt: string;
   updatedAt?: string;
 }
-
-export type QuestionType = 'mcq' | 'true_false' | 'essay';
 
 export interface QuestionOption {
   id: string; // e.g. 'opt-a', 'opt-b', 'opt-c', 'opt-d', 'opt-e', etc.
@@ -526,12 +553,16 @@ export interface Assessment {
   id: string;
   assessmentType: AssessmentType;
   language?: AssessmentLanguage; // 'ar' | 'en' | 'bilingual'
+  questionTypeMode?: BankQuestionTypeMode;
   titleArabic: string;
   titleEnglish?: string;
   descriptionArabic?: string;
   universityId: string;
+  collegeId?: string;
   programId: string;
   studyLevelId: string;
+  studyPeriodId?: string;
+  blockName?: string;
   batchName?: string;
   batchNumber?: string;
   courseOfferingId?: string;
@@ -798,10 +829,55 @@ export const DAR_AL_SALAM_SEED = {
   ],
   sampleBlocks: [
     {
+      id: 'blk-fnd-1',
+      levelId: 'lvl-1',
+      periodType: 'block' as const,
+      titleArabic: 'بلوك العلوم الطبية التأسيسية والخلية',
+      titleEnglish: 'Foundation & Cell Biology Block',
+      code: 'FND-101',
+      order: 1,
+    },
+    {
+      id: 'blk-hem-2',
+      levelId: 'lvl-2',
+      periodType: 'block' as const,
+      titleArabic: 'بلوك الدم والجهاز اللمفاوي (Hematology)',
+      titleEnglish: 'Hematology & Lymphatic System Block',
+      code: 'HEM-201',
+      order: 1,
+    },
+    {
+      id: 'blk-msk-2',
+      levelId: 'lvl-2',
+      periodType: 'block' as const,
+      titleArabic: 'بلوك الجهاز العضلي الهيكلي (MSK)',
+      titleEnglish: 'Musculoskeletal System Block',
+      code: 'MSK-202',
+      order: 2,
+    },
+    {
+      id: 'blk-git-3',
+      levelId: 'lvl-3',
+      periodType: 'block' as const,
+      titleArabic: 'بلوك الجهاز الهضمي والكبد (GIT)',
+      titleEnglish: 'Gastrointestinal & Hepatobiliary Block',
+      code: 'GIT-301',
+      order: 1,
+    },
+    {
+      id: 'blk-cns-3',
+      levelId: 'lvl-3',
+      periodType: 'block' as const,
+      titleArabic: 'بلوك الجهاز العصبي المركزي (CNS)',
+      titleEnglish: 'Central Nervous System Block',
+      code: 'CNS-302',
+      order: 2,
+    },
+    {
       id: 'blk-cvs',
       levelId: 'lvl-4',
       periodType: 'block' as const,
-      titleArabic: 'بلوك الجهاز القلبي الوعائي',
+      titleArabic: 'بلوك الجهاز القلبي الوعائي (CVS)',
       titleEnglish: 'Cardiovascular System Block',
       code: 'CVS-401',
       order: 1,
@@ -810,10 +886,46 @@ export const DAR_AL_SALAM_SEED = {
       id: 'blk-rs',
       levelId: 'lvl-4',
       periodType: 'block' as const,
-      titleArabic: 'بلوك الجهاز التنفسي',
+      titleArabic: 'بلوك الجهاز التنفسي (Respiratory)',
       titleEnglish: 'Respiratory System Block',
       code: 'RESP-402',
       order: 2,
+    },
+    {
+      id: 'blk-ren-5',
+      levelId: 'lvl-5',
+      periodType: 'block' as const,
+      titleArabic: 'بلوك الكلى والمسالك البولية (Renal)',
+      titleEnglish: 'Renal & Urinary System Block',
+      code: 'REN-501',
+      order: 1,
+    },
+    {
+      id: 'blk-end-5',
+      levelId: 'lvl-5',
+      periodType: 'block' as const,
+      titleArabic: 'بلوك الغدد الصماء والتكاثر (Endocrine)',
+      titleEnglish: 'Endocrine & Reproductive Block',
+      code: 'END-502',
+      order: 2,
+    },
+    {
+      id: 'blk-im-6',
+      levelId: 'lvl-6',
+      periodType: 'block' as const,
+      titleArabic: 'دورة الباطنة العامة السريرية (Internal Medicine)',
+      titleEnglish: 'Internal Medicine Clerkship',
+      code: 'MED-601',
+      order: 1,
+    },
+    {
+      id: 'blk-surg-7',
+      levelId: 'lvl-7',
+      periodType: 'block' as const,
+      titleArabic: 'دورة الجراحة العامة والطوارئ (General Surgery)',
+      titleEnglish: 'General Surgery & Emergency Clerkship',
+      code: 'SURG-701',
+      order: 1,
     },
   ],
 };

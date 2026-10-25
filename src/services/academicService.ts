@@ -27,6 +27,7 @@ import {
   StudyLevel, 
   StudyPeriod, 
   CourseOffering, 
+  UserAcademicContext,
   DAR_AL_SALAM_SEED 
 } from '../types/umed.ts';
 
@@ -68,7 +69,7 @@ const DEFAULT_SEED_DATA: Record<CollectionKey, any[]> = {
   studyLevels: DAR_AL_SALAM_SEED.studyLevels,
   studyPeriods: DAR_AL_SALAM_SEED.sampleBlocks.map(b => ({
     id: b.id,
-    studyLevelId: 'lvl-4',
+    studyLevelId: b.levelId || 'lvl-4',
     curriculumVersionId: 'cur-dar-2024',
     universityId: 'univ-dar-al-salam',
     periodType: b.periodType,
@@ -79,6 +80,18 @@ const DEFAULT_SEED_DATA: Record<CollectionKey, any[]> = {
     isActive: true
   })),
   courseOfferings: [
+    {
+      id: 'crs-hem-201',
+      studyPeriodId: 'blk-hem-2',
+      studyLevelId: 'lvl-2',
+      curriculumVersionId: 'cur-dar-2024',
+      universityId: 'univ-dar-al-salam',
+      titleArabic: 'فسيولوجيا وأمراض الدم (Hematology)',
+      titleEnglish: 'Hematology Physiology & Pathology',
+      code: 'HEM-201',
+      creditHours: 4,
+      isActive: true
+    },
     {
       id: 'crs-anat-cvs',
       studyPeriodId: 'blk-cvs',
@@ -858,7 +871,7 @@ export async function seedDarAlSalamToFirestore(performedBy: string = 'PLATFORM_
 
   const periodsList: StudyPeriod[] = DAR_AL_SALAM_SEED.sampleBlocks.map(blk => ({
     id: blk.id,
-    studyLevelId: 'lvl-4',
+    studyLevelId: blk.levelId || 'lvl-4',
     curriculumVersionId: 'cur-dar-2024',
     universityId: 'univ-dar-al-salam',
     periodType: blk.periodType,
@@ -869,18 +882,32 @@ export async function seedDarAlSalamToFirestore(performedBy: string = 'PLATFORM_
     isActive: true
   }));
 
-  const defaultCourse: CourseOffering = {
-    id: 'crs-anat-cvs',
-    studyPeriodId: 'blk-cvs',
-    studyLevelId: 'lvl-4',
-    curriculumVersionId: 'cur-dar-2024',
-    universityId: 'univ-dar-al-salam',
-    titleArabic: 'تشريح الجهاز القلبي الوعائي',
-    titleEnglish: 'Anatomy of Cardiovascular System',
-    code: 'ANAT-401',
-    creditHours: 3,
-    isActive: true
-  };
+  const defaultCourses: CourseOffering[] = [
+    {
+      id: 'crs-hem-201',
+      studyPeriodId: 'blk-hem-2',
+      studyLevelId: 'lvl-2',
+      curriculumVersionId: 'cur-dar-2024',
+      universityId: 'univ-dar-al-salam',
+      titleArabic: 'فسيولوجيا وأمراض الدم (Hematology)',
+      titleEnglish: 'Hematology Physiology & Pathology',
+      code: 'HEM-201',
+      creditHours: 4,
+      isActive: true
+    },
+    {
+      id: 'crs-anat-cvs',
+      studyPeriodId: 'blk-cvs',
+      studyLevelId: 'lvl-4',
+      curriculumVersionId: 'cur-dar-2024',
+      universityId: 'univ-dar-al-salam',
+      titleArabic: 'تشريح الجهاز القلبي الوعائي',
+      titleEnglish: 'Anatomy of Cardiovascular System',
+      code: 'ANAT-401',
+      creditHours: 3,
+      isActive: true
+    }
+  ];
 
   const mergeSeedWithLocal = <T extends { id: string }>(key: CollectionKey, seedItems: T[]) => {
     const existing = readLocalCollection<T>(key) || [];
@@ -897,10 +924,10 @@ export async function seedDarAlSalamToFirestore(performedBy: string = 'PLATFORM_
   mergeSeedWithLocal('curriculumVersions', [curWithTimestamp]);
   mergeSeedWithLocal('studyLevels', DAR_AL_SALAM_SEED.studyLevels);
   mergeSeedWithLocal('studyPeriods', periodsList);
-  mergeSeedWithLocal('courseOfferings', [defaultCourse]);
+  mergeSeedWithLocal('courseOfferings', defaultCourses);
   notifyHierarchyListeners();
 
-  let count = 1 + 1 + 1 + 1 + 1 + DAR_AL_SALAM_SEED.studyLevels.length + periodsList.length + 1;
+  let count = 1 + 1 + 1 + 1 + 1 + DAR_AL_SALAM_SEED.studyLevels.length + periodsList.length + defaultCourses.length;
 
   try {
     const batch = writeBatch(db);
@@ -919,7 +946,9 @@ export async function seedDarAlSalamToFirestore(performedBy: string = 'PLATFORM_
       batch.set(doc(db, 'studyPeriods', blk.id), blk, { merge: true });
     }
 
-    batch.set(doc(db, 'courseOfferings', defaultCourse.id), defaultCourse, { merge: true });
+    for (const crs of defaultCourses) {
+      batch.set(doc(db, 'courseOfferings', crs.id), crs, { merge: true });
+    }
 
     await batch.commit();
   } catch (error: any) {
@@ -940,3 +969,310 @@ export async function seedDarAlSalamToFirestore(performedBy: string = 'PLATFORM_
     itemsCreated: count
   };
 }
+
+// ---------------------------------------------------------------------------
+// Persistent User Academic Context Engine (University, College, Specialty, Study Level, Block)
+// ---------------------------------------------------------------------------
+
+const USER_ACADEMIC_CONTEXT_KEY = 'umed_user_academic_context_v1';
+const academicContextListeners = new Set<(ctx: UserAcademicContext) => void>();
+
+/**
+ * Infers Study Level ID and Block Name from free-form text (such as a Bank Title or Topic like "بلوك دم سنة ثانية").
+ */
+export function inferAcademicContextFromText(
+  text?: string | null,
+  availableLevels: StudyLevel[] = DAR_AL_SALAM_SEED.studyLevels,
+  availablePeriods: StudyPeriod[] = []
+): {
+  inferredLevelId?: string;
+  inferredLevelName?: string;
+  inferredPeriodId?: string;
+  inferredPeriodName?: string;
+  studyLevelId?: string;
+  studyLevelName?: string;
+  studyPeriodId?: string;
+  studyPeriodName?: string;
+  blockId?: string;
+  blockName?: string;
+} {
+  if (!text || !text.trim()) return {};
+  const raw = text.trim();
+  let inferredLevelId: string | undefined;
+
+  if (/سنة\s*(?:أولى|اولى|1)|المستوى\s*(?:الأول|الاول|1)|level\s*1|year\s*1/iu.test(raw)) {
+    inferredLevelId = 'lvl-1';
+  } else if (/سنة\s*(?:ثانية|ثانيه|2)|المستوى\s*(?:الثاني|2)|level\s*2|year\s*2/iu.test(raw)) {
+    inferredLevelId = 'lvl-2';
+  } else if (/سنة\s*(?:ثالثة|ثالثه|3)|المستوى\s*(?:الثالث|3)|level\s*3|year\s*3/iu.test(raw)) {
+    inferredLevelId = 'lvl-3';
+  } else if (/سنة\s*(?:رابعة|رابعه|4)|المستوى\s*(?:الرابع|4)|level\s*4|year\s*4/iu.test(raw)) {
+    inferredLevelId = 'lvl-4';
+  } else if (/سنة\s*(?:خامسة|خامسه|5)|المستوى\s*(?:الخامس|5)|level\s*5|year\s*5/iu.test(raw)) {
+    inferredLevelId = 'lvl-5';
+  } else if (/سنة\s*(?:سادسة|سادسه|6)|المستوى\s*(?:السادس|6)|level\s*6|year\s*6/iu.test(raw)) {
+    inferredLevelId = 'lvl-6';
+  } else if (/سنة\s*(?:سابعة|سابعه|7)|المستوى\s*(?:السابع|7)|level\s*7|year\s*7/iu.test(raw)) {
+    inferredLevelId = 'lvl-7';
+  } else if (/امتياز|internship/iu.test(raw)) {
+    inferredLevelId = 'lvl-internship';
+  }
+
+  // Also infer from well-known medical block names if level wasn't explicitly written
+  let inferredPeriodId: string | undefined;
+  let inferredPeriodName: string | undefined;
+
+  if (/بلوك\s*الدم|بلوك\s*دم|أمراض\s*الدم|hematology|haematology/iu.test(raw)) {
+    if (!inferredLevelId) inferredLevelId = 'lvl-2';
+    inferredPeriodId = 'blk-hem-2';
+    inferredPeriodName = 'بلوك الدم والجهاز اللمفاوي (Hematology)';
+  } else if (/العضلي\s*الهيكلي|بلوك\s*عظام|musculoskeletal|\bmsk\b/iu.test(raw)) {
+    if (!inferredLevelId) inferredLevelId = 'lvl-2';
+    inferredPeriodId = 'blk-msk-2';
+    inferredPeriodName = 'بلوك الجهاز العضلي الهيكلي (MSK)';
+  } else if (/الجهاز\s*الهضمي|بلوك\s*هضمي|gastrointestinal|\bgit\b/iu.test(raw)) {
+    if (!inferredLevelId) inferredLevelId = 'lvl-3';
+    inferredPeriodId = 'blk-git-3';
+    inferredPeriodName = 'بلوك الجهاز الهضمي والكبد (GIT)';
+  } else if (/الجهاز\s*العصبي|بلوك\s*أعصاب|nervous|\bcns\b/iu.test(raw)) {
+    if (!inferredLevelId) inferredLevelId = 'lvl-3';
+    inferredPeriodId = 'blk-cns-3';
+    inferredPeriodName = 'بلوك الجهاز العصبي المركزي (CNS)';
+  } else if (/القلبي\s*الوعائي|بلوك\s*القلب|بلوك\s*قلب|cardiovascular|\bcvs\b/iu.test(raw)) {
+    if (!inferredLevelId) inferredLevelId = 'lvl-4';
+    inferredPeriodId = 'blk-cvs';
+    inferredPeriodName = 'بلوك الجهاز القلبي الوعائي (CVS)';
+  } else if (/الجهاز\s*التنفسي|بلوك\s*تنفسي|respiratory/iu.test(raw)) {
+    if (!inferredLevelId) inferredLevelId = 'lvl-4';
+    inferredPeriodId = 'blk-rs';
+    inferredPeriodName = 'بلوك الجهاز التنفسي (Respiratory)';
+  }
+
+  // Check against custom periods if available
+  if (!inferredPeriodId && availablePeriods.length > 0) {
+    const matchedPeriod = availablePeriods.find(
+      p => raw.includes(p.titleArabic) || (p.titleEnglish && raw.toLowerCase().includes(p.titleEnglish.toLowerCase()))
+    );
+    if (matchedPeriod) {
+      inferredPeriodId = matchedPeriod.id;
+      inferredPeriodName = matchedPeriod.titleArabic;
+      if (!inferredLevelId && matchedPeriod.studyLevelId) {
+        inferredLevelId = matchedPeriod.studyLevelId;
+      }
+    }
+  }
+
+  const matchedLevel = inferredLevelId ? availableLevels.find(l => l.id === inferredLevelId) : undefined;
+  return {
+    inferredLevelId,
+    inferredLevelName: matchedLevel?.titleArabic,
+    inferredPeriodId,
+    inferredPeriodName,
+    studyLevelId: inferredLevelId,
+    studyLevelName: matchedLevel?.titleArabic,
+    studyPeriodId: inferredPeriodId,
+    studyPeriodName: inferredPeriodName,
+    blockId: inferredPeriodId,
+    blockName: inferredPeriodName
+  };
+}
+
+export function getUserAcademicContext(defaults?: Partial<UserAcademicContext>): UserAcademicContext {
+  const uid = auth?.currentUser?.uid || 'default';
+  let saved: Partial<UserAcademicContext> | null = null;
+
+  try {
+    const rawUser = localStorage.getItem(`${USER_ACADEMIC_CONTEXT_KEY}_${uid}`);
+    const rawGlobal = localStorage.getItem(USER_ACADEMIC_CONTEXT_KEY);
+    const raw = rawUser || rawGlobal;
+    if (raw) {
+      saved = JSON.parse(raw);
+    }
+  } catch {}
+
+  // Also check if student enrollment exists in localStorage to sync automatically
+  let enrollmentFallback: { universityId?: string; collegeId?: string; programId?: string; studyLevelId?: string } = {};
+  try {
+    if (uid && uid !== 'default') {
+      const enrRaw = localStorage.getItem(`umed_enrollment_${uid}`);
+      if (enrRaw) {
+        const parsedEnr = JSON.parse(enrRaw);
+        if (parsedEnr) {
+          enrollmentFallback = {
+            universityId: parsedEnr.universityId,
+            collegeId: parsedEnr.collegeId,
+            programId: parsedEnr.programId,
+            studyLevelId: parsedEnr.currentStudyLevelId
+          };
+        }
+      }
+    }
+  } catch {}
+
+  const univs = getCachedCollection<University>('universities');
+  const cols = getCachedCollection<College>('colleges');
+  const progs = getCachedCollection<AcademicProgram>('programs');
+  const lvls = getCachedCollection<StudyLevel>('studyLevels');
+  const periods = getCachedCollection<StudyPeriod>('studyPeriods');
+
+  const universityId =
+    defaults?.universityId ||
+    saved?.universityId ||
+    enrollmentFallback.universityId ||
+    univs[0]?.id ||
+    DAR_AL_SALAM_SEED.university.id;
+
+  const collegeId =
+    defaults?.collegeId ||
+    saved?.collegeId ||
+    enrollmentFallback.collegeId ||
+    cols.find(c => c.universityId === universityId)?.id ||
+    DAR_AL_SALAM_SEED.college.id;
+
+  const programId =
+    defaults?.programId ||
+    saved?.programId ||
+    enrollmentFallback.programId ||
+    progs.find(p => p.collegeId === collegeId)?.id ||
+    DAR_AL_SALAM_SEED.program.id;
+
+  const studyLevelId =
+    defaults?.studyLevelId ||
+    saved?.studyLevelId ||
+    enrollmentFallback.studyLevelId ||
+    'lvl-2'; // Default to Level 2 or user's saved level
+
+  const levelPeriods = periods.filter(p => p.studyLevelId === studyLevelId);
+  const studyPeriodId =
+    defaults?.studyPeriodId !== undefined
+      ? defaults.studyPeriodId
+      : saved?.studyPeriodId && levelPeriods.some(p => p.id === saved?.studyPeriodId)
+      ? saved.studyPeriodId
+      : levelPeriods[0]?.id || '';
+
+  const univObj = univs.find(u => u.id === universityId);
+  const colObj = cols.find(c => c.id === collegeId);
+  const progObj = progs.find(p => p.id === programId);
+  const lvlObj = lvls.find(l => l.id === studyLevelId);
+  const periodObj = periods.find(p => p.id === studyPeriodId);
+
+  const universityNameArabic = univObj?.nameArabic || saved?.universityNameArabic || saved?.universityName || DAR_AL_SALAM_SEED.university.nameArabic;
+  const collegeNameArabic = colObj?.nameArabic || saved?.collegeNameArabic || saved?.collegeName || DAR_AL_SALAM_SEED.college.nameArabic;
+  const programNameArabic = progObj?.nameArabic || saved?.programNameArabic || saved?.programName || DAR_AL_SALAM_SEED.program.nameArabic;
+  const studyLevelNameArabic = lvlObj?.titleArabic || saved?.studyLevelNameArabic || saved?.studyLevelName || 'المستوى الثاني';
+  const studyPeriodNameArabic = periodObj?.titleArabic || saved?.studyPeriodNameArabic || saved?.studyPeriodName || saved?.blockName || '';
+
+  return {
+    universityId,
+    universityNameArabic,
+    universityName: universityNameArabic,
+    collegeId,
+    collegeNameArabic,
+    collegeName: collegeNameArabic,
+    programId,
+    programNameArabic,
+    programName: programNameArabic,
+    studyLevelId,
+    studyLevelNameArabic,
+    studyLevelName: studyLevelNameArabic,
+    studyPeriodId,
+    studyPeriodNameArabic,
+    studyPeriodName: studyPeriodNameArabic,
+    blockName: studyPeriodNameArabic,
+    courseOfferingId: defaults?.courseOfferingId ?? saved?.courseOfferingId ?? '',
+    courseNameArabic: defaults?.courseNameArabic ?? saved?.courseNameArabic ?? '',
+    strictScope: defaults?.strictScope ?? saved?.strictScope ?? true,
+    updatedAt: saved?.updatedAt || new Date().toISOString()
+  };
+}
+
+export function saveUserAcademicContext(partial: Partial<UserAcademicContext>): UserAcademicContext {
+  const current = getUserAcademicContext();
+  const univs = getCachedCollection<University>('universities');
+  const cols = getCachedCollection<College>('colleges');
+  const progs = getCachedCollection<AcademicProgram>('programs');
+  const lvls = getCachedCollection<StudyLevel>('studyLevels');
+  const periods = getCachedCollection<StudyPeriod>('studyPeriods');
+
+  const nextUniversityId = partial.universityId || current.universityId;
+  const nextCollegeId =
+    partial.collegeId ||
+    (partial.universityId && partial.universityId !== current.universityId
+      ? cols.find(c => c.universityId === nextUniversityId)?.id || current.collegeId
+      : current.collegeId);
+  const nextProgramId =
+    partial.programId ||
+    (nextCollegeId !== current.collegeId
+      ? progs.find(p => p.collegeId === nextCollegeId)?.id || current.programId
+      : current.programId);
+  const nextLevelId = partial.studyLevelId || current.studyLevelId;
+
+  const levelPeriods = periods.filter(p => p.studyLevelId === nextLevelId);
+  const nextPeriodId =
+    partial.studyPeriodId !== undefined
+      ? partial.studyPeriodId
+      : nextLevelId !== current.studyLevelId
+      ? levelPeriods[0]?.id || ''
+      : current.studyPeriodId || levelPeriods[0]?.id || '';
+
+  const univObj = univs.find(u => u.id === nextUniversityId);
+  const colObj = cols.find(c => c.id === nextCollegeId);
+  const progObj = progs.find(p => p.id === nextProgramId);
+  const lvlObj = lvls.find(l => l.id === nextLevelId);
+  const periodObj = periods.find(p => p.id === nextPeriodId);
+
+  const universityNameArabic = univObj?.nameArabic || partial.universityNameArabic || partial.universityName || current.universityNameArabic;
+  const collegeNameArabic = colObj?.nameArabic || partial.collegeNameArabic || partial.collegeName || current.collegeNameArabic;
+  const programNameArabic = progObj?.nameArabic || partial.programNameArabic || partial.programName || current.programNameArabic;
+  const studyLevelNameArabic = lvlObj?.titleArabic || partial.studyLevelNameArabic || partial.studyLevelName || current.studyLevelNameArabic;
+  const studyPeriodNameArabic = periodObj?.titleArabic || partial.studyPeriodNameArabic || partial.studyPeriodName || partial.blockName || '';
+
+  const updated: UserAcademicContext = {
+    ...current,
+    ...partial,
+    universityId: nextUniversityId,
+    universityNameArabic,
+    universityName: universityNameArabic,
+    collegeId: nextCollegeId,
+    collegeNameArabic,
+    collegeName: collegeNameArabic,
+    programId: nextProgramId,
+    programNameArabic,
+    programName: programNameArabic,
+    studyLevelId: nextLevelId,
+    studyLevelNameArabic,
+    studyLevelName: studyLevelNameArabic,
+    studyPeriodId: nextPeriodId,
+    studyPeriodNameArabic,
+    studyPeriodName: studyPeriodNameArabic,
+    blockName: studyPeriodNameArabic,
+    strictScope: partial.strictScope !== undefined ? partial.strictScope : current.strictScope,
+    updatedAt: new Date().toISOString()
+  };
+
+  try {
+    const uid = auth?.currentUser?.uid || 'default';
+    localStorage.setItem(USER_ACADEMIC_CONTEXT_KEY, JSON.stringify(updated));
+    if (uid && uid !== 'default') {
+      localStorage.setItem(`${USER_ACADEMIC_CONTEXT_KEY}_${uid}`, JSON.stringify(updated));
+    }
+  } catch {}
+
+  academicContextListeners.forEach(cb => {
+    try {
+      cb(updated);
+    } catch {}
+  });
+
+  return updated;
+}
+
+export function subscribeToUserAcademicContext(
+  callback: (ctx: UserAcademicContext) => void
+): () => void {
+  academicContextListeners.add(callback);
+  return () => {
+    academicContextListeners.delete(callback);
+  };
+}
+

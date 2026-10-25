@@ -483,7 +483,7 @@ export async function bulkSaveQuestions(
     const stemArabic = (raw.stemArabic || '').trim();
     const qType = raw.questionType || 'mcq';
     const options = Array.isArray(raw.options) ? raw.options : [];
-    if (!stemArabic || (qType !== 'essay' && options.length < 2)) continue;
+    if (!stemArabic || (qType !== 'essay' && qType !== 'fill_blank' && options.length < 2)) continue;
 
     const contentHash = raw.contentHash || computeQuestionFingerprint(stemArabic, options);
     if (seenBatchHashes.has(contentHash)) {
@@ -514,7 +514,7 @@ export async function bulkSaveQuestions(
         textEnglish: o.textEnglish?.trim() || undefined,
         explanationArabic: o.explanationArabic?.trim() || undefined
       })),
-      correctOptionId: raw.correctOptionId || (qType === 'essay' ? '' : 'opt-a'),
+      correctOptionId: raw.correctOptionId || (qType === 'essay' ? 'essay-answer' : qType === 'fill_blank' ? 'fill-blank-answer' : 'opt-a'),
       modelAnswerArabic: raw.modelAnswerArabic?.trim() || undefined,
       modelAnswerEnglish: raw.modelAnswerEnglish?.trim() || undefined,
       explanationArabic: raw.explanationArabic?.trim() || '',

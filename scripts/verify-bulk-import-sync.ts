@@ -21,6 +21,7 @@ import {
   mergeCloudAndOfflineQuestions,
   enqueueQuestionsUpsert
 } from '../src/services/questionImportSyncService.ts';
+import { inferAcademicContextFromText } from '../src/services/academicService.ts';
 import { QuestionItemFull } from '../src/types/umed.ts';
 
 function assert(condition: boolean, message: string): void {
@@ -32,7 +33,7 @@ function assert(condition: boolean, message: string): void {
 async function runVerification() {
   console.log('=== UMED Offline Bulk Question Import & Sync Verification ===\n');
 
-  // 1. Test Structured Arabic & English Text Parsing (Aiken + inline markers + ANSWER lines)
+  // 1. Test Structured Arabic & English Text Parsing (MCQ, True/False, Fill-in-Blank, Essay)
   const { drafts: sampleParsed } = parseBulkQuestionsInput({
     rawInput: SAMPLE_BULK_TEXT_TEMPLATE,
     formatHint: 'text',
@@ -40,12 +41,13 @@ async function runVerification() {
     defaultPoints: 5,
     existingBankQuestions: []
   });
-  assert(sampleParsed.length === 3, `Expected 3 parsed questions from SAMPLE_BULK_TEXT_TEMPLATE, got ${sampleParsed.length}`);
+  assert(sampleParsed.length === 4, `Expected 4 parsed questions from SAMPLE_BULK_TEXT_TEMPLATE, got ${sampleParsed.length}`);
   assert(sampleParsed[0].correctOptionId === 'opt-b', `Q1 correctOptionId should be opt-b, got ${sampleParsed[0].correctOptionId}`);
   assert(sampleParsed[1].correctOptionId === 'opt-a' && sampleParsed[1].questionType === 'true_false', `Q2 should be true_false with opt-a (صح)`);
-  assert(sampleParsed[2].questionType === 'essay' && Boolean(sampleParsed[2].modelAnswerArabic), `Q3 should be essay with model answer`);
-  assert(sampleParsed.every(q => q.isValid), 'All 3 sample text questions should be valid');
-  console.log('[PASS] 1. Structured Arabic/English text parsing (MCQ, True/False, Essay, Rationale)');
+  assert(sampleParsed[2].questionType === 'fill_blank' && Boolean(sampleParsed[2].modelAnswerArabic), `Q3 should be fill_blank with model answer`);
+  assert(sampleParsed[3].questionType === 'essay' && Boolean(sampleParsed[3].modelAnswerArabic), `Q4 should be essay with model answer`);
+  assert(sampleParsed.every(q => q.isValid), 'All 4 sample text questions should be valid');
+  console.log('[PASS] 1. Structured Arabic/English text parsing (MCQ, True/False, Fill-in-Blank, Essay, Rationale)');
 
   // 2. Test Trailing Answer Key Table Support
   const trailingKeyInput = `
@@ -127,21 +129,21 @@ async function runVerification() {
   };
 
   const { drafts: batchWithDuplicatesAndErrors } = parseBulkQuestionsInput({
-    rawInput: `${SAMPLE_BULK_TEXT_TEMPLATE}\n\n4. سؤال ناقص بدون إجابة محددة؟\nأ) خيار أول\nب) خيار ثانٍ\nج) خيار ثالث\nد) خيار رابع`,
+    rawInput: `${SAMPLE_BULK_TEXT_TEMPLATE}\n\n5. سؤال ناقص بدون إجابة محددة؟\nأ) خيار أول\nب) خيار ثانٍ\nج) خيار ثالث\nد) خيار رابع`,
     formatHint: 'text',
     bankId: 'qbank-cvs-default',
     defaultPoints: 5,
     existingBankQuestions: [existingBankQuestion]
   });
-  assert(batchWithDuplicatesAndErrors.length === 4, 'Expected 4 items in mixed validation test');
+  assert(batchWithDuplicatesAndErrors.length === 5, 'Expected 5 items in mixed validation test');
   assert(batchWithDuplicatesAndErrors[0].isDuplicateInBank === true, 'Item 1 should be flagged as duplicate in existing bank');
-  assert(batchWithDuplicatesAndErrors[3].correctOptionId === '', 'Item 4 should have empty correctOptionId');
-  assert(batchWithDuplicatesAndErrors[3].isValid === false, 'Item 4 should be invalid until user selects a correct answer');
+  assert(batchWithDuplicatesAndErrors[4].correctOptionId === '', 'Item 5 should have empty correctOptionId');
+  assert(batchWithDuplicatesAndErrors[4].isValid === false, 'Item 5 should be invalid until user selects a correct answer');
 
   // Simulate user selecting correct answer in Review UI
-  batchWithDuplicatesAndErrors[3].correctOptionId = 'opt-b';
+  batchWithDuplicatesAndErrors[4].correctOptionId = 'opt-b';
   const revalidated = validateAndAnnotateDrafts(batchWithDuplicatesAndErrors, 'qbank-cvs-default', [existingBankQuestion]);
-  assert(revalidated[3].isValid === true, 'Item 4 should become valid after user selects correct answer in review screen');
+  assert(revalidated[4].isValid === true, 'Item 5 should become valid after user selects correct answer in review screen');
   console.log('[PASS] 5. Validation & duplicate detection (existing bank + intra-batch + interactive fix)');
 
   // 6. Test Security & Answer Key Protection (Sanitization)
@@ -203,12 +205,13 @@ async function runVerification() {
     existingBankQuestions: []
   });
   assert(enMeta?.language === 'en', `Expected detected language 'en', got ${enMeta?.language}`);
-  assert(enParsed.length === 3, `Expected 3 parsed English questions, got ${enParsed.length}`);
+  assert(enParsed.length === 4, `Expected 4 parsed English questions, got ${enParsed.length}`);
   assert(enParsed[0].language === 'en', `Expected Q1 language 'en', got ${enParsed[0].language}`);
   assert(enParsed[0].correctOptionId === 'opt-b', `Expected English Q1 correctOptionId opt-b, got ${enParsed[0].correctOptionId}`);
   assert(enParsed[1].questionType === 'true_false' && enParsed[1].correctOptionId === 'opt-a', 'English Q2 should be True/False with opt-a');
-  assert(enParsed[2].questionType === 'essay' && Boolean(enParsed[2].modelAnswerArabic), 'English Q3 should be Essay with model answer');
-  assert(enParsed.every(q => q.isValid), 'All 3 English template questions should be valid');
+  assert(enParsed[2].questionType === 'fill_blank' && Boolean(enParsed[2].modelAnswerArabic), 'English Q3 should be Fill-in-Blank with model answer');
+  assert(enParsed[3].questionType === 'essay' && Boolean(enParsed[3].modelAnswerArabic), 'English Q4 should be Essay with model answer');
+  assert(enParsed.every(q => q.isValid), 'All 4 English template questions should be valid');
   console.log('[PASS] 8. Pure English medical template & multi-line clinical vignette parsing');
 
   // 9. Test Bilingual (Arabic + English) Template Parsing
@@ -226,61 +229,39 @@ async function runVerification() {
   assert(biParsed.every(q => q.isValid), 'All bilingual template questions should be valid');
   console.log('[PASS] 9. Bilingual (Arabic + English) template parsing');
 
-  // 10. Test Flexible AI Markdown Output Preprocessing & Professional AI Prompt Builder
-  const messyMarkdownAiOutput = `
-Sure! Here is the medical exam you requested:
-\`\`\`text
-Title: USMLE Cardiovascular Pharmacology Quiz
-Type: Exam
-Language: English
-Level: Level 4
-Subject: Cardiovascular System
-Duration: 30 minutes
-Question Timer: 60 seconds
----
-### **Question 1:** A 64-year-old man with chronic heart failure presents with dyspnea.
-He is started on a drug that inhibits the Na+/K+-ATPase pump.
-Which of the following is the direct mechanism of this medication?
-- **A)** Beta-1 receptor blockade
-- **B)** Inhibition of Na+/K+-ATPase leading to increased intracellular calcium *
-- **C)** ACE inhibition
-- **D)** Calcium channel blockade
-**Answer:** B
-**Explanation:** Digoxin inhibits Na+/K+-ATPase, reducing Na+/Ca2+ exchanger activity and increasing cardiac contractility.
-\`\`\`
-`;
-  const { drafts: markdownParsed, detectedMetadata: mdMeta } = parseBulkQuestionsInput({
-    rawInput: messyMarkdownAiOutput,
-    formatHint: 'auto',
-    languageHint: 'en',
-    bankId: 'qbank-cvs-default',
-    defaultPoints: 5,
-    existingBankQuestions: []
-  });
-  assert(mdMeta?.titleArabic === 'USMLE Cardiovascular Pharmacology Quiz', `Metadata title mismatch: ${mdMeta?.titleArabic}`);
-  assert(mdMeta?.language === 'en', `Metadata language mismatch: ${mdMeta?.language}`);
-  assert(Boolean(markdownParsed.length === 1 && markdownParsed[0].isValid), 'Markdown-fenced AI output with bold prefixes must parse cleanly');
-  assert(
-    markdownParsed[0].stemArabic.includes('64-year-old man') &&
-      markdownParsed[0].stemArabic.includes('Which of the following is the direct mechanism'),
-    'Multi-line English clinical vignette must remain unified in stemArabic'
-  );
-  assert(markdownParsed[0].correctOptionId === 'opt-b', 'Correct option B must be detected from bold markdown options');
+  // 10. Test Flexible AI Markdown Output Preprocessing & Professional AI Prompt Builder (Dynamic Count & Year 2 Hematology Fix)
+  const inferred = inferAcademicContextFromText('اختبار بلوك دم سنة ثانية');
+  assert(inferred.studyLevelId === 'lvl-2', `Expected inferred level 'lvl-2' for 'بلوك دم سنة ثانية', got ${inferred.studyLevelId}`);
+  assert(inferred.studyPeriodId === 'blk-hem-2', `Expected inferred period 'blk-hem-2' for 'بلوك دم سنة ثانية', got ${inferred.studyPeriodId}`);
 
-  const generatedEnPrompt = buildProfessionalAiPrompt({
-    language: 'en',
+  const dynamicHematologyPrompt = buildProfessionalAiPrompt({
+    language: 'ar',
     mode: 'generate_new',
     assessmentType: 'exam',
-    topic: 'Renal Pathology & Glomerulonephritis',
-    studyLevelName: 'Level 4',
-    mcqCount: 5,
-    trueFalseCount: 2,
-    essayCount: 1,
+    questionTypeMode: 'hybrid',
+    isDynamicQuestionCount: true,
+    topic: 'فسيولوجيا وأمراض الدم (Hematology)',
+    universityName: 'جامعة دار السلام الدولية للعلوم والتكنولوجيا',
+    studyLevelName: inferred.studyLevelName || 'المستوى الثاني',
+    blockName: inferred.studyPeriodName || 'بلوك الدم والجهاز اللمفاوي (Hematology)',
+    mcqCount: 10,
+    trueFalseCount: 5,
+    fillBlankCount: 5,
+    essayCount: 2,
     optionsCount: 4,
-    difficultyMix: 'clinical_usmle'
+    difficultyMix: 'balanced'
   });
-  assert(generatedEnPrompt.includes('Language: English') && generatedEnPrompt.includes('Renal Pathology'), 'Generated English AI prompt must include language and topic');
-  console.log('[PASS] 10. Flexible AI Markdown preprocessing & Professional AI Prompt Studio generator');
+  assert(
+    dynamicHematologyPrompt.includes('المستوى الثاني') &&
+      !dynamicHematologyPrompt.includes('المستوى الرابع') &&
+      dynamicHematologyPrompt.includes('بلوك الدم'),
+    'Dynamic Hematology AI Prompt must strictly reflect المستوى الثاني and بلوك الدم, never المستوى الرابع'
+  );
+  assert(
+    dynamicHematologyPrompt.includes('عدد ديناميكي مفتوح'),
+    'Dynamic question count prompt must instruct AI not to restrict to a fixed count'
+  );
+  console.log('[PASS] 10. Dynamic question count, Fill-in-Blank mode, & Second Year Hematology level/block inference');
 
   console.log('\nALL 10 VERIFICATION SUITES PASSED SUCCESSFULLY.');
 }

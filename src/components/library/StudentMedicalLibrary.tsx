@@ -154,96 +154,50 @@ export default function StudentMedicalLibrary({
         </button>
       </div>
 
-      {/* 2. Filter & Search Controls */}
+      {/* 2. Compact Dropdown Filter & Search Controls */}
       <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
-        
-        {/* Type Filter Buttons */}
-        <div className="flex flex-wrap gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
-          <button
-            onClick={() => setSelectedType('all')}
-            className={`px-3 py-1.5 rounded-lg transition-colors font-medium ${
-              selectedType === 'all' ? 'bg-teal-600 text-white font-bold' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            جميع الموارد ({resources.length})
-          </button>
+        <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400 font-bold">نوع المورد:</span>
+            <select
+              value={selectedType}
+              onChange={(e) => setSelectedType(e.target.value as any)}
+              className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-teal-300 font-bold text-xs focus:outline-none focus:border-teal-500"
+            >
+              <option value="all">جميع الموارد ({resources.length})</option>
+              <option value="pdf">ملفات PDF ({resources.filter(r => r.resourceType === 'pdf').length})</option>
+              <option value="image">شرائح وصور طبية ({resources.filter(r => r.resourceType === 'image').length})</option>
+              <option value="video">فيديوهات طبية ({resources.filter(r => r.resourceType === 'video').length})</option>
+              <option value="audio">تسجيلات صوتية ({resources.filter(r => r.resourceType === 'audio').length})</option>
+              <option value="link">روابط خارجية ({resources.filter(r => r.resourceType === 'link' || r.resourceType === 'video_link').length})</option>
+            </select>
+          </div>
 
-          <button
-            onClick={() => setSelectedType('pdf')}
-            className={`px-3 py-1.5 rounded-lg transition-colors font-medium flex items-center gap-1.5 ${
-              selectedType === 'pdf' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <FileText className="w-3.5 h-3.5" />
-            <span>ملفات PDF ({resources.filter(r => r.resourceType === 'pdf').length})</span>
-          </button>
-
-          <button
-            onClick={() => setSelectedType('image')}
-            className={`px-3 py-1.5 rounded-lg transition-colors font-medium flex items-center gap-1.5 ${
-              selectedType === 'image' ? 'bg-teal-500/20 text-teal-300 border border-teal-500/40' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <ImageIcon className="w-3.5 h-3.5" />
-            <span>شرائح وصور طبية ({resources.filter(r => r.resourceType === 'image').length})</span>
-          </button>
-
-          <button
-            onClick={() => setSelectedType('video')}
-            className={`px-3 py-1.5 rounded-lg transition-colors font-medium flex items-center gap-1.5 ${
-              selectedType === 'video' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <Video className="w-3.5 h-3.5" />
-            <span>فيديوهات طبية ({resources.filter(r => r.resourceType === 'video').length})</span>
-          </button>
-
-          <button
-            onClick={() => setSelectedType('audio')}
-            className={`px-3 py-1.5 rounded-lg transition-colors font-medium flex items-center gap-1.5 ${
-              selectedType === 'audio' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <Volume2 className="w-3.5 h-3.5" />
-            <span>تسجيلات صوتية ({resources.filter(r => r.resourceType === 'audio').length})</span>
-          </button>
-
-          <button
-            onClick={() => setSelectedType('link')}
-            className={`px-3 py-1.5 rounded-lg transition-colors font-medium flex items-center gap-1.5 ${
-              selectedType === 'link' ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-            <span>روابط خارجية ({resources.filter(r => r.resourceType === 'link' || r.resourceType === 'video_link').length})</span>
-          </button>
-        </div>
-
-        {/* Section Filter & Search Box */}
-        <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
-          <select
-            value={selectedSection}
-            onChange={(e) => setSelectedSection(e.target.value as any)}
-            className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-300 text-xs focus:outline-none focus:border-teal-500"
-          >
-            <option value="all">جميع الشعب (نظري وعملي)</option>
-            <option value="theoretical">القسم النظري فقط</option>
-            <option value="practical">القسم العملي والمختبر فقط</option>
-          </select>
-
-          {/* Search Box */}
-          <div className="relative w-full sm:w-56">
-            <Search className="w-3.5 h-3.5 absolute right-3 top-2.5 text-slate-500" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="بحث في المحاضرات والشرائح..."
-              className="w-full pl-3 pr-8 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-600 focus:outline-none focus:border-teal-500 text-xs"
-            />
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400 font-bold">الشعبة:</span>
+            <select
+              value={selectedSection}
+              onChange={(e) => setSelectedSection(e.target.value as any)}
+              className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-300 font-bold text-xs focus:outline-none focus:border-teal-500"
+            >
+              <option value="all">جميع الشعب (نظري وعملي)</option>
+              <option value="theoretical">القسم النظري فقط</option>
+              <option value="practical">القسم العملي والمختبر فقط</option>
+            </select>
           </div>
         </div>
 
+        {/* Search Box */}
+        <div className="relative w-full sm:w-64">
+          <Search className="w-3.5 h-3.5 absolute right-3 top-2.5 text-slate-500" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="بحث في المحاضرات والشرائح..."
+            className="w-full pl-3 pr-8 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-600 focus:outline-none focus:border-teal-500 text-xs"
+          />
+        </div>
       </div>
 
       {/* 3. Resources Grid */}

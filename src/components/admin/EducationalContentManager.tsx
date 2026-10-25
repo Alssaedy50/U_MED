@@ -48,8 +48,11 @@ import {
   fetchUniversities,
   fetchStudyLevels,
   fetchStudyPeriods,
-  fetchCourseOfferings
+  fetchCourseOfferings,
+  getUserAcademicContext,
+  subscribeToUserAcademicContext
 } from '../../services/academicService.ts';
+import AcademicContextBar from '../common/AcademicContextModal.tsx';
 import ResourcePreviewModal from '../library/ResourcePreviewModal.tsx';
 
 interface EducationalContentManagerProps {
@@ -95,23 +98,29 @@ export default function EducationalContentManager({
   const [editPeriods, setEditPeriods] = useState<StudyPeriod[]>([]);
   const [editCourses, setEditCourses] = useState<CourseOffering[]>([]);
 
+  // Persistent User Academic Context
+  const [userContext, setUserContext] = useState(() => getUserAcademicContext());
+
   // Form State for Add Resource
-  const [form, setForm] = useState({
-    title: '',
-    description: '',
-    resourceType: 'pdf' as ResourceType,
-    url: '',
-    fileSizeLabel: '1.5 MB',
-    fileName: '',
-    mimeType: '',
-    chunkCount: 0,
-    storageProvider: 'firestore_cloud' as 'firestore_cloud' | 'external_url',
-    universityId: assignedUniversityId,
-    studyLevelId: 'lvl-4',
-    studyPeriodId: 'blk-cvs',
-    courseOfferingId: 'crs-anat-cvs',
-    sectionType: 'theoretical' as 'theoretical' | 'practical' | 'general',
-    status: 'published' as 'published' | 'draft' | 'archived'
+  const [form, setForm] = useState(() => {
+    const ctx = getUserAcademicContext();
+    return {
+      title: '',
+      description: '',
+      resourceType: 'pdf' as ResourceType,
+      url: '',
+      fileSizeLabel: '1.5 MB',
+      fileName: '',
+      mimeType: '',
+      chunkCount: 0,
+      storageProvider: 'firestore_cloud' as 'firestore_cloud' | 'external_url',
+      universityId: isUnivScoped ? assignedUniversityId : (ctx.universityId || assignedUniversityId),
+      studyLevelId: isBatchScoped && assignedStudyLevelId ? assignedStudyLevelId : (ctx.studyLevelId || 'lvl-2'),
+      studyPeriodId: ctx.studyPeriodId || 'blk-hem-2',
+      courseOfferingId: 'crs-hem-201',
+      sectionType: 'theoretical' as 'theoretical' | 'practical' | 'general',
+      status: 'published' as 'published' | 'draft' | 'archived'
+    };
   });
 
   // Direct File Upload & Voice Recording State
@@ -152,14 +161,15 @@ export default function EducationalContentManager({
       const finalLvls = scopedLvls.length > 0 ? scopedLvls : allLvls;
       setStudyLevels(finalLvls);
 
+      const savedCtx = getUserAcademicContext();
       const defaultLvlId = isBatchScoped && assignedStudyLevelId
         ? assignedStudyLevelId
-        : finalLvls.find(l => l.id === form.studyLevelId)?.id || finalLvls[0]?.id || 'lvl-4';
+        : finalLvls.find(l => l.id === (savedCtx.studyLevelId || form.studyLevelId))?.id || finalLvls[0]?.id || 'lvl-2';
 
       const periods = await fetchStudyPeriods(defaultLvlId);
       setStudyPeriods(periods);
 
-      const defaultPeriodId = periods.find(p => p.id === form.studyPeriodId)?.id || periods[0]?.id || '';
+      const defaultPeriodId = periods.find(p => p.id === (savedCtx.studyPeriodId || form.studyPeriodId))?.id || periods[0]?.id || '';
       const rawCrs = defaultPeriodId ? await fetchCourseOfferings(defaultPeriodId) : [];
       const crs = userRole === 'department_head' && assignedCourseId
         ? rawCrs.filter(c => c.id === assignedCourseId)
@@ -209,7 +219,19 @@ export default function EducationalContentManager({
         setLoading(false);
       }
     );
-    return () => unsub();
+    const unsubCtx = subscribeToUserAcademicContext((ctx) => {
+      setUserContext(ctx);
+      setForm(prev => ({
+        ...prev,
+        universityId: isUnivScoped ? assignedUniversityId : (ctx.universityId || prev.universityId),
+        studyLevelId: isBatchScoped && assignedStudyLevelId ? assignedStudyLevelId : (ctx.studyLevelId || prev.studyLevelId),
+        studyPeriodId: ctx.studyPeriodId || prev.studyPeriodId
+      }));
+    });
+    return () => {
+      unsub();
+      unsubCtx();
+    };
   }, [assignedUniversityId, assignedStudyLevelId, assignedCourseId, userRole]);
 
   // Cascade Periods when Add Form StudyLevel changes
@@ -482,7 +504,11 @@ export default function EducationalContentManager({
   const filtered = resources.filter(r => {
     const matchStatus = statusFilter === 'all' || r.status === statusFilter;
     const matchType = typeFilter === 'all' || r.resourceType === typeFilter;
-    return matchStatus && matchType;
+    const matchScope =
+      !userContext.strictScope ||
+      ((!userContext.universityId || !r.universityId || r.universityId === userContext.universityId) &&
+        (!userContext.studyLevelId || !r.studyLevelId || r.studyLevelId === userContext.studyLevelId));
+    return matchStatus && matchType && matchScope;
   });
 
   return (
@@ -531,6 +557,22 @@ export default function EducationalContentManager({
         </div>
       </div>
 
+      {/* Persistent User Academic Context Bar & Popup Selector */}
+      <AcademicContextBar
+        userRole={userRole}
+        assignedUniversityId={assignedUniversityId}
+        assignedStudyLevelId={assignedStudyLevelId}
+        onContextChange={(ctx) => {
+          setUserContext(ctx);
+          setForm(prev => ({
+            ...prev,
+            universityId: isUnivScoped ? assignedUniversityId : (ctx.universityId || prev.universityId),
+            studyLevelId: isBatchScoped && assignedStudyLevelId ? assignedStudyLevelId : (ctx.studyLevelId || prev.studyLevelId),
+            studyPeriodId: ctx.studyPeriodId || prev.studyPeriodId
+          }));
+        }}
+      />
+
       {/* Cloud Storage Architecture Explanation Banner */}
       <div className="bg-slate-900/60 border border-teal-500/30 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
         <div className="flex items-start sm:items-center gap-3">
@@ -562,56 +604,43 @@ export default function EducationalContentManager({
         </div>
       )}
 
-      {/* Filters Bar */}
+      {/* Compact Dropdown Filters Bar */}
       <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
-        
-        {/* Status Filters */}
-        <div className="flex flex-wrap bg-slate-950 p-1 rounded-xl border border-slate-800 gap-1">
-          <button
-            onClick={() => setStatusFilter('all')}
-            className={`px-3 py-1.5 rounded-lg transition-colors font-medium ${
-              statusFilter === 'all' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            الكل ({resources.length})
-          </button>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400 font-bold">حالة النشر:</span>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as any)}
+              className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-teal-300 font-bold text-xs focus:outline-none focus:border-teal-500"
+            >
+              <option value="all">جميع الحالات ({filtered.length})</option>
+              <option value="published">منشور للطلاب ({resources.filter(r => r.status === 'published').length})</option>
+              <option value="draft">مسودة ({resources.filter(r => r.status === 'draft').length})</option>
+            </select>
+          </div>
 
-          <button
-            onClick={() => setStatusFilter('published')}
-            className={`px-3 py-1.5 rounded-lg transition-colors font-medium flex items-center gap-1.5 ${
-              statusFilter === 'published' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <span>منشور ({resources.filter(r => r.status === 'published').length})</span>
-          </button>
-
-          <button
-            onClick={() => setStatusFilter('draft')}
-            className={`px-3 py-1.5 rounded-lg transition-colors font-medium flex items-center gap-1.5 ${
-              statusFilter === 'draft' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <span>مسودة ({resources.filter(r => r.status === 'draft').length})</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400 font-bold">نوع الملف:</span>
+            <select
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value as any)}
+              className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 font-bold text-xs focus:outline-none focus:border-teal-500"
+            >
+              <option value="all">جميع الأنواع</option>
+              <option value="pdf">ملفات PDF</option>
+              <option value="image">شرائح وصور طبية</option>
+              <option value="video">ملفات فيديو مباشرة</option>
+              <option value="audio">تسجيلات ومحاضرات صوتية</option>
+              <option value="link">روابط خارجية</option>
+              <option value="video_link">روابط فيديو</option>
+            </select>
+          </div>
         </div>
 
-        {/* Type Filters */}
-        <div className="flex items-center gap-2">
-          <select
-            value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value as any)}
-            className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-300 text-xs focus:outline-none focus:border-teal-500"
-          >
-            <option value="all">جميع الأنواع</option>
-            <option value="pdf">ملفات PDF</option>
-            <option value="image">شرائح وصور طبية</option>
-            <option value="video">ملفات فيديو مباشرة</option>
-            <option value="audio">تسجيلات ومحاضرات صوتية</option>
-            <option value="link">روابط خارجية</option>
-            <option value="video_link">روابط فيديو</option>
-          </select>
+        <div className="text-[11px] text-slate-400">
+          عدد المواد المعروضة لمستواك الحالي: <strong className="text-white">{filtered.length}</strong>
         </div>
-
       </div>
 
       {/* Resources Table / Card List */}

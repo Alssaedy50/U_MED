@@ -64,8 +64,11 @@ import {
   toggleCourseOfferingActive,
   deleteCourseOffering,
   checkEntityDependencies,
-  seedDarAlSalamToFirestore
+  seedDarAlSalamToFirestore,
+  getUserAcademicContext,
+  saveUserAcademicContext
 } from '../../services/academicService.ts';
+import AcademicContextBar from '../common/AcademicContextModal.tsx';
 
 type EntityType = 'university' | 'college' | 'program' | 'level' | 'period' | 'course';
 
@@ -115,6 +118,9 @@ export default function AcademicStructureManager({
   const [loading, setLoading] = useState<boolean>(true);
   const [seedLoading, setSeedLoading] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
+
+  // Standalone Popup Selector Modal State (Replaces inline crowded lists)
+  const [activePopupList, setActivePopupList] = useState<'university' | 'college' | 'program' | 'level' | 'period' | null>(null);
 
   // Add Modals State
   const [showAddUnivModal, setShowAddUnivModal] = useState<boolean>(false);
@@ -183,10 +189,11 @@ export default function AcademicStructureManager({
     creditHours: 3
   });
 
-  // Load universities on mount (Strictly scoped for University Owner & Batch Rep)
+  // Load universities on mount (Strictly scoped for University Owner & Batch Rep + Saved User Context)
   const loadUniversities = async () => {
     setLoading(true);
     try {
+      const savedCtx = getUserAcademicContext();
       const allUnivs = await fetchUniversities();
       const univs =
         isUnivScoped && assignedUniversityId
@@ -195,7 +202,11 @@ export default function AcademicStructureManager({
       const finalUnivs = univs.length > 0 ? univs : allUnivs;
       setUniversities(finalUnivs);
       if (finalUnivs.length > 0) {
-        setSelectedUniversity(prev => (prev && finalUnivs.find(u => u.id === prev.id)) || finalUnivs[0]);
+        setSelectedUniversity(prev =>
+          (prev && finalUnivs.find(u => u.id === prev.id)) ||
+          finalUnivs.find(u => u.id === savedCtx.universityId) ||
+          finalUnivs[0]
+        );
       } else {
         setSelectedUniversity(null);
       }
@@ -209,6 +220,7 @@ export default function AcademicStructureManager({
   useEffect(() => {
     loadUniversities();
     const unsub = subscribeToUniversities((allUnivs) => {
+      const savedCtx = getUserAcademicContext();
       const univs =
         isUnivScoped && assignedUniversityId
           ? allUnivs.filter(u => u.id === assignedUniversityId)
@@ -216,7 +228,11 @@ export default function AcademicStructureManager({
       const finalUnivs = univs.length > 0 ? univs : allUnivs;
       setUniversities(finalUnivs);
       if (finalUnivs.length > 0) {
-        setSelectedUniversity(prev => (prev && finalUnivs.find(u => u.id === prev.id)) || finalUnivs[0]);
+        setSelectedUniversity(prev =>
+          (prev && finalUnivs.find(u => u.id === prev.id)) ||
+          finalUnivs.find(u => u.id === savedCtx.universityId) ||
+          finalUnivs[0]
+        );
       }
     });
     return () => unsub();
@@ -225,9 +241,18 @@ export default function AcademicStructureManager({
   // Cascading Load: Colleges when University changes
   useEffect(() => {
     if (selectedUniversity) {
+      const savedCtx = getUserAcademicContext();
+      saveUserAcademicContext({
+        universityId: selectedUniversity.id,
+        universityName: selectedUniversity.nameArabic
+      });
       fetchColleges(selectedUniversity.id).then((cols) => {
         setColleges(cols);
-        setSelectedCollege(prev => (prev && cols.find(c => c.id === prev.id)) || (cols.length > 0 ? cols[0] : null));
+        setSelectedCollege(prev =>
+          (prev && cols.find(c => c.id === prev.id)) ||
+          cols.find(c => c.id === savedCtx.collegeId) ||
+          (cols.length > 0 ? cols[0] : null)
+        );
       });
     } else {
       setColleges([]);
@@ -238,9 +263,18 @@ export default function AcademicStructureManager({
   // Cascading Load: Programs when College changes
   useEffect(() => {
     if (selectedCollege) {
+      const savedCtx = getUserAcademicContext();
+      saveUserAcademicContext({
+        collegeId: selectedCollege.id,
+        collegeName: selectedCollege.nameArabic
+      });
       fetchPrograms(selectedCollege.id).then((progs) => {
         setPrograms(progs);
-        setSelectedProgram(prev => (prev && progs.find(p => p.id === prev.id)) || (progs.length > 0 ? progs[0] : null));
+        setSelectedProgram(prev =>
+          (prev && progs.find(p => p.id === prev.id)) ||
+          progs.find(p => p.id === savedCtx.programId) ||
+          (progs.length > 0 ? progs[0] : null)
+        );
       });
     } else {
       setPrograms([]);
@@ -248,9 +282,14 @@ export default function AcademicStructureManager({
     }
   }, [selectedCollege]);
 
-  // Cascading Load: Study Levels when Program changes (Strictly locked to batch level for Batch Rep)
+  // Cascading Load: Study Levels when Program changes (Strictly locked to batch level for Batch Rep + Saved User Context)
   useEffect(() => {
     if (selectedProgram) {
+      const savedCtx = getUserAcademicContext();
+      saveUserAcademicContext({
+        programId: selectedProgram.id,
+        programName: selectedProgram.nameArabic
+      });
       fetchStudyLevels(selectedProgram.id).then((lvls) => {
         const scopedLvls =
           isBatchScoped && assignedStudyLevelId
@@ -258,7 +297,11 @@ export default function AcademicStructureManager({
             : lvls;
         const finalLvls = scopedLvls.length > 0 ? scopedLvls : lvls;
         setStudyLevels(finalLvls);
-        setSelectedLevel(prev => (prev && finalLvls.find(l => l.id === prev.id)) || (finalLvls.length > 0 ? finalLvls[0] : null));
+        setSelectedLevel(prev =>
+          (prev && finalLvls.find(l => l.id === prev.id)) ||
+          finalLvls.find(l => l.id === savedCtx.studyLevelId) ||
+          (finalLvls.length > 0 ? finalLvls[0] : null)
+        );
       });
     } else {
       setStudyLevels([]);
@@ -269,9 +312,18 @@ export default function AcademicStructureManager({
   // Cascading Load: Study Periods / Blocks when Level changes
   useEffect(() => {
     if (selectedLevel) {
+      const savedCtx = getUserAcademicContext();
+      saveUserAcademicContext({
+        studyLevelId: selectedLevel.id,
+        studyLevelName: selectedLevel.titleArabic
+      });
       fetchStudyPeriods(selectedLevel.id).then((periods) => {
         setStudyPeriods(periods);
-        setSelectedPeriod(prev => (prev && periods.find(p => p.id === prev.id)) || (periods.length > 0 ? periods[0] : null));
+        setSelectedPeriod(prev =>
+          (prev && periods.find(p => p.id === prev.id)) ||
+          periods.find(p => p.id === savedCtx.studyPeriodId) ||
+          (periods.length > 0 ? periods[0] : null)
+        );
       });
     } else {
       setStudyPeriods([]);
@@ -282,6 +334,10 @@ export default function AcademicStructureManager({
   // Cascading Load: Courses when Period changes
   useEffect(() => {
     if (selectedPeriod) {
+      saveUserAcademicContext({
+        studyPeriodId: selectedPeriod.id,
+        studyPeriodName: selectedPeriod.titleArabic
+      });
       fetchCourseOfferings(selectedPeriod.id).then((crs) => {
         setCourses(crs);
       });
@@ -821,6 +877,25 @@ export default function AcademicStructureManager({
         )}
       </div>
 
+      {/* Persistent Academic Context Bar */}
+      <AcademicContextBar
+        userRole={userRole}
+        assignedUniversityId={assignedUniversityId}
+        assignedStudyLevelId={assignedStudyLevelId}
+        onContextChange={(ctx) => {
+          const foundUniv = universities.find(u => u.id === ctx.universityId);
+          if (foundUniv) setSelectedUniversity(foundUniv);
+          const foundCol = colleges.find(c => c.id === ctx.collegeId);
+          if (foundCol) setSelectedCollege(foundCol);
+          const foundProg = programs.find(p => p.id === ctx.programId);
+          if (foundProg) setSelectedProgram(foundProg);
+          const foundLvl = studyLevels.find(l => l.id === ctx.studyLevelId);
+          if (foundLvl) setSelectedLevel(foundLvl);
+          const foundBlk = studyPeriods.find(p => p.id === ctx.studyPeriodId);
+          if (foundBlk) setSelectedPeriod(foundBlk);
+        }}
+      />
+
       {activeViewMode === 'analytics' ? (
         <AcademicAnalyticsDashboard
           selectedUniversity={selectedUniversity}
@@ -828,583 +903,338 @@ export default function AcademicStructureManager({
         />
       ) : (
         <>
-          {/* 2. Interactive Cascading Academic Hierarchy Explorer */}
+          {/* 2. Main Title Cards for Academic Hierarchy (Click any card to open its Standalone Popup Selector/Manager) */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        
-        {/* Column 1: Universities */}
-        <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
-              <div className="flex items-center gap-1.5 text-xs font-bold text-white">
-                <Building2 className="w-4 h-4 text-teal-400" />
-                <span>الجامعات ({universities.length})</span>
-              </div>
-              <button 
-                onClick={() => setShowAddUnivModal(true)}
-                className="px-2 py-1 rounded bg-teal-500/20 text-teal-300 hover:bg-teal-500/30 text-[11px] font-semibold flex items-center gap-0.5"
-                title="إضافة جامعة جديدة"
-              >
-                <Plus className="w-3 h-3" />
-                <span>إضافة</span>
-              </button>
-            </div>
+            {/* Main Card 1: Active University */}
+            <div className="bg-slate-900/90 border border-slate-800 hover:border-teal-500/50 rounded-2xl p-4 flex flex-col justify-between shadow-lg transition-all">
+              <div>
+                <div className="flex items-center justify-between pb-2.5 border-b border-slate-800 mb-3">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-teal-400">
+                    <Building2 className="w-4 h-4" />
+                    <span>الجامعة النشطة ({universities.length})</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddUnivModal(true)}
+                    className="px-2 py-1 rounded-lg bg-teal-500/20 text-teal-300 hover:bg-teal-500/30 text-[11px] font-bold flex items-center gap-0.5"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>إضافة</span>
+                  </button>
+                </div>
 
-            {universities.length === 0 ? (
-              <div className="text-slate-500 text-xs text-center py-6">
-                لا توجد جامعات مسجلة. اضغط "إضافة" أو ثبت البذور الافتراضية.
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {universities.map((u) => {
-                  const isSelected = selectedUniversity?.id === u.id;
-                  return (
-                    <div
-                      key={u.id}
-                      onClick={() => setSelectedUniversity(u)}
-                      className={`p-3 rounded-xl border cursor-pointer transition-all text-xs ${
-                        isSelected
-                          ? 'bg-teal-500/20 border-teal-500/60 text-white shadow-md'
-                          : 'bg-slate-950/70 border-slate-800/80 text-slate-300 hover:border-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded ${u.type === 'private' ? 'bg-amber-950 text-amber-300' : 'bg-slate-800 text-slate-300'}`}>
-                          {u.type === 'private' ? 'خاصة' : 'حكومية'}
-                        </span>
-                        <span className={`text-[10px] ${u.isActive ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {u.isActive ? '● نشط' : '○ معطل'}
-                        </span>
-                      </div>
-                      <div className="font-bold">{u.nameArabic}</div>
-                      <div className="text-[10px] text-slate-400 truncate mt-0.5" dir="ltr">{u.nameEnglish}</div>
-                      
-                      <div className="mt-2 pt-2 border-t border-slate-800/60 flex items-center justify-between text-[11px]">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditingUniv(u);
-                          }}
-                          className="text-slate-400 hover:text-teal-300 flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-slate-800"
-                          title="تعديل بيانات الجامعة"
-                        >
-                          <Edit2 className="w-3 h-3" />
-                          <span>تعديل</span>
-                        </button>
-
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleUniversityActive(u.id, u.isActive).then(() => {
-                              setUniversities(universities.map(item => item.id === u.id ? { ...item, isActive: !item.isActive } : item));
-                            });
-                          }}
-                          className="text-slate-400 hover:text-white flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-slate-800"
-                          title="تبديل حالة التنشيط"
-                        >
-                          {u.isActive ? <ToggleRight className="w-4 h-4 text-emerald-400" /> : <ToggleLeft className="w-4 h-4 text-slate-500" />}
-                          <span>{u.isActive ? 'تعطيل' : 'تفعيل'}</span>
-                        </button>
-
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleAttemptDelete('university', u.id, u.nameArabic, u.isActive);
-                          }}
-                          className="text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-rose-950/30"
-                          title="حذف الجامعة"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
+                {selectedUniversity ? (
+                  <div
+                    onClick={() => setActivePopupList('university')}
+                    className="p-3.5 rounded-xl bg-teal-950/30 border border-teal-500/50 cursor-pointer hover:bg-teal-950/50 transition-all space-y-1.5"
+                    title="اضغط لفتح نافذة جميع الجامعات"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-slate-900 text-teal-300 font-bold">
+                        {selectedUniversity.type === 'private' ? 'جامعة خاصة' : 'جامعة حكومية'}
+                      </span>
+                      <span className="text-[10px] text-emerald-400 font-bold">● نشط</span>
                     </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Column 2: Colleges */}
-        <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
-              <div className="flex items-center gap-1.5 text-xs font-bold text-white">
-                <GraduationCap className="w-4 h-4 text-indigo-400" />
-                <span>الكليات ({colleges.length})</span>
-              </div>
-              {selectedUniversity && (
-                <button 
-                  onClick={() => setShowAddCollegeModal(true)}
-                  className="px-2 py-1 rounded bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 text-[11px] font-semibold flex items-center gap-0.5"
-                  title="إضافة كلية جديدة"
-                >
-                  <Plus className="w-3 h-3" />
-                  <span>إضافة</span>
-                </button>
-              )}
-            </div>
-
-            {colleges.length === 0 ? (
-              <div className="text-slate-500 text-xs text-center py-6">
-                لا توجد كليات مسجلة لهذه الجامعة
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {colleges.map((c) => {
-                  const isSelected = selectedCollege?.id === c.id;
-                  return (
-                    <div
-                      key={c.id}
-                      onClick={() => setSelectedCollege(c)}
-                      className={`p-3 rounded-xl border cursor-pointer transition-all text-xs ${
-                        isSelected
-                          ? 'bg-indigo-500/20 border-indigo-500/60 text-white shadow-md'
-                          : 'bg-slate-950/70 border-slate-800/80 text-slate-300 hover:border-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-indigo-300 font-mono">
-                          {c.code || 'MED'}
-                        </span>
-                        <span className={`text-[10px] ${c.isActive ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {c.isActive ? '● نشط' : '○ معطل'}
-                        </span>
-                      </div>
-                      <div className="font-bold">{c.nameArabic}</div>
-                      <div className="text-[10px] text-slate-400 truncate mt-0.5" dir="ltr">{c.nameEnglish}</div>
-                      
-                      <div className="mt-2 pt-2 border-t border-slate-800/60 flex items-center justify-between text-[11px]">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditingCollege(c);
-                          }}
-                          className="text-slate-400 hover:text-indigo-300 flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-slate-800"
-                          title="تعديل بيانات الكلية"
-                        >
-                          <Edit2 className="w-3 h-3" />
-                          <span>تعديل</span>
-                        </button>
-
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleCollegeActive(c.id, c.isActive).then(() => {
-                              setColleges(colleges.map(item => item.id === c.id ? { ...item, isActive: !item.isActive } : item));
-                            });
-                          }}
-                          className="text-slate-400 hover:text-white flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-slate-800"
-                          title="تبديل حالة التنشيط"
-                        >
-                          {c.isActive ? <ToggleRight className="w-4 h-4 text-emerald-400" /> : <ToggleLeft className="w-4 h-4 text-slate-500" />}
-                          <span>{c.isActive ? 'تعطيل' : 'تفعيل'}</span>
-                        </button>
-
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleAttemptDelete('college', c.id, c.nameArabic, c.isActive);
-                          }}
-                          className="text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-rose-950/30"
-                          title="حذف الكلية"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Column 3: Academic Programs */}
-        <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
-              <div className="flex items-center gap-1.5 text-xs font-bold text-white">
-                <BookOpen className="w-4 h-4 text-emerald-400" />
-                <span>البرامج والمناهج ({programs.length})</span>
-              </div>
-              {selectedCollege && (
-                <button 
-                  onClick={() => setShowAddProgramModal(true)}
-                  className="px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 text-[11px] font-semibold flex items-center gap-0.5"
-                  title="إضافة برنامج أكاديمي"
-                >
-                  <Plus className="w-3 h-3" />
-                  <span>إضافة</span>
-                </button>
-              )}
-            </div>
-
-            {programs.length === 0 ? (
-              <div className="text-slate-500 text-xs text-center py-6">
-                لا توجد برامج مسجلة لهذه الكلية
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {programs.map((p) => {
-                  const isSelected = selectedProgram?.id === p.id;
-                  return (
-                    <div
-                      key={p.id}
-                      onClick={() => setSelectedProgram(p)}
-                      className={`p-3 rounded-xl border cursor-pointer transition-all text-xs ${
-                        isSelected
-                          ? 'bg-emerald-500/20 border-emerald-500/60 text-white shadow-md'
-                          : 'bg-slate-950/70 border-slate-800/80 text-slate-300 hover:border-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950 border border-emerald-800 text-emerald-300">
-                          {p.studySystem === 'block' ? 'نظام البلوكات (Block)' : p.studySystem === 'semester' ? 'نظام الفصول' : 'نظام سنوي'}
-                        </span>
-                        <span className={`text-[10px] ${p.isActive ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {p.isActive ? '● نشط' : '○ معطل'}
-                        </span>
-                      </div>
-                      <div className="font-bold">{p.nameArabic}</div>
-                      <div className="text-[10px] text-slate-400 truncate mt-0.5" dir="ltr">{p.nameEnglish}</div>
-                      
-                      <div className="mt-2 text-[10px] text-slate-400 flex items-center gap-2">
-                        <span>{p.totalRegularLevels} مستويات دراسية</span>
-                        {p.hasInternship && (
-                          <>
-                            <span>•</span>
-                            <span className="text-amber-300 font-semibold">+ سنة امتياز ({p.internshipDurationMonths || 12} شهر)</span>
-                          </>
-                        )}
-                      </div>
-
-                      <div className="mt-2 pt-2 border-t border-slate-800/60 flex items-center justify-between text-[11px]">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditingProgram(p);
-                          }}
-                          className="text-slate-400 hover:text-emerald-300 flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-slate-800"
-                          title="تعديل بيانات البرنامج"
-                        >
-                          <Edit2 className="w-3 h-3" />
-                          <span>تعديل</span>
-                        </button>
-
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleProgramActive(p.id, p.isActive).then(() => {
-                              setPrograms(programs.map(item => item.id === p.id ? { ...item, isActive: !item.isActive } : item));
-                            });
-                          }}
-                          className="text-slate-400 hover:text-white flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-slate-800"
-                          title="تبديل حالة التنشيط"
-                        >
-                          {p.isActive ? <ToggleRight className="w-4 h-4 text-emerald-400" /> : <ToggleLeft className="w-4 h-4 text-slate-500" />}
-                          <span>{p.isActive ? 'تعطيل' : 'تفعيل'}</span>
-                        </button>
-
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleAttemptDelete('program', p.id, p.nameArabic, p.isActive);
-                          }}
-                          className="text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-rose-950/30"
-                          title="حذف البرنامج"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Column 4: Study Levels & Internship Stage */}
-        <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
-              <div className="flex items-center gap-1.5 text-xs font-bold text-white">
-                <Layers className="w-4 h-4 text-amber-400" />
-                <span>المستويات وسنة الامتياز ({studyLevels.length})</span>
-              </div>
-              {selectedProgram && (
-                <button
-                  onClick={() => {
-                    setLevelForm({
-                      titleArabic: '',
-                      titleEnglish: '',
-                      order: studyLevels.length + 1,
-                      stageType: 'regular',
-                      durationMonths: 9
-                    });
-                    setShowAddLevelModal(true);
-                  }}
-                  className="px-2 py-1 rounded bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 text-[11px] font-semibold flex items-center gap-0.5"
-                  title="إضافة مستوى دراسي أو سنة امتياز جديدة"
-                >
-                  <Plus className="w-3 h-3" />
-                  <span>إضافة مستوى</span>
-                </button>
-              )}
-            </div>
-
-            {studyLevels.length === 0 ? (
-              <div className="text-slate-500 text-xs text-center py-6">
-                لا توجد مستويات دراسية مسجلة لهذا البرنامج. اضغط "+ إضافة مستوى".
-              </div>
-            ) : (
-              <div className="space-y-2 max-h-[420px] overflow-y-auto pl-1">
-                {studyLevels.map((lvl) => {
-                  const isSelected = selectedLevel?.id === lvl.id;
-                  const isIntern = lvl.stageType === 'internship';
-                  return (
-                    <div
-                      key={lvl.id}
-                      onClick={() => setSelectedLevel(lvl)}
-                      className={`p-2.5 rounded-xl border cursor-pointer transition-all text-xs space-y-2 ${
-                        isSelected
-                          ? isIntern 
-                            ? 'bg-amber-500/25 border-amber-400 text-white'
-                            : 'bg-teal-500/25 border-teal-400 text-white'
-                          : isIntern
-                          ? 'bg-amber-950/20 border-amber-700/40 text-amber-200 hover:border-amber-500'
-                          : 'bg-slate-950/70 border-slate-800/80 text-slate-300 hover:border-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold shrink-0 ${
-                              isIntern ? 'bg-amber-500/30 text-amber-300' : 'bg-slate-800 text-slate-400'
-                            }`}>
-                              {isIntern ? 'امتياز' : `م ${lvl.order}`}
-                            </span>
-                            <span className="font-bold truncate">{lvl.titleArabic}</span>
-                          </div>
-                          <div className="text-[10px] text-slate-400 mt-0.5 truncate" dir="ltr">
-                            {lvl.titleEnglish}
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          {lvl.durationMonths && (
-                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-900 text-amber-300 border border-slate-700 font-mono">
-                              {lvl.durationMonths}M
-                            </span>
-                          )}
-                          <span className={`text-[10px] ${lvl.isActive ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {lvl.isActive ? '●' : '○'}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* 3 Action Buttons: Edit, Toggle Active, Delete */}
-                      <div className="pt-1.5 border-t border-slate-800/60 flex items-center justify-between text-[11px]">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditingLevel(lvl);
-                          }}
-                          className="text-slate-400 hover:text-amber-300 flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-slate-800"
-                          title="تعديل المستوى الدراسي"
-                        >
-                          <Edit2 className="w-3 h-3" />
-                          <span>تعديل</span>
-                        </button>
-
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleStudyLevelActive(lvl.id, lvl.isActive).then(() => {
-                              setStudyLevels(studyLevels.map(item => item.id === lvl.id ? { ...item, isActive: !item.isActive } : item));
-                            });
-                          }}
-                          className="text-slate-400 hover:text-white flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-slate-800"
-                          title="تفعيل أو تعطيل المستوى"
-                        >
-                          {lvl.isActive ? <ToggleRight className="w-4 h-4 text-emerald-400" /> : <ToggleLeft className="w-4 h-4 text-slate-500" />}
-                          <span>{lvl.isActive ? 'تعطيل' : 'تفعيل'}</span>
-                        </button>
-
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleAttemptDelete('level', lvl.id, lvl.titleArabic, lvl.isActive);
-                          }}
-                          className="text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-rose-950/30"
-                          title="حذف المستوى الدراسي"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-
-      </div>
-
-      {/* 3. Deep Dive Explorer: Blocks & Courses within Selected Level */}
-      {selectedLevel && (
-        <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-6 shadow-xl">
-          <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800 mb-6">
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xs px-2.5 py-1 rounded bg-teal-500/20 text-teal-300 border border-teal-500/30 font-bold">
-                  {selectedLevel.titleArabic}
-                </span>
-                <span className="text-xs text-slate-400" dir="ltr">({selectedLevel.titleEnglish})</span>
-                {selectedLevel.stageType === 'internship' && (
-                  <span className="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-semibold">
-                    مرحلة سريرية مستقلة ({selectedLevel.durationMonths || 12} شهراً مناوبات في المستشفيات)
-                  </span>
+                    <div className="text-sm font-black text-white">{selectedUniversity.nameArabic}</div>
+                    <div className="text-[11px] text-slate-400 truncate" dir="ltr">{selectedUniversity.nameEnglish}</div>
+                  </div>
+                ) : (
+                  <div className="text-slate-500 text-xs text-center py-4">لا توجد جامعة محددة</div>
                 )}
               </div>
-              <p className="text-xs text-slate-400 mt-1">
-                استعراض وإدارة البلوكات والروتيشنات والمقررات التابعة للمستوى في {selectedUniversity?.nameArabic}
-              </p>
-            </div>
 
-            <button
-              onClick={() => {
-                setPeriodForm({
-                  titleArabic: '',
-                  titleEnglish: '',
-                  code: '',
-                  order: studyPeriods.length + 1
-                });
-                setShowAddPeriodModal(true);
-              }}
-              className="py-1.5 px-3 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>{selectedLevel.stageType === 'internship' ? 'إضافة روتيشن سريري / فترة' : 'إضافة بلوك دراسي (Block)'}</span>
-            </button>
-          </div>
-
-          {/* Blocks & Courses Subgrid */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            
-            {/* Left Column: Blocks List */}
-            <div className="space-y-3">
-              <h4 className="text-xs font-bold text-slate-300 flex items-center justify-between">
-                <span>البلوكات والفترات الدراسية (System Blocks)</span>
-                <span className="text-teal-400 font-mono text-[11px]">{studyPeriods.length} بلوك</span>
-              </h4>
-
-              {studyPeriods.length === 0 ? (
-                <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 text-slate-500 text-xs text-center">
-                  لم يتم تسجيل بلوكات لهذا المستوى بعد. اضغط "إضافة بلوك دراسي" لتسجيل بلوك جديد.
-                </div>
-              ) : (
-                studyPeriods.map((period) => {
-                  const isSelected = selectedPeriod?.id === period.id;
-                  return (
-                    <div
-                      key={period.id}
-                      onClick={() => setSelectedPeriod(period)}
-                      className={`p-3.5 rounded-xl border cursor-pointer transition-all text-xs ${
-                        isSelected
-                          ? 'bg-teal-500/20 border-teal-500 text-white shadow-md'
-                          : 'bg-slate-950/80 border-slate-800 text-slate-300 hover:border-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="font-mono text-teal-300 font-bold">{period.code}</span>
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] text-slate-400">الترتيب: {period.order}</span>
-                          <span className={`text-[10px] ${period.isActive ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {period.isActive ? '● نشط' : '○ معطل'}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="font-bold text-sm">{period.titleArabic}</div>
-                      <div className="text-[11px] text-slate-400 truncate mt-0.5" dir="ltr">{period.titleEnglish}</div>
-
-                      <div className="mt-2 pt-2 border-t border-slate-800/60 flex items-center justify-between text-[11px]">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditingPeriod(period);
-                          }}
-                          className="text-slate-400 hover:text-teal-300 flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-slate-800"
-                          title="تعديل بيانات البلوك"
-                        >
-                          <Edit2 className="w-3 h-3" />
-                          <span>تعديل</span>
-                        </button>
-
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleStudyPeriodActive(period.id, period.isActive).then(() => {
-                              setStudyPeriods(studyPeriods.map(item => item.id === period.id ? { ...item, isActive: !item.isActive } : item));
-                            });
-                          }}
-                          className="text-slate-400 hover:text-white flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-slate-800"
-                          title="تبديل حالة التنشيط"
-                        >
-                          {period.isActive ? <ToggleRight className="w-4 h-4 text-emerald-400" /> : <ToggleLeft className="w-4 h-4 text-slate-500" />}
-                          <span>{period.isActive ? 'تعطيل' : 'تفعيل'}</span>
-                        </button>
-
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleAttemptDelete('period', period.id, period.titleArabic, period.isActive);
-                          }}
-                          className="text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-rose-950/30"
-                          title="حذف البلوك الدراسي"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-
-            {/* Right Column: Courses & Sections in Selected Block */}
-            <div className="md:col-span-2 space-y-3">
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-bold text-slate-300 flex items-center gap-2">
-                  <span>المقررات والأقسام (Courses & Sections)</span>
-                  {selectedPeriod && <span className="text-teal-300 font-mono">في {selectedPeriod.titleArabic}</span>}
-                </h4>
-
-                {selectedPeriod && (
+              <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActivePopupList('university')}
+                  className="flex-1 py-2 px-3 rounded-xl bg-slate-800 hover:bg-teal-600 text-teal-300 hover:text-white text-xs font-bold transition-colors text-center"
+                >
+                  تبديل / إدارة الجامعات ({universities.length}) ▾
+                </button>
+                {selectedUniversity && (
                   <button
-                    onClick={() => setShowAddCourseModal(true)}
-                    className="py-1 px-2.5 rounded bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 text-xs font-semibold flex items-center gap-1 transition-colors"
+                    type="button"
+                    onClick={() => setEditingUniv(selectedUniversity)}
+                    className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
+                    title="تعديل الجامعة الحالية"
                   >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>إضافة مقرر</span>
+                    <Edit2 className="w-3.5 h-3.5" />
                   </button>
                 )}
               </div>
+            </div>
 
+            {/* Main Card 2: Active College */}
+            <div className="bg-slate-900/90 border border-slate-800 hover:border-indigo-500/50 rounded-2xl p-4 flex flex-col justify-between shadow-lg transition-all">
+              <div>
+                <div className="flex items-center justify-between pb-2.5 border-b border-slate-800 mb-3">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-400">
+                    <GraduationCap className="w-4 h-4" />
+                    <span>الكلية النشطة ({colleges.length})</span>
+                  </div>
+                  {selectedUniversity && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAddCollegeModal(true)}
+                      className="px-2 py-1 rounded-lg bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 text-[11px] font-bold flex items-center gap-0.5"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>إضافة</span>
+                    </button>
+                  )}
+                </div>
+
+                {selectedCollege ? (
+                  <div
+                    onClick={() => setActivePopupList('college')}
+                    className="p-3.5 rounded-xl bg-indigo-950/30 border border-indigo-500/50 cursor-pointer hover:bg-indigo-950/50 transition-all space-y-1.5"
+                    title="اضغط لفتح نافذة الكليات"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-slate-900 text-indigo-300 font-mono">
+                        {selectedCollege.code || 'MED'}
+                      </span>
+                      <span className="text-[10px] text-emerald-400 font-bold">● نشط</span>
+                    </div>
+                    <div className="text-sm font-black text-white">{selectedCollege.nameArabic}</div>
+                    <div className="text-[11px] text-slate-400 truncate" dir="ltr">{selectedCollege.nameEnglish}</div>
+                  </div>
+                ) : (
+                  <div className="text-slate-500 text-xs text-center py-4">لا توجد كلية مسجلة</div>
+                )}
+              </div>
+
+              <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActivePopupList('college')}
+                  className="flex-1 py-2 px-3 rounded-xl bg-slate-800 hover:bg-indigo-600 text-indigo-300 hover:text-white text-xs font-bold transition-colors text-center"
+                >
+                  تبديل / إدارة الكليات ({colleges.length}) ▾
+                </button>
+                {selectedCollege && (
+                  <button
+                    type="button"
+                    onClick={() => setEditingCollege(selectedCollege)}
+                    className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
+                    title="تعديل الكلية الحالية"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Main Card 3: Active Program / Specialty */}
+            <div className="bg-slate-900/90 border border-slate-800 hover:border-emerald-500/50 rounded-2xl p-4 flex flex-col justify-between shadow-lg transition-all">
+              <div>
+                <div className="flex items-center justify-between pb-2.5 border-b border-slate-800 mb-3">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-400">
+                    <BookOpen className="w-4 h-4" />
+                    <span>التخصص / البرنامج ({programs.length})</span>
+                  </div>
+                  {selectedCollege && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAddProgramModal(true)}
+                      className="px-2 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 text-[11px] font-bold flex items-center gap-0.5"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>إضافة</span>
+                    </button>
+                  )}
+                </div>
+
+                {selectedProgram ? (
+                  <div
+                    onClick={() => setActivePopupList('program')}
+                    className="p-3.5 rounded-xl bg-emerald-950/30 border border-emerald-500/50 cursor-pointer hover:bg-emerald-950/50 transition-all space-y-1.5"
+                    title="اضغط لفتح نافذة البرامج والتخصصات"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-slate-900 text-emerald-300 font-bold">
+                        {selectedProgram.studySystem === 'block' ? 'نظام البلوكات' : 'نظام الفصول'}
+                      </span>
+                      <span className="text-[10px] text-amber-300 font-bold">{selectedProgram.totalRegularLevels} سنوات</span>
+                    </div>
+                    <div className="text-sm font-black text-white">{selectedProgram.nameArabic}</div>
+                    <div className="text-[11px] text-slate-400 truncate" dir="ltr">{selectedProgram.nameEnglish}</div>
+                  </div>
+                ) : (
+                  <div className="text-slate-500 text-xs text-center py-4">لا يوجد تخصص محدد</div>
+                )}
+              </div>
+
+              <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActivePopupList('program')}
+                  className="flex-1 py-2 px-3 rounded-xl bg-slate-800 hover:bg-emerald-600 text-emerald-300 hover:text-white text-xs font-bold transition-colors text-center"
+                >
+                  تبديل / إدارة التخصصات ({programs.length}) ▾
+                </button>
+                {selectedProgram && (
+                  <button
+                    type="button"
+                    onClick={() => setEditingProgram(selectedProgram)}
+                    className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
+                    title="تعديل البرنامج الحالي"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Main Card 4: Active Study Level / Year */}
+            <div className="bg-slate-900/90 border border-slate-800 hover:border-amber-500/50 rounded-2xl p-4 flex flex-col justify-between shadow-lg transition-all">
+              <div>
+                <div className="flex items-center justify-between pb-2.5 border-b border-slate-800 mb-3">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-amber-400">
+                    <Layers className="w-4 h-4" />
+                    <span>المستوى الدراسي النشط ({studyLevels.length})</span>
+                  </div>
+                  {selectedProgram && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLevelForm({
+                          titleArabic: '',
+                          titleEnglish: '',
+                          order: studyLevels.length + 1,
+                          stageType: 'regular',
+                          durationMonths: 9
+                        });
+                        setShowAddLevelModal(true);
+                      }}
+                      className="px-2 py-1 rounded-lg bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 text-[11px] font-bold flex items-center gap-0.5"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>إضافة</span>
+                    </button>
+                  )}
+                </div>
+
+                {selectedLevel ? (
+                  <div
+                    onClick={() => setActivePopupList('level')}
+                    className="p-3.5 rounded-xl bg-amber-950/30 border border-amber-500/50 cursor-pointer hover:bg-amber-950/50 transition-all space-y-1.5"
+                    title="اضغط لفتح نافذة جميع المستويات والسنوات الدراسية"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-slate-900 text-amber-300 font-bold">
+                        {selectedLevel.stageType === 'internship' ? 'سنة الامتياز السريري' : `المستوى ${selectedLevel.order}`}
+                      </span>
+                      <span className="text-[10px] text-emerald-400 font-bold">● نشط</span>
+                    </div>
+                    <div className="text-sm font-black text-white">{selectedLevel.titleArabic}</div>
+                    <div className="text-[11px] text-slate-400 truncate" dir="ltr">{selectedLevel.titleEnglish}</div>
+                  </div>
+                ) : (
+                  <div className="text-slate-500 text-xs text-center py-4">لا يوجد مستوى محدد</div>
+                )}
+              </div>
+
+              <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActivePopupList('level')}
+                  className="flex-1 py-2 px-3 rounded-xl bg-slate-800 hover:bg-amber-600 text-amber-300 hover:text-white text-xs font-bold transition-colors text-center"
+                >
+                  تبديل / إدارة المستويات ({studyLevels.length}) ▾
+                </button>
+                {selectedLevel && (
+                  <button
+                    type="button"
+                    onClick={() => setEditingLevel(selectedLevel)}
+                    className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
+                    title="تعديل المستوى الحالي"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* 3. Selected Level Block Header & Courses Explorer */}
+          {selectedLevel && (
+            <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-5">
+              {/* Active Block Main Header Bar */}
+              <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-800">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold">
+                      {selectedLevel.titleArabic}
+                    </span>
+                    <span className="text-slate-500">←</span>
+                    <button
+                      type="button"
+                      onClick={() => setActivePopupList('period')}
+                      className="text-sm sm:text-base font-black text-white hover:text-teal-300 flex items-center gap-2 transition-colors"
+                    >
+                      <span>{selectedPeriod ? `البلوك النشط: ${selectedPeriod.titleArabic} (${selectedPeriod.code})` : 'اختر البلوك الدراسي من النافذة المنبثقة'}</span>
+                      <span className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-teal-600 text-teal-300 hover:text-white text-xs font-bold transition-colors">
+                        تبديل البلوك ({studyPeriods.length}) ▾
+                      </span>
+                    </button>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    يتم عرض المقررات الخاصة بالبلوك والمستوى المختارين فقط لمنع تداخل مواد السنوات الأخرى.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setActivePopupList('period')}
+                    className="py-2 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-teal-300 text-xs font-bold border border-slate-700"
+                  >
+                    قائمة البلوكات ({studyPeriods.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPeriodForm({
+                        titleArabic: '',
+                        titleEnglish: '',
+                        code: '',
+                        order: studyPeriods.length + 1
+                      });
+                      setShowAddPeriodModal(true);
+                    }}
+                    className="py-2 px-3.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>{selectedLevel.stageType === 'internship' ? 'إضافة روتيشن سريري' : 'إضافة بلوك دراسي'}</span>
+                  </button>
+                  {selectedPeriod && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAddCourseModal(true)}
+                      className="py-2 px-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>إضافة مقرر للبلوك</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Courses of the Active Block */}
               {!selectedPeriod ? (
-                <div className="p-8 bg-slate-950 rounded-xl border border-slate-800 text-center text-slate-500 text-xs">
-                  اختر بلوكاً دراسياً من القائمة لاستعراض المقررات والأقسام
+                <div className="p-8 bg-slate-950 rounded-xl border border-slate-800 text-center text-slate-400 text-xs">
+                  اضغط على "تبديل البلوك" أو "إضافة بلوك دراسي" لعرض وإدارة المقررات.
                 </div>
               ) : courses.length === 0 ? (
-                <div className="p-8 bg-slate-950 rounded-xl border border-slate-800 text-center text-slate-500 text-xs">
-                  لا توجد مقررات مضافة في هذا البلوك حتى الآن.
+                <div className="p-8 bg-slate-950 rounded-xl border border-slate-800 text-center text-slate-400 text-xs">
+                  لا توجد مقررات مضافة في ({selectedPeriod.titleArabic}) حتى الآن. اضغط "+ إضافة مقرر للبلوك".
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {courses.map((course) => (
-                    <div key={course.id} className="p-4 bg-slate-950 rounded-xl border border-slate-800 text-xs">
-                      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                    <div key={course.id} className="p-4 bg-slate-950 rounded-xl border border-slate-800 text-xs flex flex-col justify-between gap-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-teal-300 font-mono font-bold">
                             {course.code}
@@ -1413,61 +1243,279 @@ export default function AcademicStructureManager({
                           {course.titleEnglish && (
                             <span className="text-slate-400 text-xs" dir="ltr">({course.titleEnglish})</span>
                           )}
-                          <span className={`text-[10px] ${course.isActive ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {course.isActive ? '● نشط' : '○ معطل'}
-                          </span>
                         </div>
+                        <span className="text-slate-400 font-mono text-[11px]">{course.creditHours ?? 3} ساعات</span>
+                      </div>
 
-                        <div className="flex items-center gap-2">
-                          <span className="text-slate-400 font-mono">{course.creditHours ?? 3} ساعات معتمدة</span>
+                      <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                        <span className={`text-[10px] font-bold ${course.isActive ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {course.isActive ? '● مقرر نشط' : '○ مقرر معطل'}
+                        </span>
+                        <div className="flex items-center gap-1.5">
                           <button
                             onClick={() => setEditingCourse(course)}
-                            className="text-slate-400 hover:text-indigo-300 px-2 py-1 rounded hover:bg-slate-900 flex items-center gap-1"
-                            title="تعديل المقرر"
+                            className="text-slate-300 hover:text-indigo-300 px-2 py-1 rounded bg-slate-900 hover:bg-slate-800 flex items-center gap-1"
                           >
-                            <Edit2 className="w-3.5 h-3.5" />
+                            <Edit2 className="w-3 h-3" />
                             <span>تعديل</span>
                           </button>
-
                           <button
                             onClick={() => {
                               toggleCourseOfferingActive(course.id, course.isActive).then(() => {
                                 setCourses(courses.map(c => c.id === course.id ? { ...c, isActive: !c.isActive } : c));
                               });
                             }}
-                            className="text-slate-400 hover:text-white px-2 py-1 rounded hover:bg-slate-900 flex items-center gap-1"
-                            title="تبديل التنشيط"
+                            className="text-slate-300 hover:text-white px-2 py-1 rounded bg-slate-900 hover:bg-slate-800 flex items-center gap-1"
                           >
-                            {course.isActive ? <ToggleRight className="w-4 h-4 text-emerald-400" /> : <ToggleLeft className="w-4 h-4 text-slate-500" />}
+                            {course.isActive ? <ToggleRight className="w-3.5 h-3.5 text-emerald-400" /> : <ToggleLeft className="w-3.5 h-3.5 text-slate-500" />}
                             <span>{course.isActive ? 'تعطيل' : 'تفعيل'}</span>
                           </button>
-
                           <button
                             onClick={() => handleAttemptDelete('course', course.id, course.titleArabic, course.isActive)}
-                            className="text-slate-400 hover:text-rose-400 p-1.5 rounded hover:bg-rose-950/30"
-                            title="حذف المقرر الدراسي"
+                            className="text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-rose-950/30"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
-                      </div>
-
-                      {/* Sections: Theoretical & Practical */}
-                      <div className="pt-2 border-t border-slate-800/80 flex items-center gap-2 text-[11px] text-slate-400">
-                        <span>الأقسام المعتمدة:</span>
-                        <span className="text-teal-300">القسم النظري (Lectures)</span>
-                        <span>·</span>
-                        <span className="text-indigo-300">القسم العملي والمختبر (Practical / Lab)</span>
                       </div>
                     </div>
                   ))}
                 </div>
               )}
             </div>
+          )}
 
-          </div>
-        </div>
-      )}
+          {/* STANDALONE POPUP MODAL FOR UNIVERSITIES / COLLEGES / PROGRAMS / STUDY LEVELS / BLOCKS */}
+          {activePopupList && (
+            <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-start sm:items-center justify-center p-3 sm:p-4 overflow-y-auto overscroll-contain" dir="rtl">
+              <div className="bg-slate-900 border border-teal-500/40 rounded-2xl max-w-2xl w-full max-h-[88dvh] flex flex-col shadow-2xl my-auto overflow-hidden">
+                <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between gap-3 bg-slate-950/90">
+                  <div>
+                    <h3 className="text-sm sm:text-base font-black text-white">
+                      {activePopupList === 'university' && `نافذة اختيار وإدارة الجامعات (${universities.length})`}
+                      {activePopupList === 'college' && `نافذة اختيار وإدارة الكليات (${colleges.length})`}
+                      {activePopupList === 'program' && `نافذة اختيار وإدارة البرامج والتخصصات (${programs.length})`}
+                      {activePopupList === 'level' && `نافذة اختيار وإدارة المستويات والسنوات الدراسية (${studyLevels.length})`}
+                      {activePopupList === 'period' && `نافذة اختيار وإدارة البلوكات والفترات الدراسية (${studyPeriods.length})`}
+                    </h3>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      انقر على أي عنصر لاعتماده كعنوان رئيسي نشط وحفظه في إعداداتك تلقائياً
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target = activePopupList;
+                        setActivePopupList(null);
+                        if (target === 'university') setShowAddUnivModal(true);
+                        if (target === 'college') setShowAddCollegeModal(true);
+                        if (target === 'program') setShowAddProgramModal(true);
+                        if (target === 'level') setShowAddLevelModal(true);
+                        if (target === 'period') setShowAddPeriodModal(true);
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>إضافة جديد</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActivePopupList(null)}
+                      className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-4 overflow-y-auto space-y-2.5 flex-1">
+                  {activePopupList === 'university' && universities.map((u) => (
+                    <div
+                      key={u.id}
+                      onClick={() => {
+                        setSelectedUniversity(u);
+                        setActivePopupList(null);
+                      }}
+                      className={`p-3.5 rounded-xl border cursor-pointer transition-all text-xs flex items-center justify-between gap-3 ${
+                        selectedUniversity?.id === u.id
+                          ? 'bg-teal-500/20 border-teal-500 text-white shadow-md'
+                          : 'bg-slate-950/80 border-slate-800 text-slate-300 hover:border-slate-700'
+                      }`}
+                    >
+                      <div>
+                        <div className="font-bold text-sm">{u.nameArabic}</div>
+                        <div className="text-[11px] text-slate-400" dir="ltr">{u.nameEnglish}</div>
+                      </div>
+                      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={() => { setActivePopupList(null); setEditingUniv(u); }}
+                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1"
+                        >
+                          <Edit2 className="w-3 h-3" />
+                          <span>تعديل</span>
+                        </button>
+                        <button
+                          onClick={() => handleAttemptDelete('university', u.id, u.nameArabic, u.isActive)}
+                          className="p-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-400"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+
+                  {activePopupList === 'college' && colleges.map((c) => (
+                    <div
+                      key={c.id}
+                      onClick={() => {
+                        setSelectedCollege(c);
+                        setActivePopupList(null);
+                      }}
+                      className={`p-3.5 rounded-xl border cursor-pointer transition-all text-xs flex items-center justify-between gap-3 ${
+                        selectedCollege?.id === c.id
+                          ? 'bg-indigo-500/20 border-indigo-500 text-white shadow-md'
+                          : 'bg-slate-950/80 border-slate-800 text-slate-300 hover:border-slate-700'
+                      }`}
+                    >
+                      <div>
+                        <div className="font-bold text-sm">{c.nameArabic} ({c.code})</div>
+                        <div className="text-[11px] text-slate-400" dir="ltr">{c.nameEnglish}</div>
+                      </div>
+                      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={() => { setActivePopupList(null); setEditingCollege(c); }}
+                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1"
+                        >
+                          <Edit2 className="w-3 h-3" />
+                          <span>تعديل</span>
+                        </button>
+                        <button
+                          onClick={() => handleAttemptDelete('college', c.id, c.nameArabic, c.isActive)}
+                          className="p-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-400"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+
+                  {activePopupList === 'program' && programs.map((p) => (
+                    <div
+                      key={p.id}
+                      onClick={() => {
+                        setSelectedProgram(p);
+                        setActivePopupList(null);
+                      }}
+                      className={`p-3.5 rounded-xl border cursor-pointer transition-all text-xs flex items-center justify-between gap-3 ${
+                        selectedProgram?.id === p.id
+                          ? 'bg-emerald-500/20 border-emerald-500 text-white shadow-md'
+                          : 'bg-slate-950/80 border-slate-800 text-slate-300 hover:border-slate-700'
+                      }`}
+                    >
+                      <div>
+                        <div className="font-bold text-sm">{p.nameArabic}</div>
+                        <div className="text-[11px] text-slate-400" dir="ltr">{p.nameEnglish}</div>
+                      </div>
+                      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={() => { setActivePopupList(null); setEditingProgram(p); }}
+                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1"
+                        >
+                          <Edit2 className="w-3 h-3" />
+                          <span>تعديل</span>
+                        </button>
+                        <button
+                          onClick={() => handleAttemptDelete('program', p.id, p.nameArabic, p.isActive)}
+                          className="p-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-400"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+
+                  {activePopupList === 'level' && studyLevels.map((lvl) => (
+                    <div
+                      key={lvl.id}
+                      onClick={() => {
+                        setSelectedLevel(lvl);
+                        setActivePopupList(null);
+                      }}
+                      className={`p-3.5 rounded-xl border cursor-pointer transition-all text-xs flex items-center justify-between gap-3 ${
+                        selectedLevel?.id === lvl.id
+                          ? 'bg-amber-500/20 border-amber-400 text-white shadow-md'
+                          : 'bg-slate-950/80 border-slate-800 text-slate-300 hover:border-slate-700'
+                      }`}
+                    >
+                      <div>
+                        <div className="font-bold text-sm flex items-center gap-2">
+                          <span className="px-2 py-0.5 rounded bg-slate-900 text-amber-300 text-[10px]">
+                            {lvl.stageType === 'internship' ? 'امتياز' : `م ${lvl.order}`}
+                          </span>
+                          <span>{lvl.titleArabic}</span>
+                        </div>
+                        <div className="text-[11px] text-slate-400 mt-0.5" dir="ltr">{lvl.titleEnglish}</div>
+                      </div>
+                      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={() => { setActivePopupList(null); setEditingLevel(lvl); }}
+                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1"
+                        >
+                          <Edit2 className="w-3 h-3" />
+                          <span>تعديل</span>
+                        </button>
+                        <button
+                          onClick={() => handleAttemptDelete('level', lvl.id, lvl.titleArabic, lvl.isActive)}
+                          className="p-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-400"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+
+                  {activePopupList === 'period' && studyPeriods.map((period) => (
+                    <div
+                      key={period.id}
+                      onClick={() => {
+                        setSelectedPeriod(period);
+                        setActivePopupList(null);
+                      }}
+                      className={`p-3.5 rounded-xl border cursor-pointer transition-all text-xs flex items-center justify-between gap-3 ${
+                        selectedPeriod?.id === period.id
+                          ? 'bg-teal-500/20 border-teal-400 text-white shadow-md'
+                          : 'bg-slate-950/80 border-slate-800 text-slate-300 hover:border-slate-700'
+                      }`}
+                    >
+                      <div>
+                        <div className="font-bold text-sm flex items-center gap-2">
+                          <span className="px-2 py-0.5 rounded bg-slate-900 text-teal-300 font-mono text-[10px]">{period.code}</span>
+                          <span>{period.titleArabic}</span>
+                        </div>
+                        <div className="text-[11px] text-slate-400 mt-0.5" dir="ltr">{period.titleEnglish}</div>
+                      </div>
+                      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={() => { setActivePopupList(null); setEditingPeriod(period); }}
+                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1"
+                        >
+                          <Edit2 className="w-3 h-3" />
+                          <span>تعديل</span>
+                        </button>
+                        <button
+                          onClick={() => handleAttemptDelete('period', period.id, period.titleArabic, period.isActive)}
+                          className="p-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-400"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
         </>
       )}
 

@@ -920,17 +920,21 @@ export default function ExamTakingModal({
                         </span>
                       </div>
 
-                      {rev.questionType === 'essay' ? (
+                      {(rev.questionType === 'essay' || rev.questionType === 'fill_blank') ? (
                         <div className="space-y-2 text-xs">
                           <div className="p-3 rounded-lg bg-slate-950/80 border border-slate-800">
-                            <span className="text-slate-400 font-semibold block mb-1">إجابتك المقالية:</span>
-                            <p className="text-slate-200">{rev.studentAnswer || 'لم تتم الإجابة'}</p>
+                            <span className="text-slate-400 font-semibold block mb-1">
+                              {rev.questionType === 'fill_blank' ? 'إجابتك في الفراغ:' : 'إجابتك المقالية:'}
+                            </span>
+                            <p className="text-slate-200 font-semibold">{rev.studentAnswer || 'لم تتم الإجابة'}</p>
                           </div>
                           {rev.modelAnswerArabic && (
                             <div className="p-3 rounded-lg bg-teal-950/40 border border-teal-800/50">
-                              <span className="text-teal-300 font-semibold block mb-1">الإجابة النموذجية المعتمدة:</span>
+                              <span className="text-teal-300 font-semibold block mb-1">
+                                {rev.questionType === 'fill_blank' ? 'الكلمة / الإجابة الصحيحة المعتمدة للفراغ:' : 'الإجابة النموذجية المعتمدة:'}
+                              </span>
                               <p
-                                className="text-slate-200"
+                                className="text-slate-200 font-semibold"
                                 dir={!/[\u0600-\u06FF]/.test(rev.modelAnswerArabic || '') ? 'ltr' : 'rtl'}
                               >
                                 {rev.modelAnswerArabic}
@@ -1079,6 +1083,8 @@ export default function ExamTakingModal({
                     <span className="text-xs text-slate-400 bg-slate-800 px-2.5 py-1 rounded-lg">
                       {currentQuestion.questionType === 'essay'
                         ? 'سؤال مقالي'
+                        : currentQuestion.questionType === 'fill_blank'
+                        ? 'إكمال الفراغ'
                         : currentQuestion.questionType === 'true_false'
                         ? 'صح وخطأ'
                         : 'اختيار من متعدد'}
@@ -1111,6 +1117,29 @@ export default function ExamTakingModal({
                           </div>
                         )}
                       </div>
+
+                      {/* Question Type: Fill in the Blank Answer Input */}
+                      {currentQuestion.questionType === 'fill_blank' && (
+                        <div className="space-y-2 pt-2">
+                          <label className="block text-xs font-bold text-sky-300">
+                            {isEnglishQuestion
+                              ? 'Type the missing medical word / term in the blank:'
+                              : 'اكتب الكلمة أو المصطلح الطبي المناسب لإكمال الفراغ:'}
+                          </label>
+                          <input
+                            type="text"
+                            value={answers[currentQuestion.id] || ''}
+                            onChange={(e) => handleSelectOption(currentQuestion.id, e.target.value)}
+                            dir={isEnglishQuestion ? 'ltr' : 'rtl'}
+                            placeholder={
+                              isEnglishQuestion
+                                ? 'Type exact answer here (auto-saved)...'
+                                : 'اكتب إجابة الفراغ هنا بدقة (يتم الحفظ التلقائي فور الكتابة)...'
+                            }
+                            className="w-full px-4 py-3.5 rounded-xl bg-slate-950/90 border border-sky-700/70 text-sm font-bold text-white focus:outline-none focus:border-sky-400"
+                          />
+                        </div>
+                      )}
 
                       {/* Question Type: Essay Answer Area */}
                       {currentQuestion.questionType === 'essay' && (

@@ -39,11 +39,13 @@ import {
   AssessmentType, 
   AssessmentStatus,
   AssessmentLanguage,
+  BankQuestionTypeMode,
   ResultReleasePolicy, 
   AssessmentResult,
   StudyLevel,
   University,
   UserRole,
+  UserAcademicContext,
   DAR_AL_SALAM_SEED
 } from '../../types/umed.ts';
 import { 
@@ -70,10 +72,20 @@ import {
   resolveResultPublicDisplayName,
   getQuestionsForAssessmentPreview
 } from '../../services/assessmentService.ts';
-import { fetchStudyLevels, fetchPrograms, fetchColleges, fetchUniversities } from '../../services/academicService.ts';
+import {
+  fetchStudyLevels,
+  fetchPrograms,
+  fetchColleges,
+  fetchUniversities,
+  getUserAcademicContext,
+  saveUserAcademicContext,
+  subscribeToUserAcademicContext,
+  inferAcademicContextFromText
+} from '../../services/academicService.ts';
 import { getRoleLabelArabic } from '../../services/batchGovernanceService.ts';
 import BulkQuestionImportModal from './BulkQuestionImportModal.tsx';
 import ExamTakingModal from '../assessment/ExamTakingModal.tsx';
+import { AcademicContextBar } from '../common/AcademicContextModal.tsx';
 
 interface AssessmentManagerProps {
   universityId: string;
@@ -91,23 +103,28 @@ export default function AssessmentManager({
   const isOwner = userRole === 'platform_owner';
   const isBatchScoped = (userRole === 'batch_rep' || userRole === 'department_head') && Boolean(assignedStudyLevelId);
 
+  const [academicCtx, setAcademicCtx] = useState<UserAcademicContext>(() => getUserAcademicContext());
   const [universities, setUniversities] = useState<University[]>([DAR_AL_SALAM_SEED.university]);
-  const [universityId, setUniversityId] = useState<string>(initialUniversityId || 'univ-dar-al-salam');
+  const [universityId, setUniversityId] = useState<string>(
+    initialUniversityId || academicCtx.universityId || 'univ-dar-al-salam'
+  );
   const [activeTab, setActiveTab] = useState<'banks' | 'assessments' | 'results'>('banks');
 
   // Dynamic Study Levels
   const [studyLevels, setStudyLevels] = useState<StudyLevel[]>(DAR_AL_SALAM_SEED.studyLevels);
 
-  // Question Banks State
+  // Question Banks State + Standalone Popup Selector Modal
   const [banks, setBanks] = useState<QuestionBank[]>([]);
   const [selectedBank, setSelectedBank] = useState<QuestionBank | null>(null);
   const [bankQuestions, setBankQuestions] = useState<QuestionItemFull[]>([]);
+  const [showBankSelectorModal, setShowBankSelectorModal] = useState<boolean>(false);
   
   // New Bank Form State
   const [showNewBankForm, setShowNewBankForm] = useState<boolean>(false);
   const [newBankTitle, setNewBankTitle] = useState<string>('');
   const [newBankDesc, setNewBankDesc] = useState<string>('');
   const [newBankLanguage, setNewBankLanguage] = useState<AssessmentLanguage>('ar');
+  const [newBankTypeMode, setNewBankTypeMode] = useState<BankQuestionTypeMode>('hybrid');
 
   // Edit Bank Modal State
   const [editingBank, setEditingBank] = useState<QuestionBank | null>(null);
@@ -132,15 +149,18 @@ export default function AssessmentManager({
   const [editOptC, setEditOptC] = useState<string>('');
   const [editOptD, setEditOptD] = useState<string>('');
 
-  // Assessments State
+  // Assessments State + Standalone Popup Selector Modal
   const [assessments, setAssessments] = useState<Assessment[]>([]);
   const [assessmentFilterType, setAssessmentFilterType] = useState<'all' | 'exam' | 'competition'>('all');
+  const [showAssessmentSelectorModal, setShowAssessmentSelectorModal] = useState<boolean>(false);
   const [showNewAssessmentForm, setShowNewAssessmentForm] = useState<boolean>(false);
   const [assessmentType, setAssessmentType] = useState<AssessmentType>('exam');
   const [assessmentLanguage, setAssessmentLanguage] = useState<AssessmentLanguage>('ar');
   const [titleArabic, setTitleArabic] = useState<string>('');
   const [descArabic, setDescArabic] = useState<string>('');
-  const [studyLevelId, setStudyLevelId] = useState<string>(assignedStudyLevelId || 'lvl-4');
+  const [studyLevelId, setStudyLevelId] = useState<string>(
+    assignedStudyLevelId || academicCtx.studyLevelId || 'lvl-2'
+  );
   const [selectedBankForAssessment, setSelectedBankForAssessment] = useState<string>('');
   const [durationMinutes, setDurationMinutes] = useState<number>(45);
   const [enableExamTimer, setEnableExamTimer] = useState<boolean>(true);
@@ -208,6 +228,20 @@ export default function AssessmentManager({
     }
   }, [initialUniversityId, isOwner]);
 
+  // Subscribe to persistent user academic context changes across the platform
+  useEffect(() => {
+    const unsub = subscribeToUserAcademicContext((ctx) => {
+      setAcademicCtx(ctx);
+      if (ctx.universityId && isOwner) {
+        setUniversityId(ctx.universityId);
+      }
+      if (!isBatchScoped && ctx.studyLevelId) {
+        setStudyLevelId(ctx.studyLevelId);
+      }
+    });
+    return unsub;
+  }, [isOwner, isBatchScoped]);
+
   const loadData = async () => {
     setLoading(true);
     try {
@@ -215,7 +249,7 @@ export default function AssessmentManager({
       if (univList.length > 0) setUniversities(univList);
 
       // Load dynamic study levels for this university
-      let programId = 'prog-mbbs';
+      let programId = academicCtx.programId || 'prog-mbbs';
       try {
         const cols = await fetchColleges(universityId);
         if (cols.length > 0) {
@@ -239,20 +273,32 @@ export default function AssessmentManager({
         }
       }
 
-      const scopedAssessments = isBatchScoped && assignedStudyLevelId
-        ? asmntList.filter(a => a.studyLevelId === assignedStudyLevelId)
+      const activeLevelFilter = isBatchScoped && assignedStudyLevelId
+        ? assignedStudyLevelId
+        : academicCtx.strictScope
+        ? studyLevelId
+        : '';
+
+      const scopedAssessments = activeLevelFilter
+        ? asmntList.filter(a => !a.studyLevelId || a.studyLevelId === activeLevelFilter)
         : asmntList;
-      const scopedBanks = isBatchScoped && assignedStudyLevelId
-        ? bankList.filter(b => !b.studyLevelId || b.studyLevelId === assignedStudyLevelId)
+
+      const scopedBanks = activeLevelFilter
+        ? bankList.filter(b => {
+            const inferred = inferAcademicContextFromText(`${b.titleArabic || ''} ${b.blockName || ''}`);
+            const effectiveBankLevel = b.studyLevelId || inferred.studyLevelId;
+            return !effectiveBankLevel || effectiveBankLevel === activeLevelFilter;
+          })
         : bankList;
 
-      setBanks(scopedBanks);
+      const finalBanks = scopedBanks.length > 0 ? scopedBanks : bankList;
+      setBanks(finalBanks);
       setAssessments(scopedAssessments);
 
-      if (scopedBanks.length > 0) {
+      if (finalBanks.length > 0) {
         const activeBank = selectedBank
-          ? scopedBanks.find(b => b.id === selectedBank.id) || scopedBanks[0]
-          : scopedBanks[0];
+          ? finalBanks.find(b => b.id === selectedBank.id) || finalBanks[0]
+          : finalBanks[0];
         setSelectedBank(activeBank);
         if (!selectedBankForAssessment) setSelectedBankForAssessment(activeBank.id);
         const qList = await getBankQuestions(activeBank.id);
@@ -270,10 +316,19 @@ export default function AssessmentManager({
 
   useEffect(() => {
     loadData();
-  }, [universityId, assignedStudyLevelId]);
+  }, [universityId, assignedStudyLevelId, studyLevelId, academicCtx.strictScope]);
 
   const handleSelectBank = async (bank: QuestionBank) => {
     setSelectedBank(bank);
+    const inferred = inferAcademicContextFromText(`${bank.titleArabic || ''} ${bank.blockName || ''}`);
+    const bankLevel = bank.studyLevelId || inferred.studyLevelId;
+    if (bankLevel && !isBatchScoped) {
+      setStudyLevelId(bankLevel);
+      saveUserAcademicContext({
+        studyLevelId: bankLevel,
+        ...(inferred.blockName ? { studyPeriodName: inferred.blockName } : {})
+      });
+    }
     setLoading(true);
     try {
       const qList = await getBankQuestions(bank.id);
@@ -291,23 +346,31 @@ export default function AssessmentManager({
     setStatusMsg(null);
 
     try {
+      const inferred = inferAcademicContextFromText(newBankTitle.trim());
+      const resolvedLevelId = isBatchScoped
+        ? assignedStudyLevelId
+        : inferred.studyLevelId || studyLevelId || academicCtx.studyLevelId || 'lvl-2';
       const created = await createQuestionBank({
         titleArabic: newBankTitle.trim(),
         descriptionArabic: newBankDesc.trim(),
         language: newBankLanguage,
+        questionTypeMode: newBankTypeMode,
         universityId,
-        studyLevelId: isBatchScoped ? assignedStudyLevelId : undefined,
+        studyLevelId: resolvedLevelId,
+        blockName: inferred.blockName || academicCtx.studyPeriodName || newBankTitle.trim(),
         createdBy: userRole
       });
-      setBanks(prev => [...prev, created]);
+      setBanks(prev => [created, ...prev]);
       setSelectedBank(created);
       setSelectedBankForAssessment(created.id);
       setBankQuestions([]);
       setNewBankTitle('');
       setNewBankDesc('');
       setNewBankLanguage('ar');
+      setNewBankTypeMode('hybrid');
       setShowNewBankForm(false);
-      setStatusMsg({ type: 'success', text: 'تم إنشاء بنك الأسئلة بنجاح' });
+      setShowBankSelectorModal(false);
+      setStatusMsg({ type: 'success', text: 'تم إنشاء بنك الأسئلة وربطه بمستواك الدراسي بنجاح ✓' });
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err.message || 'فشل إنشاء البنك' });
     }
@@ -326,7 +389,9 @@ export default function AssessmentManager({
           titleEnglish: editingBank.titleEnglish?.trim() || '',
           descriptionArabic: editingBank.descriptionArabic?.trim() || '',
           language: editingBank.language || 'ar',
-          studyLevelId: editingBank.studyLevelId
+          questionTypeMode: editingBank.questionTypeMode || 'hybrid',
+          studyLevelId: editingBank.studyLevelId || studyLevelId,
+          blockName: editingBank.blockName
         },
         universityId
       );
@@ -720,6 +785,18 @@ export default function AssessmentManager({
         </div>
       </div>
 
+      {/* Persistent User Academic Context Bar & Popup Selector */}
+      <AcademicContextBar
+        userRole={userRole}
+        lockedUniversityId={!isOwner ? initialUniversityId : undefined}
+        lockedStudyLevelId={isBatchScoped ? assignedStudyLevelId : undefined}
+        onChange={(ctx) => {
+          setAcademicCtx(ctx);
+          if (isOwner && ctx.universityId) setUniversityId(ctx.universityId);
+          if (!isBatchScoped && ctx.studyLevelId) setStudyLevelId(ctx.studyLevelId);
+        }}
+      />
+
       {/* Offline / Outbox Synchronization Status Bar */}
       <div className="px-4 py-2.5 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
         <div className="flex flex-wrap items-center gap-2.5">
@@ -774,215 +851,204 @@ export default function AssessmentManager({
         </div>
       )}
 
-      {/* TAB 1: QUESTION BANKS */}
+      {/* TAB 1: QUESTION BANKS (Main Title Header + Standalone Popup Selector) */}
       {activeTab === 'banks' && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-sm font-bold text-slate-200">بنوك الأسئلة ({banks.length})</h3>
-              <div className="flex items-center gap-1.5">
-                {selectedBank && (
+        <div className="space-y-5">
+          {/* Active Question Bank Main Header Bar */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-start sm:items-center gap-3 min-w-0">
+              <div className="w-11 h-11 rounded-2xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-400 shrink-0">
+                <BookOpen className="w-5 h-5" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[11px] text-slate-400 font-semibold">بنك الأسئلة المختار حالياً:</span>
+                  <span className="px-2 py-0.5 rounded-full bg-teal-950/90 border border-teal-700/60 text-[10px] font-bold text-teal-300">
+                    إجمالي البنوك المتاحة لتخصصك ومستواك: {banks.length}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 mt-1">
                   <button
                     type="button"
-                    onClick={() => setShowBulkImportModal(true)}
-                    className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1 transition-colors shadow-md"
+                    onClick={() => setShowBankSelectorModal(true)}
+                    className="text-base sm:text-lg font-black text-white hover:text-teal-300 transition-colors flex items-center gap-2 text-right"
+                    title="اضغط لفتح نافذة اختيار وإدارة بنوك الأسئلة"
                   >
-                    <Upload className="w-3.5 h-3.5" />
-                    <span>استيراد دفعة أسئلة</span>
+                    <span>{selectedBank ? selectedBank.titleArabic : 'اختر بنك أسئلة من النافذة المنبثقة'}</span>
+                    <span className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-teal-600 text-teal-300 hover:text-white text-xs font-bold transition-colors">
+                      تبديل البنك ▾
+                    </span>
                   </button>
+                </div>
+                {selectedBank && (
+                  <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[11px] text-slate-400">
+                    <span className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800 text-teal-300 font-bold">
+                      اللغة: {selectedBank.language === 'en' ? 'English' : selectedBank.language === 'bilingual' ? 'ثنائي اللغة (Ar+En)' : 'العربية'}
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800 text-amber-300 font-bold">
+                      النمط: {selectedBank.questionTypeMode === 'mcq' ? 'اختيارات فقط' : selectedBank.questionTypeMode === 'true_false' ? 'صح وخطأ فقط' : selectedBank.questionTypeMode === 'fill_blank' ? 'إكمال الفراغ فقط' : selectedBank.questionTypeMode === 'essay' ? 'مقالي فقط' : 'بنك هجين شامل'}
+                    </span>
+                    <span>•</span>
+                    <span>عدد الأسئلة: <strong className="text-white">{bankQuestions.length}</strong></span>
+                    {selectedBank.studyLevelId && (
+                      <>
+                        <span>•</span>
+                        <span className="text-indigo-300 font-semibold">{getLevelLabel(selectedBank.studyLevelId)}</span>
+                      </>
+                    )}
+                    {selectedBank.blockName && (
+                      <>
+                        <span>•</span>
+                        <span className="text-emerald-300 font-semibold">{selectedBank.blockName}</span>
+                      </>
+                    )}
+                  </div>
                 )}
-                <button
-                  type="button"
-                  onClick={() => setShowNewBankForm(true)}
-                  className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1 transition-colors"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>بنك جديد</span>
-                </button>
               </div>
             </div>
 
-            {showNewBankForm && (
-              <form onSubmit={handleCreateBank} className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-3">
-                <div>
-                  <label className="text-[11px] text-slate-400 block mb-1 font-bold">لغة بنك الأسئلة الافتراضية:</label>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    {([
-                      { id: 'ar', label: 'العربية' },
-                      { id: 'en', label: 'English' },
-                      { id: 'bilingual', label: 'ثنائي اللغة' }
-                    ] as const).map((langOpt) => (
-                      <button
-                        key={langOpt.id}
-                        type="button"
-                        onClick={() => setNewBankLanguage(langOpt.id)}
-                        className={`py-1.5 px-2 rounded-lg text-[11px] font-bold border transition-all ${
-                          newBankLanguage === langOpt.id
-                            ? 'bg-teal-600 text-white border-teal-400'
-                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
-                        }`}
-                      >
-                        {langOpt.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <input
-                  type="text"
-                  placeholder={newBankLanguage === 'en' ? 'Question Bank Title (e.g., CVS Pharmacology Bank)' : 'عنوان بنك الأسئلة (مثال: بنك أسئلة الجهاز التنفسي)'}
-                  value={newBankTitle}
-                  onChange={(e) => setNewBankTitle(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-teal-500"
-                  required
-                />
-                <textarea
-                  placeholder="وصف مختصر..."
-                  value={newBankDesc}
-                  onChange={(e) => setNewBankDesc(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-teal-500"
-                  rows={2}
-                />
-                <div className="flex items-center justify-end gap-2 pt-1">
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={() => setShowBankSelectorModal(true)}
+                className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 transition-colors"
+              >
+                <BookOpen className="w-3.5 h-3.5 text-teal-400" />
+                <span>قائمة بنوك الأسئلة ({banks.length})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowNewBankForm(!showNewBankForm)}
+                className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-md"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>بنك أسئلة جديد</span>
+              </button>
+
+              {selectedBank && (
+                <>
                   <button
                     type="button"
-                    onClick={() => setShowNewBankForm(false)}
-                    className="px-3 py-1 rounded-lg bg-slate-800 text-slate-400 text-xs font-semibold"
+                    onClick={() => setEditingBank(selectedBank)}
+                    className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
                   >
-                    إلغاء
+                    <Edit2 className="w-3.5 h-3.5" />
+                    <span>تعديل البنك</span>
                   </button>
                   <button
-                    type="submit"
-                    className="px-3 py-1 rounded-lg bg-teal-600 text-white text-xs font-bold"
+                    type="button"
+                    onClick={() => setShowBulkImportModal(true)}
+                    className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-lg"
                   >
-                    حفظ
+                    <Upload className="w-4 h-4" />
+                    <span>واضع الاختبار الذكي / استيراد دفعة</span>
                   </button>
-                </div>
-              </form>
-            )}
-
-            <div className="space-y-2">
-              {banks.map((b) => (
-                <div
-                  key={b.id}
-                  onClick={() => handleSelectBank(b)}
-                  className={`w-full text-right p-3.5 rounded-xl border text-xs transition-all cursor-pointer ${
-                    selectedBank?.id === b.id
-                      ? 'bg-teal-950/70 border-teal-500 text-teal-200'
-                      : 'bg-slate-900/80 border-slate-800 text-slate-300 hover:bg-slate-800'
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="space-y-1">
-                      <div className="font-bold text-sm text-white">{b.titleArabic}</div>
-                      <span className="inline-block px-2 py-0.5 rounded bg-slate-950/90 border border-slate-800 text-[10px] font-bold text-teal-300">
-                        اللغة: {b.language === 'en' ? 'English' : b.language === 'bilingual' ? 'ثنائي اللغة (Ar+En)' : 'العربية'}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        type="button"
-                        onClick={() => setEditingBank(b)}
-                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-                        title="تعديل البنك"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setConfirmDeleteBankId(b.id)}
-                        className="p-1.5 rounded-lg bg-rose-950/50 hover:bg-rose-900/70 text-rose-400 transition-colors"
-                        title="حذف البنك"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                  {b.descriptionArabic && <div className="text-[11px] text-slate-400 mt-1">{b.descriptionArabic}</div>}
-
-                  <div
-                    className="mt-2.5 pt-2 border-t border-slate-800/70 flex flex-wrap items-center gap-1.5"
-                    onClick={(e) => e.stopPropagation()}
+                  <button
+                    type="button"
+                    onClick={() => setShowNewQuestionForm(!showNewQuestionForm)}
+                    className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-md"
                   >
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        await handleSelectBank(b);
-                        setShowBulkImportModal(true);
-                      }}
-                      className="flex-1 py-1.5 px-2.5 rounded-lg bg-amber-600/90 hover:bg-amber-500 text-white text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors"
-                    >
-                      <Upload className="w-3.5 h-3.5" />
-                      <span>استيراد دفعة أسئلة (بدون إنترنت)</span>
-                    </button>
-                  </div>
-
-                  {confirmDeleteBankId === b.id && (
-                    <div
-                      onClick={(e) => e.stopPropagation()}
-                      className="mt-3 p-2.5 rounded-lg bg-rose-950/70 border border-rose-800 flex items-center justify-between gap-2"
-                    >
-                      <span className="text-[11px] text-rose-200 font-bold">تأكيد حذف البنك وأسئلته؟</span>
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteBank(b.id)}
-                          className="px-2.5 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-bold"
-                        >
-                          نعم، احذف
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setConfirmDeleteBankId(null)}
-                          className="px-2 py-1 rounded bg-slate-800 text-slate-300 text-[11px]"
-                        >
-                          إلغاء
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ))}
+                    <Plus className="w-4 h-4" />
+                    <span>سؤال يدوي</span>
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
-          <div className="md:col-span-2 space-y-4">
+          {/* Compact New Bank Creation Form */}
+          {showNewBankForm && (
+            <form onSubmit={handleCreateBank} className="p-5 rounded-2xl bg-slate-900 border border-teal-500/40 space-y-4 shadow-xl">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                <h4 className="text-xs font-bold text-teal-300">إنشاء بنك أسئلة جديد (يرتبط تلقائياً بمستواك وبلوكك الدراسي)</h4>
+                <button type="button" onClick={() => setShowNewBankForm(false)} className="text-slate-400 hover:text-white">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="text-[11px] text-slate-400 block mb-1 font-bold">لغة البنك الافتراضية (قائمة منبثقة):</label>
+                  <select
+                    value={newBankLanguage}
+                    onChange={(e) => setNewBankLanguage(e.target.value as AssessmentLanguage)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-teal-300 font-bold focus:outline-none focus:border-teal-500"
+                  >
+                    <option value="ar">العربية (مع مصطلحات طبية)</option>
+                    <option value="en">English (Pure Medical English)</option>
+                    <option value="bilingual">ثنائي اللغة (Ar + En)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[11px] text-slate-400 block mb-1 font-bold">نوع أسئلة البنك (قائمة منبثقة):</label>
+                  <select
+                    value={newBankTypeMode}
+                    onChange={(e) => setNewBankTypeMode(e.target.value as BankQuestionTypeMode)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-amber-300 font-bold focus:outline-none focus:border-teal-500"
+                  >
+                    <option value="hybrid">بنك هجين شامل (اختيارات + صح وخطأ + إكمال + مقالي)</option>
+                    <option value="mcq">اختيارات من متعدد فقط (MCQ)</option>
+                    <option value="true_false">صح وخطأ فقط (True / False)</option>
+                    <option value="fill_blank">إكمال الفراغ فقط (Fill in the Blank)</option>
+                    <option value="essay">أسئلة مقالية وسريرية فقط (Essay)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[11px] text-slate-400 block mb-1 font-bold">المستوى الدراسي للبنك:</label>
+                  <select
+                    value={studyLevelId}
+                    onChange={(e) => setStudyLevelId(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-bold focus:outline-none focus:border-teal-500"
+                  >
+                    {studyLevels.map(lvl => (
+                      <option key={lvl.id} value={lvl.id}>{lvl.titleArabic}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <input
+                  type="text"
+                  placeholder={newBankLanguage === 'en' ? 'Question Bank Title (e.g., Year 2 Hematology Block Bank)' : 'عنوان بنك الأسئلة (مثال: بنك أسئلة بلوك الدم سنة ثانية)'}
+                  value={newBankTitle}
+                  onChange={(e) => setNewBankTitle(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-teal-500"
+                  required
+                />
+                <input
+                  type="text"
+                  placeholder="وصف مختصر للبنك أو المقرر..."
+                  value={newBankDesc}
+                  onChange={(e) => setNewBankDesc(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-teal-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowNewBankForm(false)}
+                  className="px-4 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold shadow-md"
+                >
+                  حفظ البنك وفتحه
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Selected Bank Questions Area */}
+          <div>
             {selectedBank ? (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-5">
-                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-base font-bold text-white">{selectedBank.titleArabic}</h3>
-                      <span className="px-2.5 py-0.5 rounded-full bg-teal-950/80 border border-teal-700/60 text-[11px] font-bold text-teal-300">
-                        لغة البنك: {selectedBank.language === 'en' ? 'English' : selectedBank.language === 'bilingual' ? 'ثنائي اللغة (Ar+En)' : 'العربية'}
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-400 mt-0.5">عدد الأسئلة المسجلة: {bankQuestions.length}</p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      onClick={() => setEditingBank(selectedBank)}
-                      className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                    >
-                      <Edit2 className="w-3.5 h-3.5" />
-                      <span>تعديل البنك</span>
-                    </button>
-                    <button
-                      onClick={() => setShowBulkImportModal(true)}
-                      className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-lg"
-                    >
-                      <Upload className="w-4 h-4" />
-                      <span>استيراد دفعة أسئلة (Bulk / بدون إنترنت)</span>
-                    </button>
-                    <button
-                      onClick={() => setShowNewQuestionForm(true)}
-                      className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-lg"
-                    >
-                      <Plus className="w-4 h-4" />
-                      <span>إضافة سؤال MCQ جديد</span>
-                    </button>
-                  </div>
-                </div>
 
                 {showNewQuestionForm && (
                   <form onSubmit={handleCreateQuestion} className="p-5 rounded-xl bg-slate-950 border border-slate-800 space-y-4">
@@ -1192,40 +1258,17 @@ export default function AssessmentManager({
       {activeTab === 'assessments' && (
         <div className="space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/90 border border-slate-800 p-4 rounded-2xl">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => setAssessmentFilterType('all')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                  assessmentFilterType === 'all'
-                    ? 'bg-slate-700 text-white shadow'
-                    : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
-                }`}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-bold text-slate-300">تصفية التقييمات المعروضة:</span>
+              <select
+                value={assessmentFilterType}
+                onChange={(e) => setAssessmentFilterType(e.target.value as 'all' | 'exam' | 'competition')}
+                className="px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-teal-300 font-bold focus:outline-none focus:border-teal-500"
               >
-                الكل ({assessments.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setAssessmentFilterType('exam')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                  assessmentFilterType === 'exam'
-                    ? 'bg-teal-600 text-white shadow'
-                    : 'bg-slate-950 text-teal-400 hover:text-white border border-slate-800'
-                }`}
-              >
-                📝 الاختبارات فقط ({assessments.filter(a => a.assessmentType === 'exam').length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setAssessmentFilterType('competition')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                  assessmentFilterType === 'competition'
-                    ? 'bg-amber-600 text-white shadow'
-                    : 'bg-slate-950 text-amber-400 hover:text-white border border-slate-800'
-                }`}
-              >
-                🏆 المسابقات فقط ({assessments.filter(a => a.assessmentType === 'competition').length})
-              </button>
+                <option value="all">جميع التقييمات في مستواك ({assessments.length})</option>
+                <option value="exam">📝 الاختبارات الأكاديمية فقط ({assessments.filter(a => a.assessmentType === 'exam').length})</option>
+                <option value="competition">🏆 المسابقات الطبية فقط ({assessments.filter(a => a.assessmentType === 'competition').length})</option>
+              </select>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -1773,6 +1816,149 @@ export default function AssessmentManager({
         </div>
       )}
 
+      {/* MODAL: STANDALONE QUESTION BANK SELECTOR & MANAGER POPUP */}
+      {showBankSelectorModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-start sm:items-center justify-center p-3 sm:p-4 overflow-y-auto overscroll-contain" dir="rtl">
+          <div className="bg-slate-900 border border-teal-500/40 rounded-2xl max-w-2xl w-full max-h-[88dvh] flex flex-col shadow-2xl my-auto overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between gap-3 bg-slate-950/90">
+              <div>
+                <h3 className="text-sm sm:text-base font-black text-white">نافذة اختيار وإدارة بنوك الأسئلة ({banks.length})</h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  اختر البنك المطلوب لتحرير أسئلته أو تشغيل واضع الاختبار الذكي عليه
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowBankSelectorModal(false);
+                    setShowNewBankForm(true);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>بنك جديد</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowBankSelectorModal(false)}
+                  className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-4 overflow-y-auto space-y-2.5 flex-1">
+              {banks.length === 0 ? (
+                <div className="p-8 text-center text-slate-400 text-xs">
+                  لا توجد بنوك أسئلة مطابقة للمستوى الدراسي الحالي. اضغط "بنك جديد" لإنشاء بنك.
+                </div>
+              ) : (
+                banks.map((b) => (
+                  <div
+                    key={b.id}
+                    onClick={async () => {
+                      await handleSelectBank(b);
+                      setShowBankSelectorModal(false);
+                    }}
+                    className={`w-full text-right p-4 rounded-xl border text-xs transition-all cursor-pointer ${
+                      selectedBank?.id === b.id
+                        ? 'bg-teal-950/70 border-teal-500 text-teal-200 shadow-lg'
+                        : 'bg-slate-950/80 border-slate-800 text-slate-300 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="space-y-1">
+                        <div className="font-bold text-sm text-white flex items-center gap-2">
+                          <span>{b.titleArabic}</span>
+                          {selectedBank?.id === b.id && (
+                            <span className="px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 text-[10px] font-bold">
+                              البنك النشط ✓
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="inline-block px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] font-bold text-teal-300">
+                            اللغة: {b.language === 'en' ? 'English' : b.language === 'bilingual' ? 'ثنائي اللغة' : 'العربية'}
+                          </span>
+                          <span className="inline-block px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] font-bold text-amber-300">
+                            النمط: {b.questionTypeMode === 'mcq' ? 'اختيارات فقط' : b.questionTypeMode === 'true_false' ? 'صح وخطأ فقط' : b.questionTypeMode === 'fill_blank' ? 'إكمال الفراغ فقط' : b.questionTypeMode === 'essay' ? 'مقالي فقط' : 'بنك هجين شامل'}
+                          </span>
+                          {b.studyLevelId && (
+                            <span className="inline-block px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] text-indigo-300">
+                              {getLevelLabel(b.studyLevelId)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await handleSelectBank(b);
+                            setShowBankSelectorModal(false);
+                            setShowBulkImportModal(true);
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold flex items-center gap-1"
+                        >
+                          <Upload className="w-3 h-3" />
+                          <span>واضع الاختبار الذكي</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowBankSelectorModal(false);
+                            setEditingBank(b);
+                          }}
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
+                          title="تعديل البنك"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteBankId(b.id)}
+                          className="p-1.5 rounded-lg bg-rose-950/50 hover:bg-rose-900/70 text-rose-400"
+                          title="حذف البنك"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                    {b.descriptionArabic && <div className="text-[11px] text-slate-400 mt-1">{b.descriptionArabic}</div>}
+                    {confirmDeleteBankId === b.id && (
+                      <div
+                        onClick={(e) => e.stopPropagation()}
+                        className="mt-3 p-2.5 rounded-lg bg-rose-950/70 border border-rose-800 flex items-center justify-between gap-2"
+                      >
+                        <span className="text-[11px] text-rose-200 font-bold">تأكيد حذف البنك وأسئلته؟</span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteBank(b.id)}
+                            className="px-2.5 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-bold"
+                          >
+                            نعم، احذف
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteBankId(null)}
+                            className="px-2 py-1 rounded bg-slate-800 text-slate-300 text-[11px]"
+                          >
+                            إلغاء
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODAL: EDIT QUESTION BANK */}
       {editingBank && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-start sm:items-center justify-center p-2.5 sm:p-4 overflow-y-auto overscroll-contain" dir="rtl">
@@ -1785,17 +1971,33 @@ export default function AssessmentManager({
             </div>
 
             <div className="space-y-3 text-xs">
-              <div>
-                <label className="text-slate-400 block mb-1">لغة البنك الافتراضية</label>
-                <select
-                  value={editingBank.language || 'ar'}
-                  onChange={(e) => setEditingBank({ ...editingBank, language: e.target.value as AssessmentLanguage })}
-                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-teal-300 font-bold"
-                >
-                  <option value="ar">العربية</option>
-                  <option value="en">English</option>
-                  <option value="bilingual">ثنائي اللغة (عربي + إنجليزي)</option>
-                </select>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-slate-400 block mb-1">لغة البنك الافتراضية</label>
+                  <select
+                    value={editingBank.language || 'ar'}
+                    onChange={(e) => setEditingBank({ ...editingBank, language: e.target.value as AssessmentLanguage })}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-teal-300 font-bold"
+                  >
+                    <option value="ar">العربية</option>
+                    <option value="en">English</option>
+                    <option value="bilingual">ثنائي اللغة (عربي + إنجليزي)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-slate-400 block mb-1">نوع أسئلة البنك</label>
+                  <select
+                    value={editingBank.questionTypeMode || 'hybrid'}
+                    onChange={(e) => setEditingBank({ ...editingBank, questionTypeMode: e.target.value as BankQuestionTypeMode })}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-amber-300 font-bold"
+                  >
+                    <option value="hybrid">بنك هجين شامل</option>
+                    <option value="mcq">اختيارات فقط (MCQ)</option>
+                    <option value="true_false">صح وخطأ فقط (T/F)</option>
+                    <option value="fill_blank">إكمال الفراغ فقط</option>
+                    <option value="essay">مقالي فقط (Essay)</option>
+                  </select>
+                </div>
               </div>
               <div>
                 <label className="text-slate-400 block mb-1">عنوان البنك</label>

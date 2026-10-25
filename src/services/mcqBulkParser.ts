@@ -18,6 +18,7 @@ import {
   QuestionOption,
   QuestionValidationIssue,
   QuestionType,
+  BankQuestionTypeMode,
   AssessmentLanguage,
   DetectedAssessmentMetadata
 } from '../types/umed.ts';
@@ -344,8 +345,8 @@ export function extractAssessmentMetadataFromText(rawText: string): {
     const line = lines[i];
     const trimmed = line.trim();
 
-    // Stop inspecting header once we hit an actual question start (e.g. "1. ", "Q1:", "[Essay]", "[سؤال مقالي]")
-    const isQuestionStart = /^\s*(?:(?:س|سؤال|السؤال|Q|Question)\s*#?\d*\s*[.:\-)]|\[\d+\]|\(\d+\)|\d+\s*[.\-)]|\[(?:سؤال مقالي|صح وخطأ|مقالي|True\s*\/\s*False|T\/F|Essay|Short\s*Answer)\])/iu.test(trimmed);
+    // Stop inspecting header once we hit an actual question start (e.g. "1. ", "Q1:", "[Essay]", "[سؤال مقالي]", "[إكمال الفراغ]")
+    const isQuestionStart = /^\s*(?:(?:س|سؤال|السؤال|Q|Question)\s*#?\d*\s*[.:\-)]|\[\d+\]|\(\d+\)|\d+\s*[.\-)]|\[(?:سؤال مقالي|صح وخطأ|مقالي|إكمال الفراغ|اكمل الفراغ|إكمال|أكمل الفراغ|True\s*\/\s*False|T\/F|Essay|Short\s*Answer|Fill\s*in\s*the\s*blank|Fill\s*Blank|Completion)\])/iu.test(trimmed);
     if (isQuestionStart) {
       headerFinished = true;
     }
@@ -398,19 +399,19 @@ export function extractAssessmentMetadataFromText(rawText: string): {
         metadata.studyLevelId = `lvl-${numMatch[1]}`;
       } else if (/امتياز|internship|intern/i.test(val)) {
         metadata.studyLevelId = 'lvl-internship';
-      } else if (/الأول|الاول|first/i.test(val)) {
+      } else if (/الأول|الاول|أولى|اولى|first/i.test(val)) {
         metadata.studyLevelId = 'lvl-1';
-      } else if (/الثاني|second/i.test(val)) {
+      } else if (/الثاني|ثانية|ثانيه|second/i.test(val)) {
         metadata.studyLevelId = 'lvl-2';
-      } else if (/الثالث|third/i.test(val)) {
+      } else if (/الثالث|ثالثة|ثالثه|third/i.test(val)) {
         metadata.studyLevelId = 'lvl-3';
-      } else if (/الرابع|fourth/i.test(val)) {
+      } else if (/الرابع|رابعة|رابعه|fourth/i.test(val)) {
         metadata.studyLevelId = 'lvl-4';
-      } else if (/الخامس|fifth/i.test(val)) {
+      } else if (/الخامس|خامسة|خامسه|fifth/i.test(val)) {
         metadata.studyLevelId = 'lvl-5';
-      } else if (/السادس|sixth/i.test(val)) {
+      } else if (/السادس|سادسة|سادسه|sixth/i.test(val)) {
         metadata.studyLevelId = 'lvl-6';
-      } else if (/السابع|seventh/i.test(val)) {
+      } else if (/السابع|سابعة|سابعه|seventh/i.test(val)) {
         metadata.studyLevelId = 'lvl-7';
       }
       continue;
@@ -525,6 +526,17 @@ export function validateAndAnnotateDrafts(
           code: 'MISSING_MODEL_ANSWER',
           severity: 'warning',
           messageArabic: 'يفضل كتابة إجابة نموذجية أو معايير تصحيح للسؤال المقالي'
+        });
+      }
+    } else if (qType === 'fill_blank') {
+      // Fill-in-the-blank question validation: requires the expected answer in modelAnswerArabic
+      normalizedOptions = [];
+      validCorrectId = 'fill_blank';
+      if (!draft.modelAnswerArabic || !draft.modelAnswerArabic.trim()) {
+        issues.push({
+          code: 'MISSING_FILL_BLANK_ANSWER',
+          severity: 'error',
+          messageArabic: 'يرجى كتابة الإجابة الصحيحة المطلوبة لإكمال الفراغ'
         });
       }
     } else if (qType === 'true_false') {
@@ -762,7 +774,7 @@ export function parseStructuredTextMCQs(
   let currentBlockHasAnswerLine = false;
   let currentBlockHasModelAnswer = false;
 
-  const questionStartRegex = /^\s*(?:(?:س|سؤال|السؤال|Q|Question)\s*#?\d*\s*[.:\-)]|\[\d+\]|\(\d+\)|\d+\s*[.\-)]|\[(?:سؤال مقالي|صح وخطأ|مقالي|True\s*\/\s*False|T\/F|Essay|Short\s*Answer)\])\s*\S+/iu;
+  const questionStartRegex = /^\s*(?:(?:س|سؤال|السؤال|Q|Question)\s*#?\d*\s*[.:\-)]|\[\d+\]|\(\d+\)|\d+\s*[.\-)]|\[(?:سؤال مقالي|صح وخطأ|مقالي|إكمال الفراغ|اكمل الفراغ|إكمال|أكمل الفراغ|True\s*\/\s*False|T\/F|Essay|Short\s*Answer|Fill\s*in\s*the\s*blank|Fill\s*Blank|Completion)\])\s*\S+/iu;
   const optionLineTestRegex = /^\s*(?:[✓✔☑✅*]+\s*)?[([]?([A-Ha-hأابجدتثهـهو])[)\].\-:]\s+\S+/u;
   const answerLineTestRegex = /^\s*(?:الإجابة الصحيحة|الاجابة الصحيحة|الإجابة|الاجابة|الجواب الصحيح|الجواب|الحل|Answer|Correct\s*Answer|Correct\s*Option|Correct|Key|ANS)\s*[:\-=]\s*\S+/iu;
   const modelAnswerLineTestRegex = /^\s*(?:الإجابة النموذجية|الاجابة النموذجية|إجابة نموذجية|اجابة نموذجية|نموذج الإجابة|الجواب النموذجي|معايير التقييم|معايير التصحيح|Model\s*Answer|Ideal\s*Answer|Expected\s*Answer|Scoring\s*Rubric|Rubric)\s*[:\-=]\s*\S*/iu;
@@ -847,7 +859,8 @@ export function parseStructuredTextMCQs(
       const typeMatch = line.match(typeIndicatorRegex);
       if (typeMatch) {
         const val = typeMatch[1].toLowerCase();
-        if (/مقالي|essay|short/i.test(val)) explicitQuestionType = 'essay';
+        if (/إكمال|اكمل|فراغ|fill|blank|completion/i.test(val)) explicitQuestionType = 'fill_blank';
+        else if (/مقالي|essay|short/i.test(val)) explicitQuestionType = 'essay';
         else if (/صح|خطأ|true|false|t\/f/i.test(val)) explicitQuestionType = 'true_false';
         else explicitQuestionType = 'mcq';
         continue;
@@ -962,9 +975,10 @@ export function parseStructuredTextMCQs(
 
       // Otherwise it is part of the question stem
       if (rawStemLines.length === 0 && explicitEnglishStemLines.length === 0) {
-        // Detect question type tag anywhere in first stem line (e.g. "2. [صح وخطأ] ...", "[True/False] 2. ...", "[Essay]")
+        // Detect question type tag anywhere in first stem line (e.g. "2. [صح وخطأ] ...", "[True/False] 2. ...", "[Essay]", "[إكمال الفراغ]")
         const tfTagRegex = /\[\s*(?:صح\s*و\s*خطأ|صواب\s*و\s*خطأ|صواب\s*\/\s*خطأ|صح\s*\/\s*خطأ|true\s*\/\s*false|true\s*or\s*false|t\/f)\s*\]|\(\s*(?:صح\s*أم\s*خطأ|true\s*or\s*false)\s*\)/iu;
         const essayTagRegex = /\[\s*(?:سؤال\s*مقالي|مقالي|سؤال\s*سريري\s*مقالي|essay|short\s*answer|clinical\s*essay)\s*\]/iu;
+        const fillBlankTagRegex = /\[\s*(?:إكمال\s*الفراغ|اكمل\s*الفراغ|أكمل\s*الفراغ|سؤال\s*إكمال|إكمال|اكمل|fill\s*in\s*the\s*blank|fill\s*blank|completion)\s*\]/iu;
 
         // Strip leading question number first or after tag
         const qNumMatch = line.match(/^\s*(?:(?:س|سؤال|السؤال|Q|Question)\s*#?(\d+)\s*[.:\-)]?|\[\s*(\d+)\s*\]|\(\s*(\d+)\s*\)|(\d+)\s*[.\-):])\s*(.+)$/iu);
@@ -977,6 +991,9 @@ export function parseStructuredTextMCQs(
         if (tfTagRegex.test(line)) {
           explicitQuestionType = 'true_false';
           line = line.replace(tfTagRegex, '').trim();
+        } else if (fillBlankTagRegex.test(line)) {
+          explicitQuestionType = 'fill_blank';
+          line = line.replace(fillBlankTagRegex, '').trim();
         } else if (essayTagRegex.test(line)) {
           explicitQuestionType = 'essay';
           line = line.replace(essayTagRegex, '').trim();
@@ -1041,7 +1058,9 @@ export function parseStructuredTextMCQs(
     // Determine Final Question Type
     let questionType: QuestionType = explicitQuestionType || 'mcq';
     if (!explicitQuestionType) {
-      if (modelAnswerLines.length > 0 && rawOptions.length === 0) {
+      if (rawOptions.length === 0 && /(?:_{3,}|\.{4,})/.test(stemArabic) && (explicitAnswerToken || modelAnswerLines.length > 0)) {
+        questionType = 'fill_blank';
+      } else if (modelAnswerLines.length > 0 && rawOptions.length === 0) {
         questionType = 'essay';
       } else if (
         rawOptions.length === 2 &&
@@ -1051,6 +1070,8 @@ export function parseStructuredTextMCQs(
         questionType = 'true_false';
       } else if (rawOptions.length === 0 && /^(?:صح|صواب|صحيح|خطأ|خاطئ|true|false|t|f)$/i.test(explicitAnswerToken)) {
         questionType = 'true_false';
+      } else if (rawOptions.length === 0 && explicitAnswerToken && explicitAnswerToken.length > 1) {
+        questionType = 'fill_blank';
       }
     }
 
@@ -1061,6 +1082,15 @@ export function parseStructuredTextMCQs(
     if (questionType === 'essay') {
       options = [];
       correctOptionId = 'essay';
+      if (modelAnswerLines.length === 0 && explicitAnswerToken) {
+        modelAnswerLines.push(explicitAnswerToken);
+      }
+    } else if (questionType === 'fill_blank') {
+      options = [];
+      correctOptionId = 'fill_blank';
+      if (explicitAnswerToken && modelAnswerLines.length === 0) {
+        modelAnswerLines.push(explicitAnswerToken);
+      }
     } else if (questionType === 'true_false') {
       const optAExp = rawOptions.find(o => /^(opt-a|a|أ|1)/i.test(o.marker) || /صح|صواب|true/i.test(o.text))?.explanation;
       const optBExp = rawOptions.find(o => /^(opt-b|b|ب|2)/i.test(o.marker) || /خطأ|خاطئ|false/i.test(o.text))?.explanation;
@@ -1264,7 +1294,8 @@ export function parseCsvMCQs(
     const detectedLang = languageHint || (stemEnglish ? 'bilingual' : detectLanguageFromText(stemArabic));
 
     let questionType: QuestionType = 'mcq';
-    if (/مقالي|essay/i.test(rawTypeVal)) questionType = 'essay';
+    if (/إكمال|اكمل|فراغ|fill|blank/i.test(rawTypeVal)) questionType = 'fill_blank';
+    else if (/مقالي|essay/i.test(rawTypeVal)) questionType = 'essay';
     else if (/صح|خطأ|true|false/i.test(rawTypeVal)) questionType = 'true_false';
 
     const rawA = parseInlineCorrectMarker(row[colOptA] || '');
@@ -1276,9 +1307,9 @@ export function parseCsvMCQs(
     let options: QuestionOption[] = [];
     let correctOptionId = '';
 
-    if (questionType === 'essay') {
+    if (questionType === 'essay' || questionType === 'fill_blank') {
       options = [];
-      correctOptionId = 'essay';
+      correctOptionId = questionType;
     } else if (questionType === 'true_false') {
       options = [
         { id: 'opt-a', textArabic: rawA.cleanedText || (detectedLang === 'en' ? 'True' : 'صح (صواب)'), textEnglish: 'True' },
@@ -1366,11 +1397,12 @@ export function parseJsonMCQs(
 
     const rawType = String(item.questionType || item.type || item['نوع السؤال'] || '').toLowerCase();
     let questionType: QuestionType = 'mcq';
-    if (/مقالي|essay/i.test(rawType)) questionType = 'essay';
+    if (/إكمال|اكمل|فراغ|fill|blank/i.test(rawType)) questionType = 'fill_blank';
+    else if (/مقالي|essay/i.test(rawType)) questionType = 'essay';
     else if (/صح|خطأ|true|false/i.test(rawType)) questionType = 'true_false';
 
     let options: QuestionOption[] = [];
-    if (questionType === 'essay') {
+    if (questionType === 'essay' || questionType === 'fill_blank') {
       options = [];
     } else if (Array.isArray(item.options)) {
       options = item.options.map((rawOpt: any, optIdx: number) => {
@@ -1412,8 +1444,8 @@ export function parseJsonMCQs(
     ).trim();
 
     let correctOptionId = '';
-    if (questionType === 'essay') {
-      correctOptionId = 'essay';
+    if (questionType === 'essay' || questionType === 'fill_blank') {
+      correctOptionId = questionType;
     } else {
       correctOptionId = resolveCanonicalOptionId(rawAnswer, options);
       if (!correctOptionId) {
@@ -1423,7 +1455,7 @@ export function parseJsonMCQs(
     }
 
     const modelAnswerArabic = String(
-      item.modelAnswerArabic || item.modelAnswer || item['الإجابة النموذجية'] || ''
+      item.modelAnswerArabic || item.modelAnswer || item['الإجابة النموذجية'] || (questionType === 'fill_blank' ? rawAnswer : '') || ''
     ).trim() || undefined;
 
     const explanationArabic = String(
@@ -1559,7 +1591,11 @@ export const SAMPLE_BULK_TEXT_TEMPLATE = `اللغة: عربي
 الإجابة: صح
 التعليل: أدوية ACEIs وARBs مسببة لتشوهات كلوية جنينية خطيرة وتستبدل بالمثيل دوبا أو اللابيتالول.
 
-3. [سؤال مقالي] اذكر الخطوات العلاجية الإسعافية الثلاث الأولى لمريض يعاني من صدمة الحساسية المفرطة (Anaphylaxis) في قسم الطوارئ مع تحديد الجرعة ومكان الحقن.
+3. [إكمال الفراغ] الهرمون الرئيسي المسؤول عن تحفيز إنتاج كريات الدم الحمراء في نخاع العظم استجابةً لنقص الأكسجة الكلوية هو __________.
+الإجابة: الإريثروبويتين (Erythropoietin - EPO)
+التعليل: يُفرز هرمون الإريثروبويتين من الخلايا الخلالية حول النبيبات في الكلية لتحفيز سلائف الكريات الحمر.
+
+4. [سؤال مقالي] اذكر الخطوات العلاجية الإسعافية الثلاث الأولى لمريض يعاني من صدمة الحساسية المفرطة (Anaphylaxis) في قسم الطوارئ مع تحديد الجرعة ومكان الحقن.
 الإجابة النموذجية: 1. حقن الأدرينالين (Epinephrine) عضلياً في العضلة المتسعة الوحشية للفخذ بجرعة 0.5 ملغ (1:1000). 2. تأمين مجرى التنفس وإعطاء الأكسجين عالي التدفق. 3. تركيب خطين وريديين واسعين وبدء السوائل الوريدية البلورية (Normal Saline).
 التعليل: الأدرينالين هو العلاج المنقذ للحياة ويجب حقنه فوراً بدون أي تأخير لعكس التوسع الوعائي والتشنج القصبي.
 النقاط: 10`;
@@ -1587,7 +1623,11 @@ B) False (Rationale: Incorrect, they carry an FDA Black Box Warning for fetotoxi
 Answer: True
 Rationale: ACE inhibitors and ARBs are teratogenic and must be discontinued immediately in pregnancy; labetalol, nifedipine, or methyldopa are safe alternatives.
 
-3. [Essay] List the first three immediate life-saving steps in the emergency management of acute anaphylactic shock, including the first-line drug, dose, and route of administration.
+3. [Fill in the blank] The primary hormone responsible for stimulating red blood cell production in response to renal hypoxia is __________.
+Answer: Erythropoietin (EPO)
+Rationale: Erythropoietin is synthesized by peritubular interstitial cells of the kidney in response to cellular hypoxia.
+
+4. [Essay] List the first three immediate life-saving steps in the emergency management of acute anaphylactic shock, including the first-line drug, dose, and route of administration.
 Model Answer: 1. Intramuscular (IM) Epinephrine 0.3–0.5 mg (1:1000) into the mid-anterolateral thigh (vastus lateralis). 2. Airway assessment and high-flow 100% supplemental oxygen. 3. Two large-bore IV lines with rapid isotonic crystalloid (0.9% Normal Saline) bolus for hypotension.
 Rationale: Immediate IM epinephrine reverses bronchospasm and vasodilation and prevents progression to cardiovascular collapse.
 Points: 10`;
@@ -1634,9 +1674,15 @@ export interface AiPromptGeneratorConfig {
   mode: 'generate_new' | 'format_existing';
   language: AssessmentLanguage; // 'ar' | 'en' | 'bilingual'
   assessmentType: 'exam' | 'competition';
+  questionTypeMode?: BankQuestionTypeMode; // 'hybrid' | 'mcq' | 'true_false' | 'essay' | 'fill_blank'
+  isDynamicQuestionCount?: boolean; // true = dynamic open count based on content; false = custom user counts
   title?: string;
   topic?: string;
+  universityName?: string;
+  collegeName?: string;
+  programName?: string;
   studyLevelName?: string;
+  blockName?: string;
   batchName?: string;
   durationMinutes?: number;
   questionDurationSeconds?: number;
@@ -1644,6 +1690,7 @@ export interface AiPromptGeneratorConfig {
   optionsCount?: 4 | 5;
   trueFalseCount?: number;
   essayCount?: number;
+  fillBlankCount?: number;
   difficultyMix?: 'balanced' | 'clinical_usmle' | 'foundational';
   includeOptionRationales?: boolean;
 }
@@ -1651,16 +1698,23 @@ export interface AiPromptGeneratorConfig {
 /**
  * Generates a crystal-clear, highly structured, professional AI Prompt
  * tailored to the user's selected Language ('ar' | 'en' | 'bilingual'),
- * Mode ('generate_new' | 'format_existing'), Question counts, and Medical Style.
+ * Question Type Mode ('hybrid' | 'mcq' | 'true_false' | 'essay' | 'fill_blank'),
+ * Dynamic vs Fixed Question Count, and Saved Academic Context (University, Specialty, Study Level, Block).
  */
 export function buildProfessionalAiPrompt(config: AiPromptGeneratorConfig): string {
   const {
     mode = 'generate_new',
     language = 'ar',
     assessmentType = 'exam',
+    questionTypeMode = 'hybrid',
+    isDynamicQuestionCount = true,
     title = '',
     topic = '',
-    studyLevelName = 'المستوى الرابع',
+    universityName = '',
+    collegeName = '',
+    programName = '',
+    studyLevelName = 'المستوى الثاني',
+    blockName = '',
     batchName = '',
     durationMinutes = 30,
     questionDurationSeconds = 45,
@@ -1668,21 +1722,48 @@ export function buildProfessionalAiPrompt(config: AiPromptGeneratorConfig): stri
     optionsCount = 4,
     trueFalseCount = 2,
     essayCount = 1,
+    fillBlankCount = 2,
     difficultyMix = 'clinical_usmle',
     includeOptionRationales = true
   } = config;
 
-  const totalRequested = (Number(mcqCount) || 0) + (Number(trueFalseCount) || 0) + (Number(essayCount) || 0);
+  // Compute effective question counts when fixed count mode is selected
+  const effectiveMcq = questionTypeMode === 'mcq' ? (mcqCount || 15) : questionTypeMode === 'hybrid' ? mcqCount : 0;
+  const effectiveTf = questionTypeMode === 'true_false' ? (trueFalseCount || 10) : questionTypeMode === 'hybrid' ? trueFalseCount : 0;
+  const effectiveEssay = questionTypeMode === 'essay' ? (essayCount || 5) : questionTypeMode === 'hybrid' ? essayCount : 0;
+  const effectiveFillBlank = questionTypeMode === 'fill_blank' ? (fillBlankCount || 10) : questionTypeMode === 'hybrid' ? (fillBlankCount || 0) : 0;
+  const totalRequested = (Number(effectiveMcq) || 0) + (Number(effectiveTf) || 0) + (Number(effectiveEssay) || 0) + (Number(effectiveFillBlank) || 0);
+
+  const includeMcqExample = questionTypeMode === 'hybrid' || questionTypeMode === 'mcq';
+  const includeTfExample = questionTypeMode === 'true_false' || (questionTypeMode === 'hybrid' && (isDynamicQuestionCount || effectiveTf > 0));
+  const includeFillBlankExample = questionTypeMode === 'fill_blank' || (questionTypeMode === 'hybrid' && effectiveFillBlank > 0);
+  const includeEssayExample = questionTypeMode === 'essay' || (questionTypeMode === 'hybrid' && (isDynamicQuestionCount || effectiveEssay > 0));
 
   if (language === 'en') {
-    const resolvedTitle = title.trim() || `${topic.trim() || 'Medical Block'} ${assessmentType === 'competition' ? 'Competition' : 'Exam'}`;
-    const resolvedTopic = topic.trim() || '[Insert Medical Topic / Lecture / Block Here]';
+    const resolvedTopic = topic.trim() || blockName.trim() || '[Insert Medical Topic / Lecture / Block Here]';
+    const resolvedTitle = title.trim() || `${resolvedTopic} ${assessmentType === 'competition' ? 'Competition' : 'Exam'}`;
     const styleDesc =
       difficultyMix === 'clinical_usmle'
         ? 'USMLE / NBME-style clinical vignettes (patient presentation, vitals, lab/imaging findings, and high-yield clinical decision-making)'
         : difficultyMix === 'foundational'
         ? 'Clear foundational medical science concepts, mechanisms, and direct recall'
         : 'Balanced mix (50% clinical case vignettes and 50% high-yield medical concepts)';
+
+    const typeModeDescEn =
+      questionTypeMode === 'mcq'
+        ? `Multiple Choice Questions ONLY (${optionsCount} options per question)`
+        : questionTypeMode === 'true_false'
+        ? 'True / False Questions ONLY'
+        : questionTypeMode === 'essay'
+        ? 'Clinical Essay / Short-Answer Questions ONLY'
+        : questionTypeMode === 'fill_blank'
+        ? 'Fill-in-the-Blank Medical Questions ONLY'
+        : `Hybrid Comprehensive Bank (Multiple Choice ${optionsCount}-options, True/False, Fill-in-the-Blank, and Clinical Essay)`;
+
+    const countSpecEn = isDynamicQuestionCount
+      ? `DYNAMIC & COMPREHENSIVE (Open Count — do NOT limit to a fixed number; generate or extract as many questions as needed to thoroughly cover all high-yield points of the topic/lecture)`
+      : `Fixed Target Count (Total: ${totalRequested} Questions):
+  ${effectiveMcq > 0 ? `* Multiple Choice Questions (MCQ - ${optionsCount} options): ${effectiveMcq} questions\n  ` : ''}${effectiveTf > 0 ? `* True / False Questions: ${effectiveTf} questions\n  ` : ''}${effectiveFillBlank > 0 ? `* Fill-in-the-Blank Questions: ${effectiveFillBlank} questions\n  ` : ''}${effectiveEssay > 0 ? `* Clinical Essay Questions: ${effectiveEssay} questions` : ''}`.trim();
 
     const optionLetters = optionsCount === 5 ? ['A', 'B', 'C', 'D', 'E'] : ['A', 'B', 'C', 'D'];
     const optionTemplateLines = optionLetters
@@ -1702,17 +1783,14 @@ ${
 }
 
 ==================================================
-1. ASSESSMENT SPECIFICATIONS
+1. ACADEMIC CONTEXT & ASSESSMENT SPECIFICATIONS
 ==================================================
 - Target Language: Pure Medical English (EN)
-- Topic / Subject / Block: ${resolvedTopic}
-- Academic Level: ${studyLevelName}
-- Question Breakdown (Total: ${totalRequested} Questions):
-  * Multiple Choice Questions (MCQ - ${optionsCount} options each): ${mcqCount} questions
-  * True / False Questions: ${trueFalseCount} questions
-  * Clinical Essay / Short-Answer Questions: ${essayCount} questions
+${universityName ? `- University / Institution: ${universityName}${collegeName ? ` — ${collegeName}` : ''}\n` : ''}${programName ? `- Academic Program / Specialty: ${programName}\n` : ''}- Study Level / Year: ${studyLevelName}
+${blockName ? `- Medical Block / Course: ${blockName}\n` : ''}- Topic / Block / Subject: ${resolvedTopic}
+- Question Bank Type: ${typeModeDescEn}
+- Question Count Policy: ${countSpecEn}
 - Academic & Clinical Style: ${styleDesc}
-- Scientific Accuracy: 100% evidence-based (Harrison's, Robbins, USMLE Step 1/2 CK standards).
 
 ==================================================
 2. STRICT UMED OUTPUT FORMAT (MANDATORY)
@@ -1727,13 +1805,17 @@ Level: ${studyLevelName}
 ${batchName ? `Batch: ${batchName}\n` : ''}Subject: ${resolvedTopic}
 Duration: ${durationMinutes} minutes
 Question Timer: ${questionDurationSeconds} seconds
-
+${
+  includeMcqExample
+    ? `
 1. [Full clinical vignette or question stem in English]
 ${optionTemplateLines}
 Answer: B
-Rationale: [Concise 2-sentence clinical explanation of why the correct option is right and key differential points]
-${
-  trueFalseCount > 0
+Rationale: [Concise clinical explanation of why the correct option is right and key differential points]
+`
+    : ''
+}${
+  includeTfExample
     ? `
 2. [True/False] [Clear, unambiguous medical statement in English]
 A) True (Rationale: [Why True is correct/incorrect])
@@ -1743,9 +1825,17 @@ Rationale: [Overall medical explanation]
 `
     : ''
 }${
-  essayCount > 0
+  includeFillBlankExample
     ? `
-3. [Essay] [Clinical scenario or structured short-answer question]
+3. [Fill in the blank] The primary hormone responsible for stimulating red blood cell production in response to renal hypoxia is __________.
+Answer: Erythropoietin (EPO)
+Rationale: Erythropoietin is synthesized by peritubular interstitial cells of the kidney in response to hypoxia.
+`
+    : ''
+}${
+  includeEssayExample
+    ? `
+4. [Essay] [Clinical scenario or structured short-answer question]
 Model Answer: [Numbered key clinical points / grading rubric required for full marks]
 Rationale: [Core pathophysiology or clinical guideline summary]
 Points: 10
@@ -1755,36 +1845,46 @@ Points: 10
 
 CRITICAL RULES FOR UMED PARSER COMPATIBILITY:
 1. Separate each question from the next with ONE blank line.
-2. Always include both the inline \`*\` on the correct option AND the \`Answer: [Letter/True/False]\` line.
+2. Always include the \`Answer:\` (or \`Model Answer:\`) line below each question.
 3. Never write conversational intros or summaries outside the code block.
 
-${mode === 'generate_new' ? `Now, generate the ${totalRequested} questions for: ${resolvedTopic}` : 'Now, convert and standardize the following content:'}`;
+${mode === 'generate_new' ? `Now, generate the questions dynamically for Level (${studyLevelName}) — Topic: ${resolvedTopic}` : 'Now, convert and standardize all the following content without skipping any item:'}`;
   }
 
   if (language === 'bilingual') {
-    const resolvedTitle = title.trim() || `${assessmentType === 'competition' ? 'مسابقة' : 'اختبار'} ${topic.trim() || 'البلوك الطبي'} (Bilingual)`;
-    const resolvedTopic = topic.trim() || '[اكتب اسم الموضوع الطبي أو المحاضرة هنا]';
+    const resolvedTopic = topic.trim() || blockName.trim() || '[اكتب اسم البلوك أو الموضوع الطبي هنا]';
+    const resolvedTitle = title.trim() || `${assessmentType === 'competition' ? 'مسابقة' : 'اختبار'} ${resolvedTopic} (Bilingual)`;
+
+    const typeModeDescBi =
+      questionTypeMode === 'mcq'
+        ? `اختيار من متعدد فقط (MCQ - ${optionsCount} خيارات لكل سؤال)`
+        : questionTypeMode === 'true_false'
+        ? 'صح وخطأ فقط (True / False)'
+        : questionTypeMode === 'essay'
+        ? 'أسئلة مقالية سريرية فقط (Clinical Essay)'
+        : questionTypeMode === 'fill_blank'
+        ? 'أسئلة إكمال الفراغ فقط (Fill in the Blank)'
+        : `بنك هجين شامل (اختيار من متعدد + صح وخطأ + إكمال الفراغ + مقالي)`;
+
+    const countSpecBi = isDynamicQuestionCount
+      ? `عدد ديناميكي مفتوح وشامل (غير مقيد بعدد ثابت — ولّد أو استخرج كافة الأسئلة اللازمة لتغطية جميع النقاط العلمية والسريرية للمحاضرة أو البلوك بشكل وافٍ)`
+      : `عدد محدد (${totalRequested} سؤال إجمالاً: ${effectiveMcq} اختيارات، ${effectiveTf} صح وخطأ، ${effectiveFillBlank} إكمال فراغ، ${effectiveEssay} مقالي)`;
 
     return `أنت بروفيسور في التعليم الطبي وخبير معتمد في صياغة الامتحانات الطبية ثنائية اللغة (العربية + الإنجليزية) لمنصة UMED الطبية.
 ${
   mode === 'generate_new'
-    ? `مهمتك: توليد ${assessmentType === 'competition' ? 'مسابقة طبية تنافسية' : 'اختبار أكاديمي طبي'} احترافي **ثنائي اللغة (عربي + إنجليزي معاً)** وفق المواصفات الدقيقة أدناه.`
+    ? `مهمتك: توليد ${assessmentType === 'competition' ? 'مسابقة طبية تنافسية' : 'اختبار أكاديمي طبي'} احترافي **ثنائي اللغة (عربي + إنجليزي معاً)** مخصص بدقة للمستوى والبلوك المحددين أدناه.`
     : `مهمتك: تحويل وتنسيق الأسئلة أو المحاضرة المرفقة أدناه إلى صيغة منصة UMED القياسية **ثنائية اللغة (عربي + إنجليزي)** بدقة 100% دون حذف أي سؤال.`
 }
 
 ==================================================
-أولاً: مواصفات الاختبار المطلوب
+أولاً: السياق الأكاديمي ومواصفات الاختبار
 ==================================================
 - لغة الاختبار: ثنائي اللغة (Bilingual: Arabic + Medical English)
-  * يُكتب نص السؤال بالعربية في السطر الأول، وتحته مباشرة الترجمة الطبية الإنجليزية الدقيقة في السطر الثاني.
-  * تُكتب الخيارات بصيغة مزدوجة واضحة: (المصطلح بالعربية / English Medical Term).
-- الموضوع / المقرر الطبي: ${resolvedTopic}
-- المستوى الدراسي: ${studyLevelName}
-- توزيع الأسئلة المطلوبة (الإجمالي: ${totalRequested} سؤال):
-  * أسئلة اختيار من متعدد (MCQ - ${optionsCount} خيارات لكل سؤال): ${mcqCount} سؤال
-  * أسئلة صواب وخطأ (True / False): ${trueFalseCount} سؤال
-  * أسئلة مقالية سريرية (Clinical Essay): ${essayCount} سؤال
-- الأسلوب العلمي: حالات سريرية (Clinical Vignettes) وأسئلة طبية عالية الدقة مع تعليل علمي رصين.
+${universityName ? `- الجامعة والكلية: ${universityName}${collegeName ? ` — ${collegeName}` : ''}\n` : ''}${programName ? `- التخصص / البرنامج: ${programName}\n` : ''}- المستوى الدراسي المستهدف: ${studyLevelName} (التزم بمستوى طالب ${studyLevelName} ولا تخلطه بمستويات أخرى)
+${blockName ? `- البلوك / المقرر المعتمد: ${blockName}\n` : ''}- البلوك / المقرر الطبي: ${resolvedTopic}
+- نوع البنك / الأسئلة: ${typeModeDescBi}
+- سياسة عدد الأسئلة: ${countSpecBi}
 
 ==================================================
 ثانياً: القالب الإلزامي المعتمد في نظام UMED
@@ -1799,21 +1899,25 @@ ${
 ${batchName ? `الدفعة: ${batchName}\n` : ''}المادة: ${resolvedTopic}
 المدة: ${durationMinutes} دقيقة
 مؤقت السؤال: ${questionDurationSeconds} ثانية
-
+${
+  includeMcqExample
+    ? `
 1. [نص السؤال أو الحالة السريرية باللغة العربية الفصحى]
 [Exact English clinical vignette / question stem on the second line]
 أ) [الخيار الأول بالعربية / Option A in English]${includeOptionRationales ? ' (التعليل: سبب صحة أو خطأ هذا الخيار)' : ''}
 ب) [الخيار الثاني بالعربية / Option B in English] *${includeOptionRationales ? ' (التعليل: صحيح لأن...)' : ''}
 ج) [الخيار الثالث بالعربية / Option C in English]${includeOptionRationales ? ' (التعليل: سبب صحة أو خطأ هذا الخيار)' : ''}
 د) [الخيار الرابع بالعربية / Option D in English]${includeOptionRationales ? ' (التعليل: سبب صحة أو خطأ هذا الخيار)' : ''}${
-      optionsCount === 5
-        ? `\nهـ) [الخيار الخامس بالعربية / Option E in English]${includeOptionRationales ? ' (التعليل: سبب صحة أو خطأ هذا الخيار)' : ''}`
-        : ''
-    }
+        optionsCount === 5
+          ? `\nهـ) [الخيار الخامس بالعربية / Option E in English]${includeOptionRationales ? ' (التعليل: سبب صحة أو خطأ هذا الخيار)' : ''}`
+          : ''
+      }
 الإجابة: ب
 التعليل: [التعليل الطبي الشامل للسؤال باللغتين أو بالعربية مع المصطلحات الإنجليزية]
-${
-  trueFalseCount > 0
+`
+    : ''
+}${
+  includeTfExample
     ? `
 2. [صح وخطأ] [نص العبارة الطبية بالعربية]
 [English translation of the medical statement]
@@ -1824,9 +1928,18 @@ ${
 `
     : ''
 }${
-  essayCount > 0
+  includeFillBlankExample
     ? `
-3. [سؤال مقالي] [نص السؤال السريري بالعربية]
+3. [إكمال الفراغ] الهرمون الرئيسي المسؤول عن تحفيز إنتاج كريات الدم الحمراء استجابةً لنقص الأكسجة الكلوية هو __________.
+The primary hormone stimulating erythropoiesis in response to renal hypoxia is __________.
+الإجابة: الإريثروبويتين / Erythropoietin (EPO)
+التعليل: يفرز هرمون الإريثروبويتين من الخلايا الخلالية حول النبيبات في الكلية لتحفيز نقي العظم.
+`
+    : ''
+}${
+  includeEssayExample
+    ? `
+4. [سؤال مقالي] [نص السؤال السريري بالعربية]
 [English translation of the clinical essay question]
 الإجابة النموذجية: [عناصر الإجابة النموذجية الكاملة وسلّم التقييم بالعربية والإنجليزية]
 التعليل: [الملخص السريري والعلمي]
@@ -1835,12 +1948,12 @@ ${
     : ''
 }\`\`\`
 
-${mode === 'generate_new' ? `ابدأ الآن بتوليد الـ ${totalRequested} سؤال حول موضوع: ${resolvedTopic}` : 'ابدأ الآن بتحويل وتنسيق المحتوى التالي:'}`;
+${mode === 'generate_new' ? `ابدأ الآن بتوليد الأسئلة لمستوى (${studyLevelName}) حول موضوع: ${resolvedTopic}` : 'ابدأ الآن بتحويل وتنسيق المحتوى التالي بالكامل:'}`;
   }
 
   // Default: Arabic ('ar') with clear medical terminology
-  const resolvedTitle = title.trim() || `${assessmentType === 'competition' ? 'مسابقة' : 'اختبار'} ${topic.trim() || 'البلوك الطبي'}`;
-  const resolvedTopic = topic.trim() || '[اكتب اسم الموضوع الطبي أو المحاضرة هنا]';
+  const resolvedTopic = topic.trim() || blockName.trim() || '[اكتب اسم البلوك أو الموضوع الطبي أو المحاضرة هنا]';
+  const resolvedTitle = title.trim() || `${assessmentType === 'competition' ? 'مسابقة' : 'اختبار'} ${resolvedTopic}`;
   const styleDescAr =
     difficultyMix === 'clinical_usmle'
       ? 'حالات سريرية واقعية (Clinical Vignettes) تحاكي اختبارات الكفاءة والـ USMLE (شكوى المريض، العلامات الحيوية، الفحوصات، والتشخيص أو التدبير العلاجي الأدق)'
@@ -1848,23 +1961,37 @@ ${mode === 'generate_new' ? `ابدأ الآن بتوليد الـ ${totalReques
       ? 'أسئلة مفاهيمية وأساسية مباشرة تقيس الفهم العميق للعلوم الطبية الأساسية والسريرية'
       : 'مزيج متوازن (50% حالات سريرية تطبيقية + 50% مفاهيم طبية مباشرة عالية الأهمية)';
 
+  const typeModeDescAr =
+    questionTypeMode === 'mcq'
+      ? `اختيارات فقط (اختيار من متعدد MCQ — ${optionsCount} خيارات لكل سؤال)`
+      : questionTypeMode === 'true_false'
+      ? 'صح وخطأ فقط (صواب وخطأ مع التعليل)'
+      : questionTypeMode === 'essay'
+      ? 'أسئلة مقالية سريرية فقط (مع الإجابة النموذجية)'
+      : questionTypeMode === 'fill_blank'
+      ? 'أسئلة إكمال الفراغ فقط (أكمل الفراغ بالمصطلح الطبي الدقيق)'
+      : `بنك هجين شامل (يجمع بين الاختيار من متعدد، صح وخطأ، إكمال الفراغ، والأسئلة المقالية حسب طبيعة المحتوى)`;
+
+  const countSpecAr = isDynamicQuestionCount
+    ? `عدد ديناميكي مفتوح وشامل (غير مقيد بعدد ثابت — قم بتوليد أو استخراج جميع الأسئلة اللازمة لتغطية كافة تفاصيل المحاضرة أو البلوك الطبي دون حصرها بعدد ضيق)`
+    : `عدد مخصص ومحدد (الإجمالي: ${totalRequested} سؤال):
+  ${effectiveMcq > 0 ? `* أسئلة اختيار من متعدد (MCQ - ${optionsCount} خيارات): ${effectiveMcq} سؤال\n  ` : ''}${effectiveTf > 0 ? `* أسئلة صواب وخطأ (صح وخطأ): ${effectiveTf} سؤال\n  ` : ''}${effectiveFillBlank > 0 ? `* أسئلة إكمال الفراغ: ${effectiveFillBlank} سؤال\n  ` : ''}${effectiveEssay > 0 ? `* أسئلة مقالية سريرية: ${effectiveEssay} سؤال` : ''}`.trim();
+
   return `أنت بروفيسور في التعليم الطبي وخبير معتمد في إعداد بنوك الأسئلة والامتحانات الطبية لمنصة UMED.
 ${
   mode === 'generate_new'
-    ? `مهمتك: توليد ${assessmentType === 'competition' ? 'مسابقة طبية تنافسية' : 'اختبار أكاديمي طبي'} متكامل واحترافي **باللغة العربية الفصحى** (مع كتابة المصطلحات الطبية الإنجليزية الأساسية بين قوسين) وفق المواصفات الدقيقة أدناه.`
+    ? `مهمتك: توليد ${assessmentType === 'competition' ? 'مسابقة طبية تنافسية' : 'اختبار أكاديمي طبي'} متكامل واحترافي **باللغة العربية الفصحى** (مع كتابة المصطلحات الطبية الإنجليزية الأساسية بين قوسين) ومطابق تماماً للمستوى الدراسي والبلوك المحددين أدناه.`
     : `مهمتك: تحويل وتنسيق أي ملف أو نص أسئلة أو محاضرة أرسلها لك إلى صيغة منصة UMED القياسية **باللغة العربية الطبية** بدقة 100% دون حذف أي سؤال أو تغيير الإجابات الصحيحة المعتمدة.`
 }
 
 ==================================================
-أولاً: مواصفات الاختبار الطبي المطلوب
+أولاً: السياق الأكاديمي ومواصفات الاختبار المطلوب
 ==================================================
-- لغة الاختبار: العربية الطبية الفصحى (مع المصطلحات الإنجليزية المعيارية بين قوسين مثل: Aortic Stenosis)
-- الموضوع / البلوك / المحاضرة: ${resolvedTopic}
-- المستوى الدراسي: ${studyLevelName}
-- توزيع الأسئلة المطلوبة (الإجمالي: ${totalRequested} سؤال):
-  * أسئلة اختيار من متعدد (MCQ - ${optionsCount} خيارات لكل سؤال): ${mcqCount} سؤال
-  * أسئلة صواب وخطأ (صح وخطأ): ${trueFalseCount} سؤال
-  * أسئلة مقالية سريرية (سؤال مقالي): ${essayCount} سؤال
+- لغة الاختبار: العربية الطبية الفصحى (مع المصطلحات الإنجليزية المعيارية بين قوسين)
+${universityName ? `- الجامعة والكلية: ${universityName}${collegeName ? ` — ${collegeName}` : ''}\n` : ''}${programName ? `- التخصص الأكاديمي: ${programName}\n` : ''}- المستوى الدراسي المستهدف: ${studyLevelName} (مهم جداً: صِغ الأسئلة بما يناسب منهج ${studyLevelName} حصراً ولا تنسبها لأي سنة دراسية أخرى)
+${blockName ? `- البلوك / المقرر المعتمد: ${blockName}\n` : ''}- الموضوع / البلوك / المحاضرة: ${resolvedTopic}
+- نوع البنك / الأسئلة المطلوبة: ${typeModeDescAr}
+- سياسة عدد الأسئلة: ${countSpecAr}
 - المستوى والأسلوب العلمي: ${styleDescAr}
 
 ==================================================
@@ -1880,20 +2007,24 @@ ${
 ${batchName ? `الدفعة: ${batchName}\n` : ''}المادة: ${resolvedTopic}
 المدة: ${durationMinutes} دقيقة
 مؤقت السؤال: ${questionDurationSeconds} ثانية
-
+${
+  includeMcqExample
+    ? `
 1. [نص السؤال الطبي أو الحالة السريرية بوضوح]
 أ) [نص الخيار الأول]${includeOptionRationales ? ' (التعليل: سبب خطأ هذا الخيار طبياً)' : ''}
 ب) [نص الخيار الثاني الصحيح] *${includeOptionRationales ? ' (التعليل: صحيح لأن...)' : ''}
 ج) [نص الخيار الثالث]${includeOptionRationales ? ' (التعليل: سبب خطأ هذا الخيار طبياً)' : ''}
 د) [نص الخيار الرابع]${includeOptionRationales ? ' (التعليل: سبب خطأ هذا الخيار طبياً)' : ''}${
-    optionsCount === 5
-      ? `\nهـ) [نص الخيار الخامس]${includeOptionRationales ? ' (التعليل: سبب خطأ هذا الخيار طبياً)' : ''}`
-      : ''
-  }
+        optionsCount === 5
+          ? `\nهـ) [نص الخيار الخامس]${includeOptionRationales ? ' (التعليل: سبب خطأ هذا الخيار طبياً)' : ''}`
+          : ''
+      }
 الإجابة: ب
 التعليل: [التعليل الطبي الشامل للسؤال في سطرين يوضح آلية الإجابة الصحيحة وأهم الفروقات التشخيصية]
-${
-  trueFalseCount > 0
+`
+    : ''
+}${
+  includeTfExample
     ? `
 2. [صح وخطأ] [نص العبارة الطبية الدقيقة]
 أ) صح (التعليل: [سبب الصحة أو الخطأ])
@@ -1903,9 +2034,17 @@ ${
 `
     : ''
 }${
-  essayCount > 0
+  includeFillBlankExample
     ? `
-3. [سؤال مقالي] [نص السؤال السريري المقالي]
+3. [إكمال الفراغ] الهرمون الرئيسي المسؤول عن تحفيز إنتاج كريات الدم الحمراء في نخاع العظم استجابةً لنقص الأكسجة هو __________.
+الإجابة: الإريثروبويتين (Erythropoietin - EPO)
+التعليل: يُفرز هرمون الإريثروبويتين من الكلية استجابةً لنقص الأكسجة الأنسجة لتحفيز تكوين الكريات الحمر.
+`
+    : ''
+}${
+  includeEssayExample
+    ? `
+4. [سؤال مقالي] [نص السؤال السريري المقالي]
 الإجابة النموذجية: [النقاط الطبية الأساسية المطلوبة في إجابة الطالب مرتبة بوضوح]
 التعليل: [الشرح العلمي والمرجعي للسؤال]
 النقاط: 10
@@ -1915,20 +2054,18 @@ ${
 
 قواعد صارمة لضمان التعرف الفوري في منصة UMED:
 1. افصل بين كل سؤال والذي يليه بسطر فارغ واحد.
-2. ضع دائماً علامة النجمة \`*\` بجوار الخيار الصحيح، بالإضافة إلى سطر \`الإجابة: [الحرف]\` أسفل الخيارات.
+2. في أسئلة الاختيارات ضع علامة النجمة \`*\` بجوار الخيار الصحيح مع سطر \`الإجابة:\` أسفل الخيارات، وفي إكمال الفراغ والمقالي اكتب سطر \`الإجابة:\` أو \`الإجابة النموذجية:\`.
 3. لا تكتب أي مقدمات أو عبارات ترحيبية خارج مربع الكود (\`\`\`text).
 
-${mode === 'generate_new' ? `ابدأ الآن بتوليد الـ ${totalRequested} سؤال حول موضوع: ${resolvedTopic}` : 'الآن طبّق هذه القواعد بدقة 100% على المحتوى التالي:'}`;
+${mode === 'generate_new' ? `ابدأ الآن بتوليد الأسئلة لمستوى (${studyLevelName}) حول موضوع: ${resolvedTopic}` : 'الآن طبّق هذه القواعد بدقة 100% على المحتوى التالي:'}`;
 }
 
 export const UMED_AI_UNIVERSAL_PROMPT_ARABIC = buildProfessionalAiPrompt({
   mode: 'format_existing',
   language: 'ar',
   assessmentType: 'exam',
-  mcqCount: 10,
-  optionsCount: 4,
-  trueFalseCount: 2,
-  essayCount: 1,
+  questionTypeMode: 'hybrid',
+  isDynamicQuestionCount: true,
   difficultyMix: 'clinical_usmle',
   includeOptionRationales: true
 });
@@ -1937,10 +2074,8 @@ export const UMED_AI_UNIVERSAL_PROMPT_ENGLISH = buildProfessionalAiPrompt({
   mode: 'format_existing',
   language: 'en',
   assessmentType: 'exam',
-  mcqCount: 10,
-  optionsCount: 4,
-  trueFalseCount: 2,
-  essayCount: 1,
+  questionTypeMode: 'hybrid',
+  isDynamicQuestionCount: true,
   difficultyMix: 'clinical_usmle',
   includeOptionRationales: true
 });
@@ -1949,10 +2084,8 @@ export const UMED_AI_UNIVERSAL_PROMPT_BILINGUAL = buildProfessionalAiPrompt({
   mode: 'format_existing',
   language: 'bilingual',
   assessmentType: 'exam',
-  mcqCount: 10,
-  optionsCount: 4,
-  trueFalseCount: 2,
-  essayCount: 1,
+  questionTypeMode: 'hybrid',
+  isDynamicQuestionCount: true,
   difficultyMix: 'clinical_usmle',
   includeOptionRationales: true
 });

@@ -44,6 +44,7 @@ import {
   DAR_AL_SALAM_SEED,
   QuestionOption,
   QuestionType,
+  BankQuestionTypeMode,
   AssessmentLanguage,
   DetectedAssessmentMetadata
 } from '../../types/umed.ts';
@@ -62,6 +63,11 @@ import {
   requestDirectAiSmartExamGeneration
 } from '../../services/questionImportSyncService.ts';
 import { bulkSaveQuestions, createAssessment, updateQuestionBank } from '../../services/assessmentService.ts';
+import {
+  getUserAcademicContext,
+  saveUserAcademicContext,
+  inferAcademicContextFromText
+} from '../../services/academicService.ts';
 
 export type ApprovalPublishMode = 'bank_only' | 'exam_only' | 'competition_only';
 
@@ -90,12 +96,41 @@ export default function BulkQuestionImportModal({
   existingQuestions,
   userRole,
   studyLevels = DAR_AL_SALAM_SEED.studyLevels,
-  defaultStudyLevelId = 'lvl-4',
+  defaultStudyLevelId,
   onClose,
   onSaved
 }: BulkQuestionImportModalProps) {
+  // Resolve initial academic context from user's saved context + bank metadata + text inference
+  const initialAcademicResolution = useMemo(() => {
+    const userCtx = getUserAcademicContext();
+    const inferredFromBank = inferAcademicContextFromText(
+      `${bank.titleArabic || ''} ${bank.titleEnglish || ''} ${bank.blockName || ''}`
+    );
+    const resolvedLevelId =
+      inferredFromBank.studyLevelId ||
+      (bank.studyLevelId && bank.studyLevelId !== 'lvl-4' ? bank.studyLevelId : undefined) ||
+      defaultStudyLevelId ||
+      userCtx.studyLevelId ||
+      bank.studyLevelId ||
+      'lvl-2';
+    const resolvedBlockName =
+      bank.blockName ||
+      inferredFromBank.blockName ||
+      userCtx.studyPeriodName ||
+      bank.titleArabic ||
+      '';
+    return {
+      userCtx,
+      studyLevelId: resolvedLevelId,
+      blockName: resolvedBlockName
+    };
+  }, [bank, defaultStudyLevelId]);
+
   const [step, setStep] = useState<'input' | 'review'>('input');
   const [examLanguage, setExamLanguage] = useState<AssessmentLanguage>(bank.language || 'ar');
+  const [questionTypeMode, setQuestionTypeMode] = useState<BankQuestionTypeMode>(
+    bank.questionTypeMode || 'hybrid'
+  );
   const [rawInput, setRawInput] = useState<string>('');
   const [sourceFormat, setSourceFormat] = useState<'auto' | 'text' | 'csv' | 'json'>('auto');
   const [defaultPoints, setDefaultPoints] = useState<number>(5);
@@ -105,18 +140,24 @@ export default function BulkQuestionImportModal({
   const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({});
   const [showFormatOptions, setShowFormatOptions] = useState<boolean>(false);
   const [showAiPromptStudio, setShowAiPromptStudio] = useState<boolean>(false);
+  const [showAcademicPopup, setShowAcademicPopup] = useState<boolean>(false);
   const [isOnline, setIsOnline] = useState<boolean>(
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
 
   // AI Smart Exam Prompt Studio Configuration
   const [aiMode, setAiMode] = useState<'generate_new' | 'format_existing'>('generate_new');
-  const [aiTopic, setAiTopic] = useState<string>(bank.titleArabic || 'بلوك القلب والأوعية الدموية (CVS)');
+  const [aiTopic, setAiTopic] = useState<string>(
+    initialAcademicResolution.blockName || bank.titleArabic || 'بلوك الدم والجهاز اللمفاوي (Hematology)'
+  );
   const [aiAssessmentType, setAiAssessmentType] = useState<'exam' | 'competition'>('exam');
+  // Dynamic question count by default (unbounded unless user explicitly chooses custom count)
+  const [isDynamicQuestionCount, setIsDynamicQuestionCount] = useState<boolean>(true);
   const [aiMcqCount, setAiMcqCount] = useState<number>(10);
   const [aiOptionsCount, setAiOptionsCount] = useState<4 | 5>(4);
   const [aiTfCount, setAiTfCount] = useState<number>(2);
   const [aiEssayCount, setAiEssayCount] = useState<number>(1);
+  const [aiFillBlankCount, setAiFillBlankCount] = useState<number>(2);
   const [aiDifficultyMix, setAiDifficultyMix] = useState<'clinical_usmle' | 'balanced' | 'foundational'>('clinical_usmle');
   const [aiIncludeOptionRationales, setAiIncludeOptionRationales] = useState<boolean>(true);
   const [directAiGenerating, setDirectAiGenerating] = useState<boolean>(false);
@@ -124,10 +165,13 @@ export default function BulkQuestionImportModal({
   // Direct Approval & Single-Mode Publishing State (Strictly Bank Only OR Exam Only OR Competition Only)
   const [publishMode, setPublishMode] = useState<ApprovalPublishMode>('bank_only');
   const [publishTitle, setPublishTitle] = useState<string>(
-    (bank.language === 'en' ? `Exam: ${bank.titleEnglish || bank.titleArabic}` : `اختبار ${bank.titleArabic}`)
+    bank.language === 'en' ? `Exam: ${bank.titleEnglish || bank.titleArabic}` : `اختبار ${bank.titleArabic}`
   );
   const [publishStudyLevelId, setPublishStudyLevelId] = useState<string>(
-    bank.studyLevelId || defaultStudyLevelId || 'lvl-4'
+    initialAcademicResolution.studyLevelId
+  );
+  const [publishBlockName, setPublishBlockName] = useState<string>(
+    initialAcademicResolution.blockName
   );
   const [publishDurationMinutes, setPublishDurationMinutes] = useState<number>(30);
   const [publishQuestionSeconds, setPublishQuestionSeconds] = useState<number>(0);
@@ -145,26 +189,58 @@ export default function BulkQuestionImportModal({
   const ARABIC_LETTERS = ['أ', 'ب', 'ج', 'د', 'هـ', 'و', 'ز', 'ح'];
   const ENGLISH_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 
+  // Automatically infer study level & block if user types e.g. "بلوك دم سنة ثانية" in aiTopic or publishTitle
+  useEffect(() => {
+    const combinedText = `${aiTopic} ${publishTitle}`;
+    const inferred = inferAcademicContextFromText(combinedText);
+    if (inferred.studyLevelId && inferred.studyLevelId !== publishStudyLevelId) {
+      setPublishStudyLevelId(inferred.studyLevelId);
+      const matchedLvl = studyLevels.find((l) => l.id === inferred.studyLevelId);
+      saveUserAcademicContext({
+        studyLevelId: inferred.studyLevelId,
+        studyLevelName: matchedLvl?.titleArabic,
+        ...(inferred.blockId ? { studyPeriodId: inferred.blockId, studyPeriodName: inferred.blockName } : {})
+      });
+    }
+    if (inferred.blockName && inferred.blockName !== publishBlockName) {
+      setPublishBlockName(inferred.blockName);
+    }
+  }, [aiTopic, publishTitle]);
+
   const currentStudyLevelTitle = useMemo(() => {
     const found = studyLevels.find((l) => l.id === publishStudyLevelId);
-    if (!found) return examLanguage === 'en' ? 'Level 4' : 'المستوى الرابع';
+    if (!found) return examLanguage === 'en' ? 'Level 2 (Second Year)' : 'المستوى الثاني (السنة الثانية)';
     return examLanguage === 'en' ? (found.titleEnglish || found.titleArabic) : found.titleArabic;
   }, [studyLevels, publishStudyLevelId, examLanguage]);
 
+  const blocksForCurrentLevel = useMemo(() => {
+    return (DAR_AL_SALAM_SEED.sampleBlocks || []).filter(
+      (b: any) => !b.levelId || b.levelId === publishStudyLevelId
+    );
+  }, [publishStudyLevelId]);
+
   const generatedAiPrompt = useMemo(() => {
+    const ctx = getUserAcademicContext();
     return buildProfessionalAiPrompt({
       mode: aiMode,
       language: examLanguage,
       assessmentType: aiAssessmentType,
+      questionTypeMode,
+      isDynamicQuestionCount,
       title: publishTitle,
-      topic: aiTopic || bank.titleArabic,
+      topic: aiTopic || publishBlockName || bank.titleArabic,
+      universityName: ctx.universityName || DAR_AL_SALAM_SEED.university.nameArabic,
+      collegeName: ctx.collegeName || DAR_AL_SALAM_SEED.college.nameArabic,
+      programName: ctx.programName || DAR_AL_SALAM_SEED.program.nameArabic,
       studyLevelName: currentStudyLevelTitle,
+      blockName: publishBlockName || aiTopic || bank.titleArabic,
       durationMinutes: publishDurationMinutes || 30,
       questionDurationSeconds: publishQuestionSeconds || 45,
       mcqCount: aiMcqCount,
       optionsCount: aiOptionsCount,
       trueFalseCount: aiTfCount,
       essayCount: aiEssayCount,
+      fillBlankCount: aiFillBlankCount,
       difficultyMix: aiDifficultyMix,
       includeOptionRationales: aiIncludeOptionRationales
     });
@@ -172,8 +248,11 @@ export default function BulkQuestionImportModal({
     aiMode,
     examLanguage,
     aiAssessmentType,
+    questionTypeMode,
+    isDynamicQuestionCount,
     publishTitle,
     aiTopic,
+    publishBlockName,
     bank.titleArabic,
     currentStudyLevelTitle,
     publishDurationMinutes,
@@ -182,6 +261,7 @@ export default function BulkQuestionImportModal({
     aiOptionsCount,
     aiTfCount,
     aiEssayCount,
+    aiFillBlankCount,
     aiDifficultyMix,
     aiIncludeOptionRationales
   ]);
@@ -336,19 +416,27 @@ export default function BulkQuestionImportModal({
     setDirectAiGenerating(true);
     setFeedback(null);
     try {
+      const ctx = getUserAcademicContext();
       const res = await requestDirectAiSmartExamGeneration({
         mode: aiMode,
         language: examLanguage,
         assessmentType: aiAssessmentType,
+        questionTypeMode,
+        isDynamicQuestionCount,
         title: publishTitle,
-        topic: aiTopic || bank.titleArabic,
+        topic: aiTopic || publishBlockName || bank.titleArabic,
+        universityName: ctx.universityName || DAR_AL_SALAM_SEED.university.nameArabic,
+        collegeName: ctx.collegeName || DAR_AL_SALAM_SEED.college.nameArabic,
+        programName: ctx.programName || DAR_AL_SALAM_SEED.program.nameArabic,
         studyLevelName: currentStudyLevelTitle,
+        blockName: publishBlockName || aiTopic || bank.titleArabic,
         durationMinutes: publishDurationMinutes || 30,
         questionDurationSeconds: publishQuestionSeconds || 45,
         mcqCount: aiMcqCount,
         optionsCount: aiOptionsCount,
         trueFalseCount: aiTfCount,
         essayCount: aiEssayCount,
+        fillBlankCount: aiFillBlankCount,
         difficultyMix: aiDifficultyMix,
         includeOptionRationales: aiIncludeOptionRationales,
         rawContentToConvert: aiMode === 'format_existing' ? rawInput : undefined
@@ -511,6 +599,15 @@ export default function BulkQuestionImportModal({
           modelAnswerArabic: d.modelAnswerArabic || ''
         };
       }
+      if (newType === 'fill_blank') {
+        return {
+          ...d,
+          questionType: 'fill_blank',
+          options: [],
+          correctOptionId: 'fill-blank-answer',
+          modelAnswerArabic: d.modelAnswerArabic || ''
+        };
+      }
       // mcq
       const currentOpts = d.options && d.options.length >= 2 ? d.options : [
         { id: 'opt-a', textArabic: '', explanationArabic: '' },
@@ -522,7 +619,10 @@ export default function BulkQuestionImportModal({
         ...d,
         questionType: 'mcq',
         options: currentOpts,
-        correctOptionId: d.correctOptionId && d.correctOptionId !== 'essay-answer' ? d.correctOptionId : (currentOpts[0]?.id || 'opt-a')
+        correctOptionId:
+          d.correctOptionId && d.correctOptionId !== 'essay-answer' && d.correctOptionId !== 'fill-blank-answer'
+            ? d.correctOptionId
+            : (currentOpts[0]?.id || 'opt-a')
       };
     });
   };
@@ -743,9 +843,19 @@ export default function BulkQuestionImportModal({
 
     setSaving(true);
     try {
-      // 1. Update bank language if changed, and save imported questions into the Question Bank
-      if (bank.language !== examLanguage) {
-        updateQuestionBank(bank.id, { language: examLanguage }).catch(() => {});
+      // 1. Update bank metadata (language, questionTypeMode, studyLevelId, blockName) if changed, and save imported questions
+      if (
+        bank.language !== examLanguage ||
+        bank.questionTypeMode !== questionTypeMode ||
+        bank.studyLevelId !== publishStudyLevelId ||
+        bank.blockName !== publishBlockName
+      ) {
+        updateQuestionBank(bank.id, {
+          language: examLanguage,
+          questionTypeMode,
+          studyLevelId: publishStudyLevelId,
+          blockName: publishBlockName
+        }).catch(() => {});
       }
       const draftsWithLang = toSave.map((d) => ({ ...d, language: d.language || examLanguage }));
       const result = await bulkSaveQuestions(bank.id, draftsWithLang, userRole);
@@ -764,6 +874,7 @@ export default function BulkQuestionImportModal({
         publishedAssessment = await createAssessment(
           {
             assessmentType: strictAssessmentType,
+            questionTypeMode,
             language: examLanguage,
             titleArabic: publishTitle.trim(),
             ...(examLanguage === 'en' ? { titleEnglish: publishTitle.trim() } : {}),
@@ -773,7 +884,8 @@ export default function BulkQuestionImportModal({
                 : `اختبار أكاديمي مرتبط ببنك ${bank.titleArabic}`,
             universityId: bank.universityId || 'univ-dar-al-salam',
             programId: bank.programId || 'prog-mbbs',
-            studyLevelId: publishStudyLevelId || bank.studyLevelId || defaultStudyLevelId || 'lvl-4',
+            studyLevelId: publishStudyLevelId || bank.studyLevelId || defaultStudyLevelId || 'lvl-2',
+            blockName: publishBlockName || bank.titleArabic,
             durationMinutes: durationVal,
             enableExamTimer: durationVal > 0,
             questionDurationSeconds: Number(publishQuestionSeconds) || 0,
@@ -909,58 +1021,168 @@ export default function BulkQuestionImportModal({
         <div className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-3 overscroll-contain">
           {step === 'input' ? (
             <div className="space-y-3">
-              {/* STEP 1A: Mandatory Exam / Bank Language Selector Bar */}
-              <div className="p-2.5 sm:p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                <div className="flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-lg bg-teal-950/90 border border-teal-700/60 flex items-center justify-center shrink-0">
-                    <Globe className="w-4 h-4 text-teal-400" />
-                  </div>
-                  <div>
-                    <div className="text-xs font-bold text-white">
-                      أولاً: اختر لغة الاختبار أو بنك الأسئلة
+              {/* STEP 1A: Compact Dropdown Settings Bar + Popup Academic Context Trigger */}
+              <div className="p-2.5 sm:p-3 rounded-xl bg-slate-950 border border-slate-800 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {/* 1. Popup Academic Level & Block Selector Trigger */}
+                <div>
+                  <label className="text-[10px] text-slate-400 block mb-1 font-semibold">
+                    المستوى الدراسي والبلوك (اضغط للتغيير):
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setShowAcademicPopup(true)}
+                    className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-teal-700/60 text-right flex items-center justify-between gap-2 transition-colors"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold text-teal-300 truncate">
+                        {currentStudyLevelTitle}
+                      </div>
+                      <div className="text-[10px] text-slate-400 truncate">
+                        {publishBlockName || bank.titleArabic}
+                      </div>
                     </div>
-                    <div className="text-[10px] text-slate-400">
-                      يضبط اتجاه النصوص، نموذج الأسئلة، وطلب التوليد الذكي (AI Prompt) تلقائياً
-                    </div>
+                    <ChevronDown className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                  </button>
+                </div>
+
+                {/* 2. Compact Language Dropdown Selector */}
+                <div>
+                  <label className="text-[10px] text-slate-400 block mb-1 font-semibold">
+                    لغة الاختبار أو بنك الأسئلة:
+                  </label>
+                  <div className="relative">
+                    <select
+                      value={examLanguage}
+                      onChange={(e) => setExamLanguage(e.target.value as AssessmentLanguage)}
+                      className="w-full px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs font-bold text-white focus:outline-none focus:border-teal-500"
+                    >
+                      <option value="ar">العربية (عربي + مصطلحات طبية)</option>
+                      <option value="en">English (إنجليزي طبي بالكامل)</option>
+                      <option value="bilingual">ثنائي اللغة (Bilingual Ar + En)</option>
+                    </select>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-1.5 bg-slate-900 p-1 rounded-xl border border-slate-800 text-[11px]">
-                  <button
-                    type="button"
-                    onClick={() => setExamLanguage('ar')}
-                    className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center justify-center gap-1 ${
-                      examLanguage === 'ar'
-                        ? 'bg-teal-600 text-white shadow'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
+                {/* 3. Compact Question Bank / Exam Type Mode Dropdown */}
+                <div>
+                  <label className="text-[10px] text-slate-400 block mb-1 font-semibold">
+                    نوع البنك / نمط الأسئلة:
+                  </label>
+                  <select
+                    value={questionTypeMode}
+                    onChange={(e) => setQuestionTypeMode(e.target.value as BankQuestionTypeMode)}
+                    className="w-full px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs font-bold text-indigo-300 focus:outline-none focus:border-indigo-500"
                   >
-                    <span>العربية (عربي)</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setExamLanguage('en')}
-                    className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center justify-center gap-1 ${
-                      examLanguage === 'en'
-                        ? 'bg-sky-600 text-white shadow'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <span>English (إنجليزي)</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setExamLanguage('bilingual')}
-                    className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center justify-center gap-1 ${
-                      examLanguage === 'bilingual'
-                        ? 'bg-indigo-600 text-white shadow'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <span>ثنائي اللغة (Ar+En)</span>
-                  </button>
+                    <option value="hybrid">بنك هجين شامل (اختيارات + صح/خطأ + إكمال + مقالي)</option>
+                    <option value="mcq">بنك اختيارات من متعدد فقط (MCQ Only)</option>
+                    <option value="true_false">بنك صح وخطأ فقط (True/False Only)</option>
+                    <option value="fill_blank">بنك إكمال الفراغ فقط (Fill in the Blank)</option>
+                    <option value="essay">بنك أسئلة مقالية فقط (Essay Only)</option>
+                  </select>
                 </div>
               </div>
+
+              {/* Standalone Popup Modal for Selecting Study Level & Medical Block */}
+              {showAcademicPopup && (
+                <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-xs flex items-center justify-center p-3">
+                  <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg max-h-[85dvh] flex flex-col shadow-2xl overflow-hidden">
+                    <div className="px-4 py-3 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+                      <div>
+                        <h4 className="text-xs sm:text-sm font-bold text-white">
+                          تحديد المستوى الدراسي والبلوك الطبي للاختبار
+                        </h4>
+                        <p className="text-[10px] text-slate-400">
+                          يتم حفظ اختيارك وتحديث تعليمات الذكاء الاصطناعي والاختبار تلقائياً
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowAcademicPopup(false)}
+                        className="p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="p-4 overflow-y-auto space-y-4">
+                      <div>
+                        <label className="text-xs font-bold text-teal-300 block mb-2">
+                          1. اختر السنة / المستوى الدراسي:
+                        </label>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                          {studyLevels.map((lvl) => {
+                            const active = lvl.id === publishStudyLevelId;
+                            return (
+                              <button
+                                key={lvl.id}
+                                type="button"
+                                onClick={() => {
+                                  setPublishStudyLevelId(lvl.id);
+                                  saveUserAcademicContext({
+                                    studyLevelId: lvl.id,
+                                    studyLevelName: lvl.titleArabic
+                                  });
+                                }}
+                                className={`p-2.5 rounded-xl border text-right transition-all flex items-center justify-between ${
+                                  active
+                                    ? 'bg-teal-950/80 border-teal-500 text-white font-bold'
+                                    : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                                }`}
+                              >
+                                <span className="text-xs">{lvl.titleArabic}</span>
+                                {active && <CheckCircle2 className="w-4 h-4 text-teal-400 shrink-0" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="text-xs font-bold text-indigo-300 block mb-2">
+                          2. اختر البلوك أو المقرر الطبي المرتبط بهذا المستوى:
+                        </label>
+                        <div className="grid grid-cols-1 gap-1.5 max-h-48 overflow-y-auto pr-1">
+                          {blocksForCurrentLevel.map((blk: any) => {
+                            const active = publishBlockName === blk.titleArabic;
+                            return (
+                              <button
+                                key={blk.id}
+                                type="button"
+                                onClick={() => {
+                                  setPublishBlockName(blk.titleArabic);
+                                  setAiTopic(blk.titleArabic);
+                                  saveUserAcademicContext({
+                                    studyPeriodId: blk.id,
+                                    studyPeriodName: blk.titleArabic
+                                  });
+                                }}
+                                className={`p-2.5 rounded-xl border text-right transition-all flex items-center justify-between ${
+                                  active
+                                    ? 'bg-indigo-950/80 border-indigo-500 text-white font-bold'
+                                    : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                                }`}
+                              >
+                                <span className="text-xs">{blk.titleArabic}</span>
+                                {active && <CheckCircle2 className="w-4 h-4 text-indigo-400 shrink-0" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="px-4 py-3 bg-slate-950 border-t border-slate-800 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => setShowAcademicPopup(false)}
+                        className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold"
+                      >
+                        اعتماد وإغلاق
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Compact Action Strip */}
               <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-950 p-2.5 rounded-xl border border-slate-800">
@@ -1065,38 +1287,24 @@ export default function BulkQuestionImportModal({
                       </div>
                     </div>
 
-                    {/* AI Mode Switcher */}
-                    <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-indigo-800/60 text-[11px]">
-                      <button
-                        type="button"
-                        onClick={() => setAiMode('generate_new')}
-                        className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
-                          aiMode === 'generate_new'
-                            ? 'bg-indigo-600 text-white shadow'
-                            : 'text-slate-400 hover:text-white'
-                        }`}
+                    {/* Compact AI Mode Dropdown */}
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={aiMode}
+                        onChange={(e) => setAiMode(e.target.value as 'generate_new' | 'format_existing')}
+                        className="px-3 py-1.5 rounded-xl bg-slate-950 border border-indigo-700/80 text-xs font-bold text-indigo-200 focus:outline-none focus:border-indigo-400"
                       >
-                        توليد اختبار طبي جديد
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setAiMode('format_existing')}
-                        className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
-                          aiMode === 'format_existing'
-                            ? 'bg-indigo-600 text-white shadow'
-                            : 'text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        تحويل وتنسيق أسئلة/محاضرة خام
-                      </button>
+                        <option value="generate_new">وضع التوليد: إنشاء اختبار طبي جديد</option>
+                        <option value="format_existing">وضع التحويل: تنسيق محاضرة أو أسئلة خام</option>
+                      </select>
                     </div>
                   </div>
 
-                  {/* Customization Grid */}
+                  {/* Customization Grid with Compact Dropdowns */}
                   <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 text-xs">
                     <div className="sm:col-span-2">
                       <label className="text-[11px] text-indigo-200 block mb-1 font-semibold">
-                        الموضوع الطبي / البلوك / المحاضرة:
+                        الموضوع الطبي / البلوك / المحاضرة (يكتشف المستوى تلقائياً):
                       </label>
                       <input
                         type="text"
@@ -1104,8 +1312,8 @@ export default function BulkQuestionImportModal({
                         onChange={(e) => setAiTopic(e.target.value)}
                         placeholder={
                           examLanguage === 'en'
-                            ? 'e.g. Acute Coronary Syndrome & Arrhythmias'
-                            : 'مثال: متلازمة الشريان التاجي الحادة واضطرابات النظم (CVS)'
+                            ? 'e.g. Second Year Hematology Block - Anemia & Coagulation'
+                            : 'مثال: اختبار بلوك دم سنة ثانية - فقر الدم وتخثر الدم'
                         }
                         className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-indigo-800/70 text-xs text-white focus:outline-none focus:border-indigo-400"
                       />
@@ -1141,67 +1349,109 @@ export default function BulkQuestionImportModal({
                     </div>
                   </div>
 
-                  {/* Question Type Counts Row */}
-                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
+                  {/* Dynamic Question Count & Question Type Mode Controls (Dropdown-Based) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs bg-slate-950/70 p-2.5 rounded-xl border border-indigo-900/50">
                     <div>
-                      <label className="text-[10px] text-slate-300 block mb-0.5">عدد أسئلة MCQ:</label>
-                      <input
-                        type="number"
-                        min={0}
-                        max={100}
-                        value={aiMcqCount}
-                        onChange={(e) => setAiMcqCount(Math.max(0, Number(e.target.value) || 0))}
-                        className="w-full px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-xs text-teal-300 font-mono font-bold"
-                      />
+                      <label className="text-[10px] text-slate-300 block mb-1 font-semibold">
+                        نظام عدد الأسئلة:
+                      </label>
+                      <select
+                        value={isDynamicQuestionCount ? 'dynamic' : 'custom'}
+                        onChange={(e) => setIsDynamicQuestionCount(e.target.value === 'dynamic')}
+                        className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-indigo-800/70 text-xs font-bold text-teal-300"
+                      >
+                        <option value="dynamic">ديناميكي مفتوح (تلقائي حسب شمولية الموضوع بدون حصر)</option>
+                        <option value="custom">تحديد عدد الأسئلة يدوياً</option>
+                      </select>
                     </div>
+
                     <div>
-                      <label className="text-[10px] text-slate-300 block mb-0.5">خيارات كل MCQ:</label>
+                      <label className="text-[10px] text-slate-300 block mb-1 font-semibold">
+                        خيارات كل سؤال اختيارات (MCQ):
+                      </label>
                       <select
                         value={aiOptionsCount}
                         onChange={(e) => setAiOptionsCount(Number(e.target.value) === 5 ? 5 : 4)}
-                        className="w-full px-2 py-1 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white"
+                        className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white"
                       >
                         <option value={4}>4 خيارات (A-D / أ-د)</option>
                         <option value={5}>5 خيارات (A-E / أ-هـ)</option>
                       </select>
                     </div>
-                    <div>
-                      <label className="text-[10px] text-slate-300 block mb-0.5">أسئلة صح وخطأ:</label>
-                      <input
-                        type="number"
-                        min={0}
-                        max={50}
-                        value={aiTfCount}
-                        onChange={(e) => setAiTfCount(Math.max(0, Number(e.target.value) || 0))}
-                        className="w-full px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-xs text-amber-300 font-mono font-bold"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] text-slate-300 block mb-0.5">أسئلة مقالية:</label>
-                      <input
-                        type="number"
-                        min={0}
-                        max={20}
-                        value={aiEssayCount}
-                        onChange={(e) => setAiEssayCount(Math.max(0, Number(e.target.value) || 0))}
-                        className="w-full px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-xs text-purple-300 font-mono font-bold"
-                      />
-                    </div>
-                    <div className="col-span-2 sm:col-span-1 flex items-end">
+
+                    <div className="flex items-end">
                       <button
                         type="button"
                         onClick={() => setAiIncludeOptionRationales(!aiIncludeOptionRationales)}
-                        className={`w-full py-1.5 px-2 rounded-lg border text-[11px] font-bold flex items-center justify-center gap-1 transition-colors ${
+                        className={`w-full py-1.5 px-2.5 rounded-lg border text-xs font-bold flex items-center justify-center gap-1.5 transition-colors ${
                           aiIncludeOptionRationales
                             ? 'bg-emerald-950/70 border-emerald-700/70 text-emerald-300'
-                            : 'bg-slate-950 border-slate-800 text-slate-400'
+                            : 'bg-slate-900 border-slate-800 text-slate-400'
                         }`}
                       >
                         {aiIncludeOptionRationales ? <CheckSquare className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
-                        <span>تعليل كل خيار</span>
+                        <span>تضمين تعليل علمي لكل خيار</span>
                       </button>
                     </div>
                   </div>
+
+                  {/* Custom Question Counts (Shown ONLY if user explicitly switches from Dynamic to Custom) */}
+                  {!isDynamicQuestionCount && (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs p-2.5 rounded-xl bg-slate-950 border border-slate-800">
+                      {(questionTypeMode === 'hybrid' || questionTypeMode === 'mcq') && (
+                        <div>
+                          <label className="text-[10px] text-slate-300 block mb-0.5">عدد أسئلة MCQ:</label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            value={aiMcqCount}
+                            onChange={(e) => setAiMcqCount(Math.max(0, Number(e.target.value) || 0))}
+                            className="w-full px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-xs text-teal-300 font-mono font-bold"
+                          />
+                        </div>
+                      )}
+                      {(questionTypeMode === 'hybrid' || questionTypeMode === 'true_false') && (
+                        <div>
+                          <label className="text-[10px] text-slate-300 block mb-0.5">أسئلة صح وخطأ:</label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            value={aiTfCount}
+                            onChange={(e) => setAiTfCount(Math.max(0, Number(e.target.value) || 0))}
+                            className="w-full px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-xs text-amber-300 font-mono font-bold"
+                          />
+                        </div>
+                      )}
+                      {(questionTypeMode === 'hybrid' || questionTypeMode === 'fill_blank') && (
+                        <div>
+                          <label className="text-[10px] text-slate-300 block mb-0.5">أسئلة إكمال الفراغ:</label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            value={aiFillBlankCount}
+                            onChange={(e) => setAiFillBlankCount(Math.max(0, Number(e.target.value) || 0))}
+                            className="w-full px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-xs text-sky-300 font-mono font-bold"
+                          />
+                        </div>
+                      )}
+                      {(questionTypeMode === 'hybrid' || questionTypeMode === 'essay') && (
+                        <div>
+                          <label className="text-[10px] text-slate-300 block mb-0.5">أسئلة مقالية:</label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={50}
+                            value={aiEssayCount}
+                            onChange={(e) => setAiEssayCount(Math.max(0, Number(e.target.value) || 0))}
+                            className="w-full px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-xs text-purple-300 font-mono font-bold"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Prompt Preview & Action Buttons */}
                   <div className="space-y-2">
@@ -1537,48 +1787,25 @@ export default function BulkQuestionImportModal({
                               <span>سؤال #{idx + 1}</span>
                             </button>
 
-                            {/* Question Type Switcher */}
-                            <div className="flex items-center bg-slate-900 rounded-lg p-0.5 border border-slate-800 text-[10px]">
-                              <button
-                                type="button"
-                                onClick={() => handleChangeQuestionType(draft.tempId, 'mcq')}
-                                className={`px-2 py-0.5 rounded font-bold transition-colors ${
-                                  qType === 'mcq'
-                                    ? 'bg-teal-600 text-white'
-                                    : 'text-slate-400 hover:text-white'
-                                }`}
-                              >
-                                خيارات ({draft.options?.length || 0})
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleChangeQuestionType(draft.tempId, 'true_false')}
-                                className={`px-2 py-0.5 rounded font-bold transition-colors ${
-                                  qType === 'true_false'
-                                    ? 'bg-amber-600 text-white'
-                                    : 'text-slate-400 hover:text-white'
-                                }`}
-                              >
-                                صح/خطأ
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleChangeQuestionType(draft.tempId, 'essay')}
-                                className={`px-2 py-0.5 rounded font-bold transition-colors ${
-                                  qType === 'essay'
-                                    ? 'bg-purple-600 text-white'
-                                    : 'text-slate-400 hover:text-white'
-                                }`}
-                              >
-                                مقالي
-                              </button>
-                            </div>
+                            {/* Compact Question Type Dropdown */}
+                            <select
+                              value={qType}
+                              onChange={(e) => handleChangeQuestionType(draft.tempId, e.target.value as QuestionType)}
+                              className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-[10px] font-bold text-teal-300 focus:outline-none focus:border-teal-500"
+                            >
+                              <option value="mcq">خيارات متعددة ({draft.options?.length || 0})</option>
+                              <option value="true_false">صح وخطأ (True/False)</option>
+                              <option value="fill_blank">إكمال الفراغ (Fill Blank)</option>
+                              <option value="essay">سؤال مقالي (Essay)</option>
+                            </select>
 
                             {/* Status Badge */}
                             {draft.isValid ? (
                               <span className="px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-700/60 text-emerald-300 text-[10px] font-bold">
                                 {qType === 'essay'
                                   ? 'جاهز ✓ (مقالي)'
+                                  : qType === 'fill_blank'
+                                  ? `جاهز ✓ (الفراغ: ${draft.modelAnswerArabic})`
                                   : qType === 'true_false'
                                   ? `جاهز ✓ (${draft.correctOptionId === 'opt-a' ? (isEnQuestion ? 'True' : 'صح') : (isEnQuestion ? 'False' : 'خطأ')})`
                                   : `جاهز ✓ (الإجابة: ${correctLetter})`}
@@ -1587,6 +1814,8 @@ export default function BulkQuestionImportModal({
                               <span className="px-2 py-0.5 rounded bg-rose-950/80 border border-rose-700 text-rose-200 text-[10px] font-bold">
                                 {qType === 'essay'
                                   ? 'أدخل الإجابة النموذجية'
+                                  : qType === 'fill_blank'
+                                  ? 'أدخل الكلمة الصحيحة للفراغ'
                                   : !draft.correctOptionId
                                   ? 'حدد الإجابة الصحيحة'
                                   : 'أكمل نص السؤال والخيارات'}
@@ -1678,7 +1907,38 @@ export default function BulkQuestionImportModal({
                           />
                         )}
 
-                        {/* 1. Essay Question View: Model Answer Input */}
+                        {/* 1A. Fill-in-the-Blank Question View */}
+                        {qType === 'fill_blank' && (
+                          <div className="space-y-1.5 p-3 rounded-xl bg-sky-950/25 border border-sky-800/60">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-bold text-sky-200 flex items-center gap-1.5">
+                                <FileText className="w-3.5 h-3.5 text-sky-400" />
+                                <span>الكلمة أو المصطلح الطبي الصحيح لإكمال الفراغ:</span>
+                              </span>
+                              <span className="text-[10px] text-sky-400 font-mono">Fill in the Blank</span>
+                            </div>
+                            <input
+                              type="text"
+                              dir={isEnQuestion ? 'ltr' : 'rtl'}
+                              value={draft.modelAnswerArabic || ''}
+                              onChange={(e) =>
+                                updateDraftItem(draft.tempId, (d) => ({
+                                  ...d,
+                                  modelAnswerArabic: e.target.value,
+                                  correctOptionId: 'fill-blank-answer'
+                                }))
+                              }
+                              placeholder={
+                                isEnQuestion
+                                  ? 'Enter exact medical term (separate synonyms with /)...'
+                                  : 'اكتب الكلمة أو المصطلح الطبي الدقيق (يمكن فصل المرادفات بعلامة /)...'
+                              }
+                              className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-sky-900 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
+                            />
+                          </div>
+                        )}
+
+                        {/* 1B. Essay Question View: Model Answer Input */}
                         {qType === 'essay' && (
                           <div className="space-y-1.5 p-3 rounded-xl bg-purple-950/25 border border-purple-800/60">
                             <div className="flex items-center justify-between">
@@ -2000,47 +2260,21 @@ export default function BulkQuestionImportModal({
             </div>
           ) : (
             <>
-              {/* Strict Single-Mode Approval Choice: Bank Only vs Exam Only vs Competition Only */}
+              {/* Compact Dropdown Approval Choice: Bank Only vs Exam Only vs Competition Only */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div className="grid grid-cols-3 gap-1.5 bg-slate-900 p-1 rounded-xl border border-slate-800 text-[11px]">
-                  <button
-                    type="button"
-                    onClick={() => handleSelectPublishMode('bank_only')}
-                    className={`py-1.5 px-2 rounded-lg font-bold flex items-center justify-center gap-1 transition-all ${
-                      publishMode === 'bank_only'
-                        ? 'bg-slate-700 text-white shadow'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
+                <div className="flex items-center gap-2">
+                  <label className="text-[11px] font-bold text-slate-300 whitespace-nowrap">
+                    وجهة الاعتماد:
+                  </label>
+                  <select
+                    value={publishMode}
+                    onChange={(e) => handleSelectPublishMode(e.target.value as ApprovalPublishMode)}
+                    className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-xs font-bold text-teal-300 focus:outline-none focus:border-teal-500"
                   >
-                    <BookOpen className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">بنك الأسئلة فقط</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleSelectPublishMode('exam_only')}
-                    className={`py-1.5 px-2 rounded-lg font-bold flex items-center justify-center gap-1 transition-all ${
-                      publishMode === 'exam_only'
-                        ? 'bg-teal-600 text-white shadow'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <FileText className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">نشر كاختبار فقط</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleSelectPublishMode('competition_only')}
-                    className={`py-1.5 px-2 rounded-lg font-bold flex items-center justify-center gap-1 transition-all ${
-                      publishMode === 'competition_only'
-                        ? 'bg-amber-600 text-white shadow'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <Trophy className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">نشر كمسابقة فقط</span>
-                  </button>
+                    <option value="bank_only">حفظ في بنك الأسئلة فقط</option>
+                    <option value="exam_only">نشر كاختبار أكاديمي فقط</option>
+                    <option value="competition_only">نشر كمسابقة طبية فقط</option>
+                  </select>
                 </div>
 
                 {/* Inline Settings when publishing strictly as Exam Only or Competition Only */}

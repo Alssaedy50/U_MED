@@ -40,8 +40,11 @@ import {
   fetchCourseOfferings,
   fetchUniversities,
   getCachedCollection,
-  subscribeToAcademicHierarchy
+  subscribeToAcademicHierarchy,
+  getUserAcademicContext,
+  saveUserAcademicContext
 } from '../../services/academicService.ts';
+import AcademicContextBar from '../common/AcademicContextModal.tsx';
 import {
   fetchCourseInstructors,
   fetchBatchNotifications,
@@ -84,23 +87,26 @@ export default function StudentDashboard({
   onEnrollmentStatusChange,
   isAdminPreview = false,
   previewUniversityId = 'univ-dar-al-salam',
-  previewStudyLevelId = 'lvl-4',
+  previewStudyLevelId,
   assessmentNavTarget
 }: StudentDashboardProps) {
-  const buildAdminPreviewEnrollment = (): StudentEnrollment => ({
-    id: `enr-preview-${uid}`,
-    uid,
-    studentNameArabic: displayNameArabic || 'معاينة المسؤول',
-    academicStudentNumber: 'ADMIN-PREVIEW',
-    universityId: previewUniversityId || 'univ-dar-al-salam',
-    collegeId: 'col-med-dar',
-    programId: 'prog-mbbs',
-    curriculumVersionId: 'cur-dar-2024',
-    currentStudyLevelId: previewStudyLevelId || 'lvl-4',
-    academicYear: '2025-2026',
-    status: 'approved',
-    enrolledAt: new Date().toISOString()
-  });
+  const buildAdminPreviewEnrollment = (): StudentEnrollment => {
+    const savedCtx = getUserAcademicContext();
+    return {
+      id: `enr-preview-${uid}`,
+      uid,
+      studentNameArabic: displayNameArabic || 'معاينة المسؤول',
+      academicStudentNumber: 'ADMIN-PREVIEW',
+      universityId: savedCtx.universityId || previewUniversityId || 'univ-dar-al-salam',
+      collegeId: savedCtx.collegeId || 'col-med-dar',
+      programId: savedCtx.programId || 'prog-mbbs',
+      curriculumVersionId: 'cur-dar-2024',
+      currentStudyLevelId: previewStudyLevelId || savedCtx.studyLevelId || 'lvl-2',
+      academicYear: '2025-2026',
+      status: 'approved',
+      enrolledAt: new Date().toISOString()
+    };
+  };
 
   const [enrollment, setEnrollment] = useState<StudentEnrollment | null>(() => {
     try {
@@ -164,6 +170,7 @@ export default function StudentDashboard({
     });
   });
   const [downloadingNotifId, setDownloadingNotifId] = useState<string | null>(null);
+  const [showBlockPopup, setShowBlockPopup] = useState<boolean>(false);
 
   useEffect(() => {
     setInternalTab(activeSection);
@@ -507,6 +514,27 @@ export default function StudentDashboard({
         </div>
       </div>
 
+      {/* Persistent Academic Context Header & Popup Switcher */}
+      <AcademicContextBar
+        userRole={isAdminPreview ? 'platform_owner' : 'student'}
+        onContextChange={(ctx) => {
+          setEnrollment(prev => {
+            if (!prev) return prev;
+            const updated: StudentEnrollment = {
+              ...prev,
+              universityId: ctx.universityId || prev.universityId,
+              collegeId: ctx.collegeId || prev.collegeId,
+              programId: ctx.programId || prev.programId,
+              currentStudyLevelId: ctx.studyLevelId || prev.currentStudyLevelId
+            };
+            try {
+              localStorage.setItem(`umed_enrollment_${uid}`, JSON.stringify(updated));
+            } catch {}
+            return updated;
+          });
+        }}
+      />
+
       {/* SECTION: MEDICAL LIBRARY */}
       {internalTab === 'library' && (
         <StudentMedicalLibrary
@@ -623,36 +651,82 @@ export default function StudentDashboard({
           )}
           
           {studyPeriods.length > 0 && (
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                  البلوكات الدراسية المتاحة لدفعتك:
+            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <span className="text-[11px] font-bold text-slate-400 block">
+                  البلوك الدراسي النشط حالياً في دفعتك ({studyPeriods.length} بلوكات متاحة):
                 </span>
-                <span className="text-xs text-teal-400 font-mono">
-                  {studyPeriods.length} بلوكات
-                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowBlockPopup(true)}
+                  className="mt-1 text-sm sm:text-base font-black text-white hover:text-teal-300 flex items-center gap-2 transition-colors text-right"
+                >
+                  <span>{selectedPeriod ? `${selectedPeriod.titleArabic} (${selectedPeriod.code})` : 'اختر البلوك الدراسي'}</span>
+                  <span className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-teal-600 text-teal-300 hover:text-white text-xs font-bold transition-colors">
+                    تبديل البلوك ▾
+                  </span>
+                </button>
               </div>
 
-              <div className="flex space-x-reverse space-x-2 overflow-x-auto no-scrollbar pb-1">
-                {studyPeriods.map((period) => {
-                  const isSelected = selectedPeriod?.id === period.id;
-                  return (
-                    <button
-                      key={period.id}
-                      onClick={() => setSelectedPeriod(period)}
-                      className={`px-4 py-2.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all border flex items-center gap-2 ${
-                        isSelected
-                          ? 'bg-teal-500/20 border-teal-500 text-white shadow-lg shadow-teal-500/10'
-                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-200'
-                      }`}
-                    >
-                      <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-800 text-teal-300">
-                        {period.code}
-                      </span>
-                      <span>{period.titleArabic}</span>
-                    </button>
-                  );
-                })}
+              <button
+                type="button"
+                onClick={() => setShowBlockPopup(true)}
+                className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-teal-300 text-xs font-bold transition-colors"
+              >
+                عرض جميع بلوكات الدفعة ({studyPeriods.length})
+              </button>
+            </div>
+          )}
+
+          {/* Standalone Popup Modal for Selecting Study Block */}
+          {showBlockPopup && (
+            <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-start sm:items-center justify-center p-3 sm:p-4 overflow-y-auto" dir="rtl">
+              <div className="bg-slate-900 border border-teal-500/40 rounded-2xl max-w-lg w-full max-h-[85dvh] flex flex-col shadow-2xl my-auto overflow-hidden">
+                <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/90">
+                  <div>
+                    <h3 className="text-sm font-black text-white">اختيار البلوك الدراسي ({studyPeriods.length})</h3>
+                    <p className="text-[11px] text-slate-400 mt-0.5">اختر البلوك لعرض مقرراته ومحاضراته الخاصة بدفعتك</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowBlockPopup(false)}
+                    className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 hover:text-white text-xs"
+                  >
+                    إغلاق
+                  </button>
+                </div>
+                <div className="p-4 overflow-y-auto space-y-2">
+                  {studyPeriods.map((period) => {
+                    const isSelected = selectedPeriod?.id === period.id;
+                    return (
+                      <button
+                        key={period.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedPeriod(period);
+                          saveUserAcademicContext({
+                            studyPeriodId: period.id,
+                            studyPeriodName: period.titleArabic
+                          });
+                          setShowBlockPopup(false);
+                        }}
+                        className={`w-full text-right p-3.5 rounded-xl border text-xs transition-all flex items-center justify-between gap-2 ${
+                          isSelected
+                            ? 'bg-teal-500/20 border-teal-500 text-white font-bold shadow-md'
+                            : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                        }`}
+                      >
+                        <div>
+                          <div className="text-sm font-bold text-white">{period.titleArabic}</div>
+                          <div className="text-[11px] text-slate-400" dir="ltr">{period.titleEnglish}</div>
+                        </div>
+                        <span className="px-2 py-0.5 rounded bg-slate-900 text-teal-300 font-mono text-[11px]">
+                          {period.code}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           )}
