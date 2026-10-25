@@ -13,7 +13,6 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { GoogleGenAI } from '@google/genai';
 import type { UserRoleDoc, AuditLog, QuestionItemFull, Assessment } from '../src/types/umed.ts';
 
 dotenv.config();
@@ -31,12 +30,17 @@ const FIREBASE_PROJECT_ID = (
   'umed-yemen'
 ).trim();
 
-const INITIAL_OWNER_EMAILS = [
+const parsedEnvOwnerEmails = (process.env.INITIAL_OWNER_EMAIL || '')
+  .split(',')
+  .map(e => e.trim().toLowerCase())
+  .filter(Boolean);
+
+const INITIAL_OWNER_EMAILS = Array.from(new Set([
   'alssaedy500@gmail.com',
   'alssaedy50@gmail.com',
   'doctoshi50@gmail.com',
-  (process.env.INITIAL_OWNER_EMAIL || '').trim().toLowerCase()
-].filter(Boolean);
+  ...parsedEnvOwnerEmails
+])).filter(Boolean);
 
 export const isInitialOwnerEmail = (email?: string | null): boolean => {
   if (!email) return false;
@@ -615,14 +619,28 @@ app.post('/api/admin/enrollment-review', requireAdmin, (req: AuthenticatedReques
   res.json({ success: true, message: 'تم تسجيل مراجعة قيد الطالب بنجاح', log });
 });
 
-// 9. Sync Admin Questions & Assessments to Server Store (Protected: Admin Only)
-app.post('/api/admin/sync-assessment-questions', requireAdmin, (req: Request, res: Response) => {
+// 9. Sync Admin Questions & Assessments to Server Store (Protected: Admin Only, Conflict-Safe & Idempotent)
+app.post('/api/admin/sync-assessment-questions', requireAdmin, (req: AuthenticatedRequest, res: Response) => {
   try {
     const { questions, assessment, deletedQuestionIds, deletedAssessmentIds } = req.body;
+    let upsertedCount = 0;
+
     if (Array.isArray(questions)) {
       questions.forEach((q: QuestionItemFull) => {
-        if (q && q.id) {
-          questionsStore[q.id] = q;
+        if (q && q.id && q.stemArabic && (q.questionType === 'essay' || (Array.isArray(q.options) && q.correctOptionId))) {
+          const existing = questionsStore[q.id];
+          const existingTime = existing?.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+          const incomingTime = q.updatedAt ? new Date(q.updatedAt).getTime() : Date.now();
+
+          if (!existing || incomingTime >= existingTime) {
+            questionsStore[q.id] = {
+              ...existing,
+              ...q,
+              points: Number(q.points) || 5,
+              updatedAt: q.updatedAt || new Date().toISOString()
+            };
+            upsertedCount++;
+          }
         }
       });
       saveJsonSafe(QUESTIONS_FILE, questionsStore);
@@ -643,7 +661,11 @@ app.post('/api/admin/sync-assessment-questions', requireAdmin, (req: Request, re
       });
       saveJsonSafe(ASSESSMENTS_FILE, assessmentsStore);
     }
-    res.json({ success: true, questionsCount: Object.keys(questionsStore).length });
+    res.json({
+      success: true,
+      upsertedCount,
+      questionsCount: Object.keys(questionsStore).length
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'فشل مزامنة الأسئلة' });
   }
@@ -660,6 +682,125 @@ app.get('/api/admin/questions', requireAdmin, (req: Request, res: Response) => {
     res.json({ questions: list });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'فشل جلب الأسئلة' });
+  }
+});
+
+// 9c. Optional AI Medical Explanation Generator (Protected: Admin Only, Strictly Preserves User's Correct Answer)
+app.post('/api/admin/generate-mcq-explanations', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const rawQuestions = Array.isArray(req.body?.questions) ? req.body.questions.slice(0, 15) : [];
+  if (rawQuestions.length === 0) {
+    return res.status(400).json({ error: 'لا توجد أسئلة مرسلة لتوليد التعليل الطبي.' });
+  }
+
+  const buildServerFallbackExplanations = (items: any[]) =>
+    items.map((q: any) => {
+      const opts = Array.isArray(q.options) ? q.options : [];
+      const correctOpt = opts.find((o: any) => o.id === q.correctOptionId) || opts[0];
+      const correctText = String(correctOpt?.textArabic || '').trim();
+      const wrongTexts = opts
+        .filter((o: any) => o.id !== q.correctOptionId && String(o.textArabic || '').trim())
+        .map((o: any) => String(o.textArabic).trim());
+
+      const optionExplanations: Record<string, string> = {};
+      for (const o of opts) {
+        if (o.id === q.correctOptionId) {
+          optionExplanations[o.id] = `إجابة صحيحة ومعتمدة طبياً: (${o.textArabic}) يتوافق مباشرة مع المعطيات السريرية والعلمية في السؤال.`;
+        } else {
+          optionExplanations[o.id] = `خيار غير صحيح: (${o.textArabic}) لا يمثل الإجابة الأدق مقارنة بـ (${correctText}).`;
+        }
+      }
+
+      const explanationArabic = wrongTexts.length > 0
+        ? `الإجابة الصحيحة هي (${correctText}) لأنها الخيار الطبي الأدق المطابق لمعطيات السؤال، بينما تُستبعد البدائل الأخرى (${wrongTexts.slice(0, 3).join('، ')}) لعدم انطباقها السريري المباشر.`
+        : `الإجابة الصحيحة المعتمدة هي (${correctText}) وفق المعايير الطبية والأكاديمية للمقرر.`;
+
+      return {
+        tempId: String(q.tempId || ''),
+        explanationArabic,
+        optionExplanations
+      };
+    });
+
+  try {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.json({
+        success: true,
+        explanations: buildServerFallbackExplanations(rawQuestions)
+      });
+    }
+
+    const { GoogleGenAI, Type } = await import('@google/genai');
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build'
+        }
+      }
+    });
+
+    const formattedPromptItems = rawQuestions.map((q: any, idx: number) => {
+      const optionsText = (q.options || [])
+        .map((o: any) => `${o.id}: ${o.textArabic}${o.textEnglish ? ` (${o.textEnglish})` : ''}`)
+        .join(' | ');
+      return `Question #${idx + 1} [tempId=${q.tempId}]:
+Stem (AR): ${q.stemArabic}
+${q.stemEnglish ? `Stem (EN): ${q.stemEnglish}\n` : ''}Options: ${optionsText}
+Authoritative User-Supplied Correct Option ID (DO NOT CHANGE): ${q.correctOptionId}`;
+    }).join('\n\n');
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: `You are an expert medical faculty professor generating concise, accurate Arabic medical rationales for multiple-choice questions (MCQs).
+For each question below, explain clearly and concisely in Arabic:
+1) Why the user-supplied correct option (${'`Authoritative User-Supplied Correct Option ID`'}) is medically correct.
+2) Briefly why the other distractor options are incorrect.
+CRITICAL RULE: You must treat the supplied Correct Option ID as fixed and authoritative. Never alter or override the correct option ID.
+
+${formattedPromptItems}`,
+      config: {
+        systemInstruction: 'Return concise, clinically accurate Arabic medical explanations for each question. Never modify the user-supplied correct answer.',
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              tempId: {
+                type: Type.STRING,
+                description: 'The exact tempId provided in the input question.'
+              },
+              explanationArabic: {
+                type: Type.STRING,
+                description: 'Concise unified Arabic medical explanation (2-4 sentences) explaining why the correct option is right and why distractors are wrong.'
+              }
+            },
+            required: ['tempId', 'explanationArabic']
+          }
+        }
+      }
+    });
+
+    const jsonText = (response.text || '[]').trim();
+    const parsed = JSON.parse(jsonText);
+    const explanations = Array.isArray(parsed)
+      ? parsed.map((item: any) => ({
+          tempId: String(item.tempId || ''),
+          explanationArabic: String(item.explanationArabic || '').trim()
+        }))
+      : buildServerFallbackExplanations(rawQuestions);
+
+    return res.json({
+      success: true,
+      explanations
+    });
+  } catch (err: any) {
+    console.warn('[AI Explanations] Fallback triggered:', err?.message);
+    return res.json({
+      success: true,
+      explanations: buildServerFallbackExplanations(rawQuestions)
+    });
   }
 });
 
@@ -722,7 +863,7 @@ app.post('/api/assessments/start-attempt', optionalAuth, (req: AuthenticatedRequ
       saveJsonSafe(ATTEMPTS_FILE, attemptsStore);
     }
 
-    // Public questions only (sanitized: NO correctOptionId or hidden model answers)
+    // Public questions only (sanitized: NO correctOptionId or explanation)
     const resolvedQuestions = targetIds
       .map((id) => questionsStore[id])
       .filter(Boolean)
@@ -824,7 +965,7 @@ app.post('/api/assessments/submit-attempt', optionalAuth, (req: AuthenticatedReq
     const attempt = attemptsStore[attemptId];
     const now = new Date();
 
-    // Enforce deadline if attempt exists
+    // Enforce deadline if attempt exists and timer was enabled
     if (attempt?.expiresAt) {
       const expiresTime = new Date(attempt.expiresAt).getTime();
       const gracePeriodMs = 120_000; // 2 minutes grace period for network latency
@@ -839,68 +980,99 @@ app.post('/api/assessments/submit-attempt', optionalAuth, (req: AuthenticatedReq
     const effectiveAssessmentId = assessmentId || attempt?.assessmentId || 'asmnt-cvs-default';
     const storedAssessment = assessmentsStore[effectiveAssessmentId];
 
-    // Build Answer Key Map STRICTLY from trusted server store
+    // Build Answer Key Map from server store + optional fallback keys
     const answerKeyMap: Record<string, { correctOptionId: string; points: number }> = {};
     Object.values(questionsStore).forEach((q) => {
-      answerKeyMap[q.id] = { correctOptionId: q.correctOptionId, points: Number(q.points) || 5 };
+      if (q && q.id && q.correctOptionId) {
+        answerKeyMap[q.id] = { correctOptionId: q.correctOptionId, points: Number(q.points) || 5 };
+      }
     });
+    if (req.body?.fallbackAnswerKeys && typeof req.body.fallbackAnswerKeys === 'object') {
+      Object.entries(req.body.fallbackAnswerKeys).forEach(([qId, val]: [string, any]) => {
+        if (!answerKeyMap[qId] && val && val.correctOptionId) {
+          answerKeyMap[qId] = {
+            correctOptionId: String(val.correctOptionId),
+            points: Number(val.points) || 5
+          };
+        }
+      });
+    }
 
     // Score STRICTLY against the questions assigned to this attempt
     const targetQuestionIds: string[] =
+      (Array.isArray(req.body?.questionIds) && req.body.questionIds.length > 0 ? req.body.questionIds : null) ||
       (Array.isArray(attempt?.questionIds) && attempt.questionIds.length > 0 ? attempt.questionIds : null) ||
       (storedAssessment?.questionIds?.length ? storedAssessment.questionIds : null) ||
       ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
 
     let score = 0;
     let totalPoints = 0;
+    let matchedKeysCount = 0;
     const questionReviews: any[] = [];
 
     targetQuestionIds.forEach((qId) => {
       const q = questionsStore[qId];
-      if (q) {
-        const qPoints = Number(q.points) || 5;
+      const key = answerKeyMap[qId];
+      if (q || key) {
+        matchedKeysCount++;
+        const qPoints = Number(q?.points || key?.points) || 5;
         totalPoints += qPoints;
-        const qType = q.questionType || 'mcq';
+        const qType = q?.questionType || 'mcq';
         const studentAns = finalAnswers[qId] || '';
         let isCorrect = false;
 
         if (qType === 'essay') {
-          // Essay scoring: provisional full credit if student provided a non-trivial medical answer
           isCorrect = studentAns.trim().length > 10;
           if (isCorrect) score += qPoints;
         } else {
-          // MCQ or True/False
-          isCorrect = Boolean(studentAns && studentAns === q.correctOptionId);
+          const correctId = q?.correctOptionId || key?.correctOptionId || '';
+          isCorrect = Boolean(studentAns && studentAns === correctId);
           if (isCorrect) score += qPoints;
         }
 
-        questionReviews.push({
-          questionId: q.id,
-          questionType: qType,
-          stemArabic: q.stemArabic,
-          stemEnglish: q.stemEnglish,
-          imageUrl: q.imageUrl,
-          options: (q.options || []).map((opt) => ({
-            id: opt.id,
-            textArabic: opt.textArabic,
-            textEnglish: opt.textEnglish,
-            explanationArabic: opt.explanationArabic,
-            isCorrect: opt.id === q.correctOptionId
-          })),
-          correctOptionId: q.correctOptionId,
-          studentAnswer: studentAns,
-          isCorrect,
-          explanationArabic: q.explanationArabic,
-          modelAnswerArabic: q.modelAnswerArabic,
-          points: qPoints
-        });
+        if (q) {
+          questionReviews.push({
+            questionId: q.id,
+            questionType: qType,
+            stemArabic: q.stemArabic,
+            stemEnglish: q.stemEnglish,
+            imageUrl: q.imageUrl,
+            options: (q.options || []).map((opt) => ({
+              id: opt.id,
+              textArabic: opt.textArabic,
+              textEnglish: opt.textEnglish,
+              explanationArabic: opt.explanationArabic,
+              isCorrect: opt.id === q.correctOptionId
+            })),
+            correctOptionId: q.correctOptionId,
+            studentAnswer: studentAns,
+            isCorrect,
+            explanationArabic: q.explanationArabic,
+            modelAnswerArabic: q.modelAnswerArabic,
+            points: qPoints
+          });
+        }
       }
     });
+
+    if (matchedKeysCount === 0 && targetQuestionIds.length > 0) {
+      return res.status(404).json({
+        error: 'مفاتيح الإجابة غير متوفرة في ذاكرة الخادم المحلية — يرجى التصحيح عبر السحابة'
+      });
+    }
 
     const percentage = totalPoints > 0 ? Math.round((score / totalPoints) * 100) : 0;
     const nowIso = now.toISOString();
     const policy = storedAssessment?.resultReleasePolicy || resultReleasePolicy || 'immediate';
-    const isReleased = policy === 'immediate';
+    const isGuestPreview = Boolean(req.body?.isGuestPreview || uid === 'guest');
+    const isReleased = isGuestPreview ? true : policy === 'immediate';
+
+    const computedDurationSeconds =
+      typeof req.body?.durationSeconds === 'number' && req.body.durationSeconds >= 0
+        ? Math.round(req.body.durationSeconds)
+        : attempt?.startedAt
+        ? Math.max(1, Math.round((now.getTime() - new Date(attempt.startedAt).getTime()) / 1000))
+        : undefined;
 
     const result = {
       id: `res-${attemptId}`,
@@ -908,6 +1080,10 @@ app.post('/api/assessments/submit-attempt', optionalAuth, (req: AuthenticatedReq
       assessmentId: effectiveAssessmentId,
       uid,
       studentNameArabic: studentName,
+      studentDisplayNamePublic: req.body?.studentDisplayNamePublic || undefined,
+      studentUsername: req.body?.studentUsername || undefined,
+      leaderboardNameMode: req.body?.leaderboardNameMode || undefined,
+      durationSeconds: computedDurationSeconds,
       score,
       totalPoints,
       percentage,
@@ -918,21 +1094,24 @@ app.post('/api/assessments/submit-attempt', optionalAuth, (req: AuthenticatedReq
       questionReviews: isReleased ? questionReviews : undefined
     };
 
-    resultsStore[attemptId] = result;
-    saveJsonSafe(RESULTS_FILE, resultsStore);
+    if (!isGuestPreview) {
+      resultsStore[attemptId] = result;
+      saveJsonSafe(RESULTS_FILE, resultsStore);
 
-    if (attempt) {
-      attempt.status = 'scored';
-      attempt.submittedAt = nowIso;
-      saveJsonSafe(ATTEMPTS_FILE, attemptsStore);
+      if (attempt) {
+        attempt.status = 'scored';
+        attempt.submittedAt = nowIso;
+        attempt.durationSeconds = computedDurationSeconds;
+        saveJsonSafe(ATTEMPTS_FILE, attemptsStore);
+      }
+
+      addAuditLog(
+        'ASSESSMENT_SCORED',
+        studentName || uid,
+        { attemptId, assessmentId: effectiveAssessmentId, score, totalPoints, percentage },
+        uid
+      );
     }
-
-    addAuditLog(
-      'ASSESSMENT_SCORED',
-      studentName || uid,
-      { attemptId, assessmentId: effectiveAssessmentId, score, totalPoints, percentage },
-      uid
-    );
 
     res.json({
       success: true,
@@ -941,6 +1120,110 @@ app.post('/api/assessments/submit-attempt', optionalAuth, (req: AuthenticatedReq
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'فشل تصحيح وتسليم الاختبار' });
+  }
+});
+
+// 12a. Register Shared Assessment & Public Questions on Server (Callable by any user sharing an assessment)
+app.post('/api/assessments/register-shared', optionalAuth, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { assessment, questions } = req.body;
+    if (assessment && assessment.id) {
+      assessmentsStore[assessment.id] = {
+        ...(assessmentsStore[assessment.id] || {}),
+        ...assessment
+      };
+      saveJsonSafe(ASSESSMENTS_FILE, assessmentsStore);
+    }
+    if (Array.isArray(questions) && questions.length > 0) {
+      questions.forEach((q: any) => {
+        if (q && q.id && q.stemArabic && Array.isArray(q.options)) {
+          const existing = questionsStore[q.id];
+          questionsStore[q.id] = {
+            ...(existing || {}),
+            ...q,
+            correctOptionId: q.correctOptionId || existing?.correctOptionId || 'opt-a',
+            points: Number(q.points || existing?.points) || 5
+          };
+        }
+      });
+      saveJsonSafe(QUESTIONS_FILE, questionsStore);
+    }
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'فشل تسجيل الاختبار المشترك' });
+  }
+});
+
+// 12b. Public Shared Assessment & Sanitized Questions Endpoint (For Trial Exam Links)
+app.get('/api/assessments/public/:assessmentId', (req: Request, res: Response) => {
+  try {
+    const { assessmentId } = req.params;
+    const storedAssessment = assessmentsStore[assessmentId] || null;
+    const questionIds: string[] =
+      storedAssessment?.questionIds?.length
+        ? storedAssessment.questionIds
+        : ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
+
+    const resolvedQuestions = questionIds
+      .map((id) => questionsStore[id])
+      .filter(Boolean)
+      .map((q) => ({
+        id: q.id,
+        bankId: q.bankId,
+        stemArabic: q.stemArabic,
+        stemEnglish: q.stemEnglish,
+        imageUrl: q.imageUrl,
+        options: q.options,
+        points: q.points || 5
+      }));
+
+    const publicQuestions =
+      resolvedQuestions.length > 0
+        ? resolvedQuestions
+        : DEFAULT_QUESTIONS.map((q) => ({
+            id: q.id,
+            bankId: q.bankId,
+            stemArabic: q.stemArabic,
+            stemEnglish: q.stemEnglish,
+            options: q.options,
+            points: q.points
+          }));
+
+    res.json({
+      success: true,
+      assessment: storedAssessment,
+      questions: publicQuestions
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'فشل جلب الاختبار المشترك' });
+  }
+});
+
+// 12c. Update Student Leaderboard Identity across Server Results Store
+app.post('/api/assessments/update-leaderboard-name', optionalAuth, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const uid = req.user?.uid || req.body?.uid;
+    if (!uid) return res.status(400).json({ error: 'معرف الطالب مطلوب' });
+
+    const { studentDisplayNamePublic, studentUsername, leaderboardNameMode } = req.body;
+    let updatedCount = 0;
+
+    Object.values(resultsStore).forEach((resObj: any) => {
+      if (resObj && resObj.uid === uid) {
+        if (studentDisplayNamePublic !== undefined) resObj.studentDisplayNamePublic = studentDisplayNamePublic;
+        if (studentUsername !== undefined) resObj.studentUsername = studentUsername;
+        if (leaderboardNameMode !== undefined) resObj.leaderboardNameMode = leaderboardNameMode;
+        updatedCount++;
+      }
+    });
+
+    if (updatedCount > 0) {
+      saveJsonSafe(RESULTS_FILE, resultsStore);
+    }
+
+    res.json({ success: true, updatedCount });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'فشل تحديث اسم العرض في لوحة الترتيب' });
   }
 });
 
@@ -1001,100 +1284,6 @@ app.post('/api/admin/release-results', requireAdmin, (req: AuthenticatedRequest,
     res.json({ success: true, updatedCount });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'فشل إفراج النتائج' });
-  }
-});
-
-// 15. Server-Authoritative Medical Explanation Generator with Gemini
-let genAIClient: GoogleGenAI | null = null;
-function getGenAI(): GoogleGenAI | null {
-  if (!genAIClient && process.env.GEMINI_API_KEY) {
-    genAIClient = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build'
-        }
-      }
-    });
-  }
-  return genAIClient;
-}
-
-app.post('/api/admin/generate-mcq-explanations', optionalAuth, async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const { questions } = req.body;
-    if (!Array.isArray(questions) || questions.length === 0) {
-      return res.json({ explanations: [] });
-    }
-
-    const ai = getGenAI();
-    if (!ai) {
-      // Deterministic fallback if GEMINI_API_KEY is not configured
-      const explanations = questions.map((item: any) => {
-        const correctOpt = item.options?.find((o: any) => o.id === item.correctOptionId);
-        const correctText = correctOpt?.textArabic || 'الخيار المعتمد';
-        const wrongOpts = (item.options || [])
-          .filter((o: any) => o.id !== item.correctOptionId)
-          .map((o: any) => o.textArabic);
-        const explanationArabic = wrongOpts.length > 0
-          ? `الإجابة الصحيحة هي (${correctText}) لأنها الخيار الطبي الأدق المطابق لمعطيات السؤال، بينما تُستبعد البدائل الأخرى (${wrongOpts.slice(0, 3).join('، ')}) لعدم انطباقها السريري المباشر.`
-          : `الإجابة الصحيحة المعتمدة هي (${correctText}) وفق المعايير الطبية والأكاديمية للمقرر.`;
-        return {
-          tempId: item.tempId,
-          explanationArabic
-        };
-      });
-      return res.json({ explanations });
-    }
-
-    const prompt = `أنت أستاذ ومستشار في التعليم الطبي لكليات الطب البشري.
-المطلوب: لكل سؤال طبي من الأسئلة التالية، قدّم تعليلاً سريرياً دقيقاً وموجزاً باللغة العربية يشرح سبب صحة الإجابة المحددة ولماذا تعتبر الخيارات الأخرى غير صحيحة.
-الأسئلة:
-${JSON.stringify(questions, null, 2)}
-
-أعد النتيجة حصراً بتنسيق JSON كمصفوفة كائنات بالبنية التالية دون أي نصوص إضافية:
-[
-  {
-    "tempId": "string",
-    "explanationArabic": "الشرح الطبي المعتمد باللغة العربية"
-  }
-]`;
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json'
-      }
-    });
-
-    const text = response.text || '[]';
-    let parsed: any[] = [];
-    try {
-      parsed = JSON.parse(text);
-      if (!Array.isArray(parsed)) {
-        parsed = [];
-      }
-    } catch {
-      parsed = [];
-    }
-
-    if (parsed.length > 0) {
-      return res.json({ explanations: parsed });
-    }
-
-    // Fallback if model returned empty or unexpected format
-    const fallbackExplanations = questions.map((item: any) => {
-      const correctOpt = item.options?.find((o: any) => o.id === item.correctOptionId);
-      const correctText = correctOpt?.textArabic || 'الخيار المعتمد';
-      return {
-        tempId: item.tempId,
-        explanationArabic: `الإجابة الصحيحة المعتمدة هي (${correctText}) وفق المعايير الطبية والأكاديمية للمقرر.`
-      };
-    });
-    return res.json({ explanations: fallbackExplanations });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message || 'خطأ أثناء توليد الشروحات' });
   }
 });
 

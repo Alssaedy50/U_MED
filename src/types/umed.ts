@@ -33,11 +33,19 @@ export interface UserRoleDoc {
   assignedByRole?: UserRole;
 }
 
+export type LeaderboardNameMode =
+  | 'full_name'
+  | 'custom_username'
+  | 'abbreviated'
+  | 'anonymous_code';
+
 export interface UserProfile {
   uid: string;
   email: string;
   displayNameArabic: string;
   displayNameEnglish?: string;
+  username?: string;
+  leaderboardNameMode?: LeaderboardNameMode;
   phone?: string;
   academicStudentNumber?: string;
   avatarUrl?: string;
@@ -390,6 +398,7 @@ export interface QuestionItemFull {
   modelAnswerEnglish?: string;
   explanationArabic?: string; // التعليل العلمي العام للسؤال
   explanationEnglish?: string;
+  optionExplanations?: Record<string, string>;
   points: number;
   contentHash?: string;
   syncStatus?: QuestionSyncStatus;
@@ -549,6 +558,7 @@ export interface AssessmentAttempt {
   answers: Record<string, string>; // questionId -> selectedOptionId (progressively saved)
   lastSavedAt: string;
   attemptNumber: number;
+  durationSeconds?: number;
 }
 
 export interface QuestionReviewItem {
@@ -572,6 +582,10 @@ export interface AssessmentResult {
   assessmentId: string;
   uid: string;
   studentNameArabic: string;
+  studentDisplayNamePublic?: string;
+  studentUsername?: string;
+  leaderboardNameMode?: LeaderboardNameMode;
+  durationSeconds?: number;
   academicStudentNumber?: string;
   score: number;
   totalPoints: number;

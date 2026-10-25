@@ -7,23 +7,32 @@
     <meta name="description" content="المنصة الأكاديمية والسريرية الموحدة لطلاب كليات الطب البشري في الجامعات اليمنية - UMED Unified Medical Education Platform" />
     <meta property="og:title" content="UMED | منصة الطب البشري الموحدة - اليمن" />
     <meta property="og:description" content="المنصة الأكاديمية والسريرية الموحدة لطلاب كليات الطب البشري في الجامعات اليمنية - UMED Unified Medical Education Platform" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="UMED الطب البشري" />
+    <meta name="apple-mobile-web-app-title" content="UMED" />
     <link rel="manifest" href="/manifest.json" />
-    <link rel="apple-touch-icon" href="/icons/icon-192.svg" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
     <title>UMED | منصة الطب البشري الموحدة - اليمن</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script>
+      // Capture beforeinstallprompt early so React components never miss the native install prompt
+      window.__umedDeferredPrompt = null;
+      window.addEventListener('beforeinstallprompt', function (e) {
+        e.preventDefault();
+        window.__umedDeferredPrompt = e;
+        window.dispatchEvent(new CustomEvent('umed-pwa-prompt-ready'));
+      });
       // Purge legacy cache that could serve stale or mismatched JS bundles
       (function () {
         try {
           if ('caches' in window) {
             caches.keys().then(function (names) {
               names.forEach(function (name) {
-                if (name !== 'umed-v2.2.0') {
+                if (name !== 'umed-v2.3.0' && name !== 'umed-fonts-v1') {
                   caches.delete(name);
                 }
               });

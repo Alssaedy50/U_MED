@@ -4,11 +4,15 @@
  * UMED PWA Service Worker - Network-First with Offline Fallback
  */
 
-const CACHE_NAME = 'umed-v2.2.0';
+const CACHE_NAME = 'umed-v2.3.0';
+const FONT_CACHE_NAME = 'umed-fonts-v1';
 const STATIC_SHELL = [
   '/',
   '/index.html',
-  '/manifest.json'
+  '/manifest.json',
+  '/favicon.png',
+  '/icon-192.png',
+  '/icon-512.png'
 ];
 
 self.addEventListener('install', (event) => {
@@ -25,7 +29,7 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.map((cache) => {
-          if (cache !== CACHE_NAME) {
+          if (cache !== CACHE_NAME && cache !== FONT_CACHE_NAME) {
             return caches.delete(cache);
           }
         })
@@ -36,25 +40,50 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;
+  if (req.method !== 'GET') return;
+
   const url = new URL(req.url);
 
-  // Skip non-GET requests, external APIs, Firebase/Firestore, and Vite dev server internals
+  // Cache Google Fonts (Cache-First) so Arabic fonts work 100% offline
   if (
-    req.method !== 'GET' ||
+    url.origin === 'https://fonts.googleapis.com' ||
+    url.origin === 'https://fonts.gstatic.com'
+  ) {
+    event.respondWith(
+      caches.open(FONT_CACHE_NAME).then((cache) => {
+        return cache.match(req).then((cached) => {
+          if (cached) return cached;
+          return fetch(req)
+            .then((res) => {
+              if (res && (res.status === 200 || res.type === 'opaque')) {
+                cache.put(req, res.clone()).catch(() => {});
+              }
+              return res;
+            })
+            .catch(() => cached || new Response('', { status: 504 }));
+        });
+      })
+    );
+    return;
+  }
+
+  // Skip external APIs, Firebase/Firestore streams, and API endpoints
+  if (
     url.origin !== self.location.origin ||
-    url.pathname.startsWith('/api/') ||
-    url.pathname.startsWith('/src/') ||
-    url.pathname.startsWith('/node_modules/') ||
-    url.pathname.startsWith('/@')
+    url.pathname.startsWith('/api/')
   ) {
     return;
   }
 
-  // Network-First strategy: Always fetch latest version when online, fallback to cache only when offline
+  // Network-First strategy with full Offline Cache fallback for app shell, scripts, styles, and icons
   event.respondWith(
     fetch(req)
       .then((networkResponse) => {
-        if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
+        if (
+          networkResponse &&
+          networkResponse.status === 200 &&
+          (networkResponse.type === 'basic' || networkResponse.type === 'cors')
+        ) {
           const responseClone = networkResponse.clone();
           caches.open(CACHE_NAME).then((cache) => {
             cache.put(req, responseClone).catch(() => {});
@@ -68,7 +97,9 @@ self.addEventListener('fetch', (event) => {
             return cachedResponse;
           }
           if (req.mode === 'navigate') {
-            return caches.match('/index.html');
+            return caches.match('/index.html').then((indexRes) => {
+              return indexRes || caches.match('/');
+            });
           }
           return new Response('', { status: 504, statusText: 'Offline' });
         });

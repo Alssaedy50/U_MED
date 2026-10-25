@@ -13,9 +13,7 @@ import {
   getDocs,
   setDoc,
   deleteDoc,
-  onSnapshot,
-  query,
-  where
+  onSnapshot
 } from 'firebase/firestore';
 import {
   db,
@@ -29,7 +27,6 @@ import {
   UserRole,
   UserRoleDoc,
   UserProfile,
-  StudentEnrollment,
   CourseInstructor,
   BatchNotification
 } from '../types/umed.ts';
@@ -37,8 +34,13 @@ import { fetchEnrollmentsForAdmin } from './enrollmentService.ts';
 
 const INSTRUCTORS_STORAGE_KEY = 'umed_course_instructors';
 const INSTRUCTORS_INIT_KEY = 'umed_course_instructors_init';
+const INSTRUCTORS_DELETED_KEY = 'umed_course_instructors_deleted';
 const NOTIFICATIONS_STORAGE_KEY = 'umed_batch_notifications';
 const NOTIFICATIONS_INIT_KEY = 'umed_batch_notifications_init';
+const NOTIFICATIONS_DELETED_KEY = 'umed_batch_notifications_deleted';
+
+let instructorsMemoryCache: CourseInstructor[] | null = null;
+let notificationsMemoryCache: BatchNotification[] | null = null;
 
 export const DEFAULT_COURSE_INSTRUCTORS: CourseInstructor[] = [
   {
@@ -93,6 +95,32 @@ export const DEFAULT_BATCH_NOTIFICATIONS: BatchNotification[] = [
     createdAt: '2025-02-10T08:00:00Z'
   }
 ];
+
+function getDeletedIds(storageKey: string): Set<string> {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (raw) return new Set(JSON.parse(raw));
+  } catch (e) {}
+  return new Set();
+}
+
+function markIdDeleted(storageKey: string, id: string): void {
+  try {
+    const set = getDeletedIds(storageKey);
+    set.add(id);
+    localStorage.setItem(storageKey, JSON.stringify(Array.from(set)));
+  } catch (e) {}
+}
+
+function unmarkIdDeleted(storageKey: string, id: string): void {
+  try {
+    const set = getDeletedIds(storageKey);
+    if (set.has(id)) {
+      set.delete(id);
+      localStorage.setItem(storageKey, JSON.stringify(Array.from(set)));
+    }
+  } catch (e) {}
+}
 
 // ---------------------------------------------------------------------------
 // 1. Role Hierarchy Labels & Validation Rules
@@ -305,16 +333,19 @@ export async function fetchRegisteredUsersDirectory(filterScope?: {
   const map = new Map<string, DirectoryUserCandidate>();
   const deletedUids = new Set(getLocalDeletedUids());
 
-  // 0. Check deletedAccounts from Cloud Firestore
-  try {
-    const delSnap = await getDocs(collection(db, 'deletedAccounts'));
-    delSnap.forEach(d => deletedUids.add(d.id));
-  } catch (e) {}
+  // 0, 1, 2: Run Firestore directory queries in parallel for maximum speed
+  const [delSnapResult, profilesSnapResult, enrollmentsResult] = await Promise.allSettled([
+    getDocs(collection(db, 'deletedAccounts')),
+    getDocs(collection(db, 'userProfiles')),
+    fetchEnrollmentsForAdmin(filterScope?.universityId)
+  ]);
 
-  // 1. Load from userProfiles in Firestore
-  try {
-    const snap = await getDocs(collection(db, 'userProfiles'));
-    snap.forEach(d => {
+  if (delSnapResult.status === 'fulfilled') {
+    delSnapResult.value.forEach(d => deletedUids.add(d.id));
+  }
+
+  if (profilesSnapResult.status === 'fulfilled') {
+    profilesSnapResult.value.forEach(d => {
       const p = d.data() as UserProfile;
       if (p && p.uid && !deletedUids.has(p.uid) && !p.isArchived) {
         map.set(p.uid, {
@@ -326,12 +357,10 @@ export async function fetchRegisteredUsersDirectory(filterScope?: {
         });
       }
     });
-  } catch (e) {}
+  }
 
-  // 2. Merge with studentEnrollments (gives universityId and studyLevelId for each student)
-  try {
-    const enrollments = await fetchEnrollmentsForAdmin(filterScope?.universityId);
-    for (const enr of enrollments) {
+  if (enrollmentsResult.status === 'fulfilled') {
+    for (const enr of enrollmentsResult.value) {
       if (!enr.uid || deletedUids.has(enr.uid)) continue;
       const existing = map.get(enr.uid);
       map.set(enr.uid, {
@@ -345,7 +374,7 @@ export async function fetchRegisteredUsersDirectory(filterScope?: {
         enrollmentStatus: enr.status || enr.enrollmentStatus
       });
     }
-  } catch (e) {}
+  }
 
   let list = Array.from(map.values());
 
@@ -363,19 +392,68 @@ export async function fetchRegisteredUsersDirectory(filterScope?: {
 // 3. Course Instructors (دكتور مادة نظرية أو عملية)
 // ---------------------------------------------------------------------------
 
+function mergeInstructorsWithDefaults(items: CourseInstructor[]): CourseInstructor[] {
+  const deleted = getDeletedIds(INSTRUCTORS_DELETED_KEY);
+  const map = new Map<string, CourseInstructor>();
+  for (const def of DEFAULT_COURSE_INSTRUCTORS) {
+    if (!deleted.has(def.id)) {
+      map.set(def.id, def);
+    }
+  }
+  for (const item of items) {
+    if (item && item.id && !deleted.has(item.id)) {
+      map.set(item.id, item);
+    }
+  }
+  return Array.from(map.values());
+}
+
 function readLocalInstructors(): CourseInstructor[] {
+  if (instructorsMemoryCache) {
+    const deleted = getDeletedIds(INSTRUCTORS_DELETED_KEY);
+    return instructorsMemoryCache.filter(i => !deleted.has(i.id));
+  }
   try {
     const raw = localStorage.getItem(INSTRUCTORS_STORAGE_KEY);
-    if (raw) return JSON.parse(raw) as CourseInstructor[];
+    if (raw) {
+      const parsed = JSON.parse(raw) as CourseInstructor[];
+      const merged = mergeInstructorsWithDefaults(parsed);
+      instructorsMemoryCache = merged;
+      return merged;
+    }
   } catch (e) {}
-  return [];
+  const defaults = mergeInstructorsWithDefaults([]);
+  instructorsMemoryCache = defaults;
+  return defaults;
 }
 
 function writeLocalInstructors(items: CourseInstructor[]): void {
+  const merged = mergeInstructorsWithDefaults(items);
+  instructorsMemoryCache = merged;
   try {
-    localStorage.setItem(INSTRUCTORS_STORAGE_KEY, JSON.stringify(items));
+    localStorage.setItem(INSTRUCTORS_STORAGE_KEY, JSON.stringify(merged));
     localStorage.setItem(INSTRUCTORS_INIT_KEY, 'true');
   } catch (e) {}
+}
+
+function filterInstructors(
+  list: CourseInstructor[],
+  filters?: { universityId?: string; studyLevelId?: string; courseOfferingId?: string }
+): CourseInstructor[] {
+  return list.filter(inst => {
+    if (filters?.universityId && inst.universityId !== filters.universityId) return false;
+    if (filters?.studyLevelId && inst.studyLevelId !== filters.studyLevelId) return false;
+    if (filters?.courseOfferingId && inst.courseOfferingId !== filters.courseOfferingId) return false;
+    return true;
+  });
+}
+
+export function getCachedCourseInstructors(filters?: {
+  universityId?: string;
+  studyLevelId?: string;
+  courseOfferingId?: string;
+}): CourseInstructor[] {
+  return filterInstructors(readLocalInstructors(), filters);
 }
 
 export async function fetchCourseInstructors(filters?: {
@@ -383,40 +461,48 @@ export async function fetchCourseInstructors(filters?: {
   studyLevelId?: string;
   courseOfferingId?: string;
 }): Promise<CourseInstructor[]> {
-  const localList = readLocalInstructors();
-
   try {
     const snap = await getDocs(collection(db, 'courseInstructors'));
-    if (!snap.empty) {
-      const cloudList: CourseInstructor[] = [];
-      snap.forEach(d => {
-        const data = d.data() as CourseInstructor;
-        if (data && data.id) {
-          cloudList.push(data);
-        }
-      });
-      writeLocalInstructors(cloudList);
-      return cloudList.filter(inst => {
-        if (filters?.universityId && inst.universityId !== filters.universityId) return false;
-        if (filters?.studyLevelId && inst.studyLevelId !== filters.studyLevelId) return false;
-        if (filters?.courseOfferingId && inst.courseOfferingId !== filters.courseOfferingId) return false;
-        return true;
-      });
-    }
+    const cloudList: CourseInstructor[] = [];
+    snap.forEach(d => {
+      const data = { ...d.data(), id: d.data().id || d.id } as CourseInstructor;
+      if (data && data.id) {
+        cloudList.push(data);
+      }
+    });
+    const merged = mergeInstructorsWithDefaults(cloudList);
+    writeLocalInstructors(merged);
+    return filterInstructors(merged, filters);
   } catch (e) {}
 
-  if (localList.length > 0) {
-    return localList.filter(inst => {
-      if (filters?.universityId && inst.universityId !== filters.universityId) return false;
-      if (filters?.studyLevelId && inst.studyLevelId !== filters.studyLevelId) return false;
-      if (filters?.courseOfferingId && inst.courseOfferingId !== filters.courseOfferingId) return false;
-      return true;
-    });
-  }
+  return filterInstructors(readLocalInstructors(), filters);
+}
 
-  const defaults = DEFAULT_COURSE_INSTRUCTORS;
-  writeLocalInstructors(defaults);
-  return defaults;
+export function subscribeToCourseInstructors(
+  universityId: string,
+  studyLevelId: string,
+  onUpdate: (instructors: CourseInstructor[]) => void
+): () => void {
+  try {
+    return onSnapshot(
+      collection(db, 'courseInstructors'),
+      (snap) => {
+        const cloudList: CourseInstructor[] = [];
+        snap.forEach(d => {
+          const data = { ...d.data(), id: d.data().id || d.id } as CourseInstructor;
+          if (data && data.id) {
+            cloudList.push(data);
+          }
+        });
+        const merged = mergeInstructorsWithDefaults(cloudList);
+        writeLocalInstructors(merged);
+        onUpdate(filterInstructors(merged, { universityId, studyLevelId }));
+      },
+      () => {}
+    );
+  } catch {
+    return () => {};
+  }
 }
 
 export async function saveCourseInstructor(
@@ -424,13 +510,14 @@ export async function saveCourseInstructor(
   performedBy: string
 ): Promise<CourseInstructor> {
   const now = new Date().toISOString();
+  unmarkIdDeleted(INSTRUCTORS_DELETED_KEY, instructor.id);
   const cleanItem: CourseInstructor = cleanFirestoreData({
     ...instructor,
     updatedAt: now,
     createdAt: instructor.createdAt || now
   });
 
-  const current = await fetchCourseInstructors();
+  const current = readLocalInstructors();
   const updated = [...current.filter(i => i.id !== cleanItem.id), cleanItem];
   writeLocalInstructors(updated);
 
@@ -460,6 +547,7 @@ export async function deleteCourseInstructor(
   performedBy: string,
   universityId?: string
 ): Promise<void> {
+  markIdDeleted(INSTRUCTORS_DELETED_KEY, instructorId);
   const current = readLocalInstructors();
   writeLocalInstructors(current.filter(i => i.id !== instructorId));
 
@@ -479,77 +567,98 @@ export async function deleteCourseInstructor(
 // 4. Batch Notifications (مشاركة إشعارات للدفعة وإرسال الروابط والملفات)
 // ---------------------------------------------------------------------------
 
+function mergeNotificationsWithDefaults(items: BatchNotification[]): BatchNotification[] {
+  const deleted = getDeletedIds(NOTIFICATIONS_DELETED_KEY);
+  const map = new Map<string, BatchNotification>();
+  for (const def of DEFAULT_BATCH_NOTIFICATIONS) {
+    if (!deleted.has(def.id)) {
+      map.set(def.id, def);
+    }
+  }
+  for (const item of items) {
+    if (item && item.id && !deleted.has(item.id)) {
+      map.set(item.id, item);
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => {
+    if (a.isPinned && !b.isPinned) return -1;
+    if (!a.isPinned && b.isPinned) return 1;
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  });
+}
+
 function readLocalNotifications(): BatchNotification[] {
+  if (notificationsMemoryCache) {
+    const deleted = getDeletedIds(NOTIFICATIONS_DELETED_KEY);
+    return notificationsMemoryCache.filter(n => !deleted.has(n.id));
+  }
   try {
     const raw = localStorage.getItem(NOTIFICATIONS_STORAGE_KEY);
-    if (raw) return JSON.parse(raw) as BatchNotification[];
+    if (raw) {
+      const parsed = JSON.parse(raw) as BatchNotification[];
+      const merged = mergeNotificationsWithDefaults(parsed);
+      notificationsMemoryCache = merged;
+      return merged;
+    }
   } catch (e) {}
-  return [];
+  const defaults = mergeNotificationsWithDefaults([]);
+  notificationsMemoryCache = defaults;
+  return defaults;
 }
 
 function writeLocalNotifications(items: BatchNotification[]): void {
+  const merged = mergeNotificationsWithDefaults(items);
+  notificationsMemoryCache = merged;
   try {
-    localStorage.setItem(NOTIFICATIONS_STORAGE_KEY, JSON.stringify(items));
+    localStorage.setItem(NOTIFICATIONS_STORAGE_KEY, JSON.stringify(merged));
     localStorage.setItem(NOTIFICATIONS_INIT_KEY, 'true');
   } catch (e) {}
+}
+
+function filterNotifications(
+  list: BatchNotification[],
+  filters?: { universityId?: string; studyLevelId?: string }
+): BatchNotification[] {
+  return list.filter(n => {
+    if (filters?.universityId && n.universityId !== filters.universityId) return false;
+    if (
+      filters?.studyLevelId &&
+      n.studyLevelId !== filters.studyLevelId &&
+      n.studyLevelId !== 'ALL'
+    ) {
+      return false;
+    }
+    return true;
+  });
+}
+
+export function getCachedBatchNotifications(filters?: {
+  universityId?: string;
+  studyLevelId?: string;
+}): BatchNotification[] {
+  return filterNotifications(readLocalNotifications(), filters);
 }
 
 export async function fetchBatchNotifications(filters?: {
   universityId?: string;
   studyLevelId?: string;
 }): Promise<BatchNotification[]> {
-  const localList = readLocalNotifications();
-
   try {
     const snap = await getDocs(collection(db, 'batchNotifications'));
-    if (!snap.empty) {
-      const cloudList: BatchNotification[] = [];
-      snap.forEach(d => {
-        const data = d.data() as BatchNotification;
-        if (data && data.id) {
-          cloudList.push(data);
-        }
-      });
+    const cloudList: BatchNotification[] = [];
+    snap.forEach(d => {
+      const data = { ...d.data(), id: d.data().id || d.id } as BatchNotification;
+      if (data && data.id) {
+        cloudList.push(data);
+      }
+    });
 
-      const sorted = cloudList.sort((a, b) => {
-        if (a.isPinned && !b.isPinned) return -1;
-        if (!a.isPinned && b.isPinned) return 1;
-        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-      });
-
-      writeLocalNotifications(sorted);
-
-      return sorted.filter(n => {
-        if (filters?.universityId && n.universityId !== filters.universityId) return false;
-        if (
-          filters?.studyLevelId &&
-          n.studyLevelId !== filters.studyLevelId &&
-          n.studyLevelId !== 'ALL'
-        ) {
-          return false;
-        }
-        return true;
-      });
-    }
+    const sorted = mergeNotificationsWithDefaults(cloudList);
+    writeLocalNotifications(sorted);
+    return filterNotifications(sorted, filters);
   } catch (e) {}
 
-  if (localList.length > 0) {
-    return localList.filter(n => {
-      if (filters?.universityId && n.universityId !== filters.universityId) return false;
-      if (
-        filters?.studyLevelId &&
-        n.studyLevelId !== filters.studyLevelId &&
-        n.studyLevelId !== 'ALL'
-      ) {
-        return false;
-      }
-      return true;
-    });
-  }
-
-  const defaults = DEFAULT_BATCH_NOTIFICATIONS;
-  writeLocalNotifications(defaults);
-  return defaults;
+  return filterNotifications(readLocalNotifications(), filters);
 }
 
 export function subscribeToBatchNotifications(
@@ -558,28 +667,19 @@ export function subscribeToBatchNotifications(
   onUpdate: (notifications: BatchNotification[]) => void
 ): () => void {
   try {
-    const q = query(
-      collection(db, 'batchNotifications'),
-      where('universityId', '==', universityId)
-    );
     return onSnapshot(
-      q,
+      collection(db, 'batchNotifications'),
       (snap) => {
-        const list: BatchNotification[] = [];
+        const cloudList: BatchNotification[] = [];
         snap.forEach(d => {
-          const item = d.data() as BatchNotification;
-          if (item && (item.studyLevelId === studyLevelId || item.studyLevelId === 'ALL' || !studyLevelId)) {
-            list.push(item);
+          const item = { ...d.data(), id: d.data().id || d.id } as BatchNotification;
+          if (item && item.id) {
+            cloudList.push(item);
           }
         });
-        if (list.length > 0) {
-          list.sort((a, b) => {
-            if (a.isPinned && !b.isPinned) return -1;
-            if (!a.isPinned && b.isPinned) return 1;
-            return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-          });
-          onUpdate(list);
-        }
+        const merged = mergeNotificationsWithDefaults(cloudList);
+        writeLocalNotifications(merged);
+        onUpdate(filterNotifications(merged, { universityId, studyLevelId }));
       },
       () => {}
     );
@@ -598,7 +698,7 @@ export async function createBatchNotification(
     createdAt: now
   });
 
-  const current = await fetchBatchNotifications();
+  const current = readLocalNotifications();
   writeLocalNotifications([fullItem, ...current]);
 
   try {
@@ -622,6 +722,7 @@ export async function createBatchNotification(
 }
 
 export async function deleteBatchNotification(notificationId: string): Promise<void> {
+  markIdDeleted(NOTIFICATIONS_DELETED_KEY, notificationId);
   const current = readLocalNotifications();
   writeLocalNotifications(current.filter(n => n.id !== notificationId));
   try {

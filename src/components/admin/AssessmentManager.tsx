@@ -20,12 +20,22 @@ import {
   FileJson,
   Download,
   BookOpen,
-  X
+  X,
+  Upload,
+  Wifi,
+  WifiOff,
+  RefreshCw,
+  Share2,
+  Check,
+  Timer,
+  Clock,
+  Play
 } from 'lucide-react';
 import { 
   QuestionBank, 
   QuestionItemFull, 
   Assessment, 
+  AssessmentQuestionPublic,
   AssessmentType, 
   AssessmentStatus,
   ResultReleasePolicy, 
@@ -41,6 +51,7 @@ import {
   updateQuestionBank,
   deleteQuestionBank,
   getBankQuestions, 
+  subscribeToBankQuestions,
   createQuestion, 
   updateQuestion,
   deleteQuestion, 
@@ -50,10 +61,18 @@ import {
   deleteAssessment,
   updateAssessmentStatus,
   getAssessmentResultsForAdmin, 
-  releaseAssessmentResults 
+  releaseAssessmentResults,
+  flushQuestionOutbox,
+  flushOfflineAssessmentOutbox,
+  subscribeToQuestionSyncState,
+  buildShareableAssessmentUrl,
+  resolveResultPublicDisplayName,
+  getQuestionsForAssessmentPreview
 } from '../../services/assessmentService.ts';
 import { fetchStudyLevels, fetchPrograms, fetchColleges, fetchUniversities } from '../../services/academicService.ts';
 import { getRoleLabelArabic } from '../../services/batchGovernanceService.ts';
+import BulkQuestionImportModal from './BulkQuestionImportModal.tsx';
+import ExamTakingModal from '../assessment/ExamTakingModal.tsx';
 
 interface AssessmentManagerProps {
   universityId: string;
@@ -113,6 +132,7 @@ export default function AssessmentManager({
 
   // Assessments State
   const [assessments, setAssessments] = useState<Assessment[]>([]);
+  const [assessmentFilterType, setAssessmentFilterType] = useState<'all' | 'exam' | 'competition'>('all');
   const [showNewAssessmentForm, setShowNewAssessmentForm] = useState<boolean>(false);
   const [assessmentType, setAssessmentType] = useState<AssessmentType>('exam');
   const [titleArabic, setTitleArabic] = useState<string>('');
@@ -120,10 +140,19 @@ export default function AssessmentManager({
   const [studyLevelId, setStudyLevelId] = useState<string>(assignedStudyLevelId || 'lvl-4');
   const [selectedBankForAssessment, setSelectedBankForAssessment] = useState<string>('');
   const [durationMinutes, setDurationMinutes] = useState<number>(45);
+  const [enableExamTimer, setEnableExamTimer] = useState<boolean>(true);
+  const [questionDurationSeconds, setQuestionDurationSeconds] = useState<number>(0);
+  const [availabilityDurationHours, setAvailabilityDurationHours] = useState<number>(336);
   const [maxAttempts, setMaxAttempts] = useState<number>(1);
   const [releasePolicy, setReleasePolicy] = useState<ResultReleasePolicy>('immediate');
   const [opensAt, setOpensAt] = useState<string>(new Date().toISOString().slice(0, 16));
   const [closesAt, setClosesAt] = useState<string>(new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 16));
+  const [initialAssessmentStatus, setInitialAssessmentStatus] = useState<AssessmentStatus>('published');
+  const [copiedAssessmentShareId, setCopiedAssessmentShareId] = useState<string | null>(null);
+  const [previewAssessmentModal, setPreviewAssessmentModal] = useState<{
+    assessment: Assessment;
+    questions: AssessmentQuestionPublic[];
+  } | null>(null);
 
   // Edit Assessment Modal State
   const [editingAssessment, setEditingAssessment] = useState<Assessment | null>(null);
@@ -134,9 +163,41 @@ export default function AssessmentManager({
   const [selectedAssessmentForResults, setSelectedAssessmentForResults] = useState<Assessment | null>(null);
   const [results, setResults] = useState<AssessmentResult[]>([]);
 
-  // Feedback State
+  // Feedback & Bulk Import / Offline Outbox Sync State
   const [loading, setLoading] = useState<boolean>(false);
   const [statusMsg, setStatusMsg] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
+  const [showBulkImportModal, setShowBulkImportModal] = useState<boolean>(false);
+  const [syncState, setSyncState] = useState<{
+    pendingCount: number;
+    syncing: boolean;
+    lastSyncedAt: string | null;
+    isOnline: boolean;
+  }>({
+    pendingCount: 0,
+    syncing: false,
+    lastSyncedAt: null,
+    isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true
+  });
+
+  useEffect(() => {
+    const unsub = subscribeToQuestionSyncState((state) => {
+      setSyncState({
+        pendingCount: state.pendingCount,
+        syncing: state.isSyncing,
+        lastSyncedAt: state.lastSyncedAt,
+        isOnline: state.isOnline
+      });
+    });
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    if (!selectedBank?.id) return;
+    const unsub = subscribeToBankQuestions(selectedBank.id, (updatedQuestions) => {
+      setBankQuestions(updatedQuestions);
+    });
+    return unsub;
+  }, [selectedBank?.id]);
 
   useEffect(() => {
     if (!isOwner && initialUniversityId) {
@@ -392,12 +453,17 @@ export default function AssessmentManager({
           universityId,
           programId: 'prog-mbbs',
           studyLevelId,
-          durationMinutes: Number(durationMinutes),
+          durationMinutes: enableExamTimer ? Number(durationMinutes) : 0,
+          enableExamTimer,
+          questionDurationSeconds: Number(questionDurationSeconds) || 0,
+          availabilityDurationHours: Number(availabilityDurationHours) || 336,
+          allowTrialSharing: true,
+          showLeaderboard: true,
           maxAttempts: Number(maxAttempts),
           opensAt: new Date(opensAt).toISOString(),
           closesAt: new Date(closesAt).toISOString(),
           resultReleasePolicy: releasePolicy,
-          status: 'published',
+          status: initialAssessmentStatus,
           questionIds: qIds,
           totalPoints: totalPts,
           createdBy: 'ADMIN'
@@ -409,9 +475,30 @@ export default function AssessmentManager({
       setTitleArabic('');
       setDescArabic('');
       setShowNewAssessmentForm(false);
-      setStatusMsg({ type: 'success', text: 'تم نشر الاختبار / المسابقة وربط الأسئلة بنجاح' });
+      const isCurrentlyOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+      setStatusMsg({
+        type: 'success',
+        text: isCurrentlyOffline
+          ? `تم إنشاء وتجهيز "${created.titleArabic}" محلياً بدون إنترنت (${initialAssessmentStatus === 'draft' ? 'مسودة للفحص' : 'جاهز'}) مع إمكانية فحصه وإنشاء رابط مشاركته فوراً ✓`
+          : assessmentType === 'competition'
+          ? `تم حفظ المسابقة الطبية ("${created.titleArabic}") وربط الأسئلة بنجاح ✓`
+          : `تم حفظ الاختبار الأكاديمي ("${created.titleArabic}") وربط الأسئلة بنجاح ✓`
+      });
     } catch (err: any) {
-      setStatusMsg({ type: 'error', text: err.message || 'فشل النشر' });
+      setStatusMsg({ type: 'error', text: err.message || 'فشل الحفظ' });
+    }
+  };
+
+  const handlePreviewAndTestAssessment = async (asmnt: Assessment) => {
+    setStatusMsg(null);
+    try {
+      const previewQuestions = await getQuestionsForAssessmentPreview(asmnt);
+      setPreviewAssessmentModal({
+        assessment: asmnt,
+        questions: previewQuestions
+      });
+    } catch (err: any) {
+      setStatusMsg({ type: 'error', text: 'تعذر تحميل أسئلة الاختبار للمعاينة' });
     }
   };
 
@@ -445,7 +532,10 @@ export default function AssessmentManager({
           ...editingAssessment,
           titleArabic: editingAssessment.titleArabic.trim(),
           descriptionArabic: editingAssessment.descriptionArabic?.trim() || '',
-          durationMinutes: Number(editingAssessment.durationMinutes) || 30,
+          enableExamTimer: editingAssessment.enableExamTimer !== false,
+          durationMinutes: editingAssessment.enableExamTimer === false ? 0 : (Number(editingAssessment.durationMinutes) || 30),
+          questionDurationSeconds: Number(editingAssessment.questionDurationSeconds) || 0,
+          availabilityDurationHours: Number(editingAssessment.availabilityDurationHours) || 336,
           maxAttempts: Number(editingAssessment.maxAttempts) || 1,
           questionIds: updatedQuestionIds,
           totalPoints: updatedTotalPoints,
@@ -623,6 +713,51 @@ export default function AssessmentManager({
         </div>
       </div>
 
+      {/* Offline / Outbox Synchronization Status Bar */}
+      <div className="px-4 py-2.5 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <span
+            className={`px-2.5 py-1 rounded-full font-bold flex items-center gap-1.5 border ${
+              syncState.isOnline
+                ? 'bg-emerald-950/70 border-emerald-700/60 text-emerald-300'
+                : 'bg-amber-950/80 border-amber-700/70 text-amber-300'
+            }`}
+          >
+            {syncState.isOnline ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
+            <span>{syncState.isOnline ? 'متصل بالسحابة (تزامن تلقائي نشط)' : 'وضع العمل بدون إنترنت (Offline Mode)'}</span>
+          </span>
+
+          {syncState.pendingCount > 0 ? (
+            <span className="text-amber-300 font-semibold">
+              يوجد {syncState.pendingCount} عملية محفوظة محلياً بانتظار المزامنة السحابية التلقائية
+            </span>
+          ) : (
+            <span className="text-slate-400">
+              جميع بنوك الأسئلة ومفاتيح الإجابات متزامنة ومحمية ✓
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          {syncState.lastSyncedAt && (
+            <span className="text-[11px] text-slate-400 font-mono">
+              آخر مزامنة: {new Date(syncState.lastSyncedAt).toLocaleTimeString('ar-YE')}
+            </span>
+          )}
+          {syncState.pendingCount > 0 && (
+            <button
+              type="button"
+              onClick={() => flushQuestionOutbox()}
+              disabled={syncState.syncing || !syncState.isOnline}
+              className="px-3 py-1 rounded-lg bg-teal-600 hover:bg-teal-500 disabled:opacity-40 text-white text-[11px] font-bold flex items-center gap-1 transition-colors"
+            >
+              <RefreshCw className={`w-3 h-3 ${syncState.syncing ? 'animate-spin' : ''}`} />
+              <span>{syncState.syncing ? 'جاري المزامنة...' : 'مزامنة الآن'}</span>
+            </button>
+          )}
+        </div>
+      </div>
+
       {statusMsg && (
         <div className={`p-4 rounded-xl text-xs font-semibold flex items-center gap-2 border ${
           statusMsg.type === 'error' ? 'bg-rose-950/60 border-rose-800 text-rose-300' : 'bg-teal-950/60 border-teal-800 text-teal-300'
@@ -637,15 +772,28 @@ export default function AssessmentManager({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-sm font-bold text-slate-200">بنوك الأسئلة ({banks.length})</h3>
-              <button
-                onClick={() => setShowNewBankForm(true)}
-                className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1 transition-colors"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>بنك جديد</span>
-              </button>
+              <div className="flex items-center gap-1.5">
+                {selectedBank && (
+                  <button
+                    type="button"
+                    onClick={() => setShowBulkImportModal(true)}
+                    className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1 transition-colors shadow-md"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>استيراد دفعة أسئلة</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowNewBankForm(true)}
+                  className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1 transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>بنك جديد</span>
+                </button>
+              </div>
             </div>
 
             {showNewBankForm && (
@@ -717,6 +865,23 @@ export default function AssessmentManager({
                   </div>
                   {b.descriptionArabic && <div className="text-[11px] text-slate-400 mt-1">{b.descriptionArabic}</div>}
 
+                  <div
+                    className="mt-2.5 pt-2 border-t border-slate-800/70 flex flex-wrap items-center gap-1.5"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await handleSelectBank(b);
+                        setShowBulkImportModal(true);
+                      }}
+                      className="flex-1 py-1.5 px-2.5 rounded-lg bg-amber-600/90 hover:bg-amber-500 text-white text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>استيراد دفعة أسئلة (بدون إنترنت)</span>
+                    </button>
+                  </div>
+
                   {confirmDeleteBankId === b.id && (
                     <div
                       onClick={(e) => e.stopPropagation()}
@@ -754,13 +919,20 @@ export default function AssessmentManager({
                     <h3 className="text-base font-bold text-white">{selectedBank.titleArabic}</h3>
                     <p className="text-xs text-slate-400 mt-0.5">عدد الأسئلة المسجلة: {bankQuestions.length}</p>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
                       onClick={() => setEditingBank(selectedBank)}
                       className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
                     >
                       <Edit2 className="w-3.5 h-3.5" />
                       <span>تعديل البنك</span>
+                    </button>
+                    <button
+                      onClick={() => setShowBulkImportModal(true)}
+                      className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-lg"
+                    >
+                      <Upload className="w-4 h-4" />
+                      <span>استيراد دفعة أسئلة (Bulk / بدون إنترنت)</span>
                     </button>
                     <button
                       onClick={() => setShowNewQuestionForm(true)}
@@ -903,7 +1075,18 @@ export default function AssessmentManager({
                     <div key={q.id} className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
                       <div className="flex items-start justify-between gap-3">
                         <div className="space-y-1">
-                          <span className="text-[11px] font-bold text-teal-400">سؤال {idx + 1} ({q.points} نقاط)</span>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-[11px] font-bold text-teal-400">سؤال {idx + 1} ({q.points} نقاط)</span>
+                            {q.syncStatus === 'pending_sync' ? (
+                              <span className="px-2 py-0.5 rounded bg-amber-950/80 border border-amber-700/70 text-amber-300 text-[10px] font-semibold">
+                                محفوظ محلياً — بانتظار المزامنة
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded bg-emerald-950/60 border border-emerald-800/60 text-emerald-300 text-[10px]">
+                                متزامن سحابياً ✓
+                              </span>
+                            )}
+                          </div>
                           <p className="text-sm font-bold text-white">{q.stemArabic}</p>
                           {q.stemEnglish && <p className="text-xs text-slate-400 font-mono" dir="ltr">{q.stemEnglish}</p>}
                         </div>
@@ -935,7 +1118,12 @@ export default function AssessmentManager({
                                 : 'bg-slate-900/50 border-slate-800 text-slate-400'
                             }`}
                           >
-                            {o.textArabic} {o.id === q.correctOptionId && '✓ (الإجابة الصحيحة)'}
+                            <div>{o.textArabic} {o.id === q.correctOptionId && '✓ (الإجابة الصحيحة)'}</div>
+                            {q.optionExplanations?.[o.id] && (
+                              <div className="text-[10px] font-normal text-slate-300 mt-1 pt-1 border-t border-slate-800/80">
+                                {q.optionExplanations[o.id]}
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -963,33 +1151,100 @@ export default function AssessmentManager({
       {/* TAB 2: ASSESSMENTS CREATOR & MANAGER */}
       {activeTab === 'assessments' && (
         <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-bold text-white">الامتحانات والمسابقات ({assessments.length})</h3>
-            <button
-              onClick={() => setShowNewAssessmentForm(true)}
-              className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-lg"
-            >
-              <Plus className="w-4 h-4" />
-              <span>إنشاء اختبار / مسابقة جديدة</span>
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/90 border border-slate-800 p-4 rounded-2xl">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setAssessmentFilterType('all')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  assessmentFilterType === 'all'
+                    ? 'bg-slate-700 text-white shadow'
+                    : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                }`}
+              >
+                الكل ({assessments.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setAssessmentFilterType('exam')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  assessmentFilterType === 'exam'
+                    ? 'bg-teal-600 text-white shadow'
+                    : 'bg-slate-950 text-teal-400 hover:text-white border border-slate-800'
+                }`}
+              >
+                📝 الاختبارات فقط ({assessments.filter(a => a.assessmentType === 'exam').length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setAssessmentFilterType('competition')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  assessmentFilterType === 'competition'
+                    ? 'bg-amber-600 text-white shadow'
+                    : 'bg-slate-950 text-amber-400 hover:text-white border border-slate-800'
+                }`}
+              >
+                🏆 المسابقات فقط ({assessments.filter(a => a.assessmentType === 'competition').length})
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setAssessmentType('exam');
+                  setDurationMinutes(30);
+                  setMaxAttempts(2);
+                  setShowNewAssessmentForm(true);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-lg"
+              >
+                <Plus className="w-4 h-4" />
+                <span>إنشاء اختبار أكاديمي فقط</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAssessmentType('competition');
+                  setDurationMinutes(15);
+                  setMaxAttempts(1);
+                  setShowNewAssessmentForm(true);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-lg"
+              >
+                <Plus className="w-4 h-4" />
+                <span>إنشاء مسابقة طبية فقط</span>
+              </button>
+            </div>
           </div>
 
           {showNewAssessmentForm && (
             <form onSubmit={handleCreateAssessment} className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-4 shadow-2xl">
-              <h4 className="text-sm font-bold text-amber-400 border-b border-slate-800 pb-2">
-                إعداد ونشر تقييم أكاديمي جديد
-              </h4>
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <h4 className={`text-sm font-bold ${assessmentType === 'competition' ? 'text-amber-400' : 'text-teal-400'}`}>
+                  {assessmentType === 'competition'
+                    ? '🏆 إعداد ونشر مسابقة طبية تنافسية فقط'
+                    : '📝 إعداد ونشر اختبار مادة أكاديمي فقط'}
+                </h4>
+                <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+                  assessmentType === 'competition'
+                    ? 'bg-amber-950/80 border-amber-700 text-amber-300'
+                    : 'bg-teal-950/80 border-teal-700 text-teal-300'
+                }`}>
+                  {assessmentType === 'competition' ? 'ينشر في قسم المسابقات فقط' : 'ينشر في قسم الاختبارات فقط'}
+                </span>
+              </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs text-slate-400 block mb-1">نوع التقييم</label>
+                  <label className="text-xs text-slate-400 block mb-1">نوع النشر (حصري ومستقل)</label>
                   <select
                     value={assessmentType}
                     onChange={(e) => setAssessmentType(e.target.value as AssessmentType)}
                     className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-bold"
                   >
-                    <option value="exam">امتحان مادة أسبوعي / نهائي</option>
-                    <option value="competition">مسابقة طبية تنافسية</option>
+                    <option value="exam">📝 اختبار مادة أكاديمي فقط (Exam Only)</option>
+                    <option value="competition">🏆 مسابقة طبية تنافسية فقط (Competition Only)</option>
                   </select>
                 </div>
 
@@ -1017,7 +1272,7 @@ export default function AssessmentManager({
                 />
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label className="text-xs text-slate-400 block mb-1">المستوى الدراسي المستهدف</label>
                   <select
@@ -1047,18 +1302,64 @@ export default function AssessmentManager({
                     ))}
                   </select>
                 </div>
+
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">حالة التقييم عند الإنشاء (يدعم الأوفلاين)</label>
+                  <select
+                    value={initialAssessmentStatus}
+                    onChange={(e) => setInitialAssessmentStatus(e.target.value as AssessmentStatus)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-teal-300 font-bold"
+                  >
+                    <option value="published">منشور فوراً وجاهز للرابط (Published)</option>
+                    <option value="draft">مسودة للتجهيز والفحص أولاً (Draft)</option>
+                  </select>
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div>
-                  <label className="text-xs text-slate-400 block mb-1">مدة الاختبار (بالدقائق)</label>
-                  <input
-                    type="number"
-                    value={durationMinutes}
-                    onChange={(e) => setDurationMinutes(Number(e.target.value))}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-mono"
-                    min={5}
-                  />
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs text-slate-400">مؤقت الاختبار الكلي</label>
+                    <label className="flex items-center gap-1.5 text-[11px] text-teal-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={enableExamTimer}
+                        onChange={(e) => setEnableExamTimer(e.target.checked)}
+                        className="rounded accent-teal-500"
+                      />
+                      <span>{enableExamTimer ? 'مفعل' : 'وقت مفتوح'}</span>
+                    </label>
+                  </div>
+                  {enableExamTimer ? (
+                    <input
+                      type="number"
+                      value={durationMinutes}
+                      onChange={(e) => setDurationMinutes(Number(e.target.value))}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-mono"
+                      min={5}
+                      placeholder="المدة بالدقائق"
+                    />
+                  ) : (
+                    <div className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-emerald-400 font-bold">
+                      بدون مؤقت كلي (مفتوح)
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">مؤقت اختياري لكل سؤال</label>
+                  <select
+                    value={questionDurationSeconds}
+                    onChange={(e) => setQuestionDurationSeconds(Number(e.target.value))}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-amber-300 font-bold"
+                  >
+                    <option value={0}>بدون مؤقت لكل سؤال</option>
+                    <option value={30}>30 ثانية لكل سؤال</option>
+                    <option value={45}>45 ثانية لكل سؤال</option>
+                    <option value={60}>60 ثانية (دقيقة) لكل سؤال</option>
+                    <option value={90}>90 ثانية لكل سؤال</option>
+                    <option value={120}>120 ثانية (دقيقتان) لكل سؤال</option>
+                  </select>
                 </div>
 
                 <div>
@@ -1086,26 +1387,62 @@ export default function AssessmentManager({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">تاريخ ووقت الفتح</label>
-                  <input
-                    type="datetime-local"
-                    value={opensAt}
-                    onChange={(e) => setOpensAt(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-mono"
-                    dir="ltr"
-                  />
+              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3.5 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="text-xs font-bold text-slate-300">
+                    مدة توفر الاختبار قبل الإغلاق التلقائي:
+                  </label>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {[
+                      { hours: 6, label: '6 ساعات' },
+                      { hours: 24, label: '24 ساعة (يوم)' },
+                      { hours: 72, label: '3 أيام' },
+                      { hours: 168, label: '7 أيام' },
+                      { hours: 336, label: '14 يوماً' },
+                      { hours: 720, label: '30 يوماً' }
+                    ].map((preset) => (
+                      <button
+                        key={preset.hours}
+                        type="button"
+                        onClick={() => {
+                          setAvailabilityDurationHours(preset.hours);
+                          const openDate = opensAt ? new Date(opensAt).getTime() : Date.now();
+                          const nextClose = new Date(openDate + preset.hours * 3600000);
+                          setClosesAt(nextClose.toISOString().slice(0, 16));
+                        }}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${
+                          availabilityDurationHours === preset.hours
+                            ? 'bg-teal-600 text-white border-teal-500'
+                            : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">تاريخ ووقت الإغلاق</label>
-                  <input
-                    type="datetime-local"
-                    value={closesAt}
-                    onChange={(e) => setClosesAt(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-mono"
-                    dir="ltr"
-                  />
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs text-slate-400 block mb-1">تاريخ ووقت الفتح</label>
+                    <input
+                      type="datetime-local"
+                      value={opensAt}
+                      onChange={(e) => setOpensAt(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white font-mono"
+                      dir="ltr"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400 block mb-1">تاريخ ووقت الإغلاق</label>
+                    <input
+                      type="datetime-local"
+                      value={closesAt}
+                      onChange={(e) => setClosesAt(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white font-mono"
+                      dir="ltr"
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -1119,16 +1456,22 @@ export default function AssessmentManager({
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition-colors shadow-lg"
+                  className={`px-6 py-2 rounded-xl text-white text-xs font-bold transition-colors shadow-lg ${
+                    assessmentType === 'competition'
+                      ? 'bg-amber-600 hover:bg-amber-500'
+                      : 'bg-teal-600 hover:bg-teal-500'
+                  }`}
                 >
-                  حفظ ونشر التقييم
+                  {assessmentType === 'competition' ? 'حفظ ونشر كمسابقة طبية فقط' : 'حفظ ونشر كاختبار أكاديمي فقط'}
                 </button>
               </div>
             </form>
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {assessments.map(a => (
+            {assessments
+              .filter(a => assessmentFilterType === 'all' || a.assessmentType === assessmentFilterType)
+              .map(a => (
               <div key={a.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -1177,9 +1520,12 @@ export default function AssessmentManager({
 
                 <div className="text-xs text-slate-400 grid grid-cols-2 gap-2 bg-slate-950/70 p-3 rounded-xl border border-slate-800/80">
                   <div>المستوى: <span className="text-teal-300 font-semibold">{getLevelLabel(a.studyLevelId)}</span></div>
-                  <div>المدة: <span className="text-slate-200 font-mono">{a.durationMinutes} د</span> • الأسئلة: <span className="text-slate-200 font-mono">{a.questionIds?.length || 3}</span></div>
-                  <div>المحاولات: <span className="text-slate-200 font-mono">{a.maxAttempts}</span></div>
-                  <div>النتائج: <span className="text-slate-200 font-semibold">{a.resultReleasePolicy === 'immediate' ? 'فوري' : a.resultReleasePolicy === 'manual' ? 'يدوي' : 'بعد الإغلاق'}</span></div>
+                  <div>
+                    المدة: <span className="text-slate-200 font-mono">{a.enableExamTimer === false || !a.durationMinutes ? 'وقت مفتوح' : `${a.durationMinutes} د`}</span>
+                    {a.questionDurationSeconds ? <span className="text-amber-300 font-mono"> • {a.questionDurationSeconds}ث/سؤال</span> : null}
+                  </div>
+                  <div>الأسئلة: <span className="text-slate-200 font-mono">{a.questionIds?.length || 3}</span> • المحاولات: <span className="text-slate-200 font-mono">{a.maxAttempts}</span></div>
+                  <div>النتائج: <span className="text-slate-200 font-semibold">{a.resultReleasePolicy === 'immediate' ? 'فوري بالترتيب' : a.resultReleasePolicy === 'manual' ? 'يدوي' : 'بعد الإغلاق'}</span></div>
                 </div>
 
                 {confirmDeleteAssessmentId === a.id && (
@@ -1202,18 +1548,59 @@ export default function AssessmentManager({
                   </div>
                 )}
 
-                <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
-                  <button
-                    onClick={() => {
-                      setSelectedAssessmentForResults(a);
-                      setActiveTab('results');
-                      getAssessmentResultsForAdmin(a.id).then(setResults);
-                    }}
-                    className="px-3 py-1.5 rounded-lg bg-blue-950/80 hover:bg-blue-900 text-blue-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                  >
-                    <Eye className="w-3.5 h-3.5" />
-                    <span>عرض النتائج</span>
-                  </button>
+                <div className="pt-2 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handlePreviewAndTestAssessment(a)}
+                      className="px-3 py-1.5 rounded-lg bg-teal-950/90 hover:bg-teal-900 border border-teal-500/40 text-teal-200 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                      title="فحص وتجربة حل الاختبار الآن (يعمل أونلاين وأوفلاين)"
+                    >
+                      <Play className="w-3.5 h-3.5 text-teal-400" />
+                      <span>فحص وتجربة الاختبار</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setSelectedAssessmentForResults(a);
+                        setActiveTab('results');
+                        getAssessmentResultsForAdmin(a.id).then(setResults);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-blue-950/80 hover:bg-blue-900 text-blue-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>عرض النتائج بالترتيب</span>
+                    </button>
+
+                    <button
+                      onClick={async () => {
+                        const url = buildShareableAssessmentUrl(a);
+                        try {
+                          await navigator.clipboard.writeText(url);
+                        } catch {}
+                        setCopiedAssessmentShareId(a.id);
+                        setStatusMsg({
+                          type: 'success',
+                          text: `تم إنشاء ونسخ رابط الاختبار المشترك ("${a.titleArabic}") بنجاح — يحتوي الرابط على حزمة الأسئلة المشفرة ويعمل فوراً حتى إن تم إنشاؤه أوفلاين ✓`
+                        });
+                        setTimeout(() => setCopiedAssessmentShareId(null), 2500);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-500/30 text-indigo-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                      title="إنشاء ونسخ رابط مشاركة الاختبار التجريبي (يعمل أونلاين وأوفلاين)"
+                    >
+                      {copiedAssessmentShareId === a.id ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>تم نسخ الرابط ✓</span>
+                        </>
+                      ) : (
+                        <>
+                          <Share2 className="w-3.5 h-3.5 text-indigo-400" />
+                          <span>إنشاء رابط الاختبار</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
 
                   <button
                     onClick={() => handleReleaseResults(a.id)}
@@ -1290,7 +1677,9 @@ export default function AssessmentManager({
                 <table className="w-full text-right text-xs">
                   <thead className="bg-slate-950 text-slate-400 border-b border-slate-800">
                     <tr>
-                      <th className="p-3">اسم الطالب</th>
+                      <th className="p-3">الترتيب</th>
+                      <th className="p-3">اسم الطالب (الرسمي)</th>
+                      <th className="p-3">الاسم الظاهر للطلاب</th>
                       <th className="p-3">الدرجة</th>
                       <th className="p-3">النسبة %</th>
                       <th className="p-3">تاريخ التسليم</th>
@@ -1298,21 +1687,31 @@ export default function AssessmentManager({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 text-slate-200">
-                    {results.map(r => (
-                      <tr key={r.id} className="hover:bg-slate-800/40">
-                        <td className="p-3 font-bold">{r.studentNameArabic}</td>
-                        <td className="p-3 font-mono text-teal-400">{r.score} / {r.totalPoints}</td>
-                        <td className="p-3 font-mono font-bold">{r.percentage}%</td>
-                        <td className="p-3 font-mono text-slate-400">{new Date(r.submittedAt).toLocaleString('ar-YE')}</td>
-                        <td className="p-3">
-                          <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
-                            r.isReleased ? 'bg-teal-500/20 text-teal-300' : 'bg-amber-500/20 text-amber-300'
-                          }`}>
-                            {r.isReleased ? 'تم الإفراج ✓' : 'معلق'}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
+                    {[...results]
+                      .sort((a, b) => {
+                        const pctDiff = (Number(b.percentage) || 0) - (Number(a.percentage) || 0);
+                        if (pctDiff !== 0) return pctDiff;
+                        const scoreDiff = (Number(b.score) || 0) - (Number(a.score) || 0);
+                        if (scoreDiff !== 0) return scoreDiff;
+                        return (Number(a.durationSeconds) || 999999) - (Number(b.durationSeconds) || 999999);
+                      })
+                      .map((r, idx) => (
+                        <tr key={r.id} className="hover:bg-slate-800/40">
+                          <td className="p-3 font-mono font-extrabold text-amber-400">#{idx + 1}</td>
+                          <td className="p-3 font-bold">{r.studentNameArabic}</td>
+                          <td className="p-3 text-teal-300 font-semibold">{resolveResultPublicDisplayName(r)}</td>
+                          <td className="p-3 font-mono text-teal-400">{r.score} / {r.totalPoints}</td>
+                          <td className="p-3 font-mono font-bold">{r.percentage}%</td>
+                          <td className="p-3 font-mono text-slate-400">{new Date(r.submittedAt).toLocaleString('ar-YE')}</td>
+                          <td className="p-3">
+                            <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                              r.isReleased ? 'bg-teal-500/20 text-teal-300' : 'bg-amber-500/20 text-amber-300'
+                            }`}>
+                              {r.isReleased ? 'تم الإفراج ✓' : 'معلق'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
                   </tbody>
                 </table>
               </div>
@@ -1591,17 +1990,51 @@ export default function AssessmentManager({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div>
-                  <label className="text-slate-400 block mb-1">المدة (دقائق)</label>
-                  <input
-                    type="number"
-                    value={editingAssessment.durationMinutes}
-                    onChange={(e) => setEditingAssessment({ ...editingAssessment, durationMinutes: Number(e.target.value) })}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
-                    min={5}
-                  />
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-slate-400">مؤقت الاختبار الكلي</label>
+                    <label className="flex items-center gap-1 text-[11px] text-teal-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={editingAssessment.enableExamTimer !== false}
+                        onChange={(e) => setEditingAssessment({ ...editingAssessment, enableExamTimer: e.target.checked })}
+                        className="rounded accent-teal-500"
+                      />
+                      <span>{editingAssessment.enableExamTimer !== false ? 'مفعل' : 'وقت مفتوح'}</span>
+                    </label>
+                  </div>
+                  {editingAssessment.enableExamTimer !== false ? (
+                    <input
+                      type="number"
+                      value={editingAssessment.durationMinutes}
+                      onChange={(e) => setEditingAssessment({ ...editingAssessment, durationMinutes: Number(e.target.value) })}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                      min={5}
+                    />
+                  ) : (
+                    <div className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-emerald-400 font-bold">
+                      بدون مؤقت كلي (مفتوح)
+                    </div>
+                  )}
                 </div>
+
+                <div>
+                  <label className="text-slate-400 block mb-1">مؤقت لكل سؤال (اختياري)</label>
+                  <select
+                    value={editingAssessment.questionDurationSeconds || 0}
+                    onChange={(e) => setEditingAssessment({ ...editingAssessment, questionDurationSeconds: Number(e.target.value) })}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-amber-300 font-bold"
+                  >
+                    <option value={0}>بدون مؤقت لكل سؤال</option>
+                    <option value={30}>30 ثانية / سؤال</option>
+                    <option value={45}>45 ثانية / سؤال</option>
+                    <option value={60}>60 ثانية / سؤال</option>
+                    <option value={90}>90 ثانية / سؤال</option>
+                    <option value={120}>120 ثانية / سؤال</option>
+                  </select>
+                </div>
+
                 <div>
                   <label className="text-slate-400 block mb-1">أقصى عدد محاولات</label>
                   <input
@@ -1625,6 +2058,39 @@ export default function AssessmentManager({
                   </select>
                 </div>
               </div>
+
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-slate-300 font-bold">تمديد مدة توفر الاختبار قبل الإغلاق:</span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      { hours: 24, label: '+24 ساعة' },
+                      { hours: 72, label: '+3 أيام' },
+                      { hours: 168, label: '+7 أيام' },
+                      { hours: 336, label: '+14 يوماً' }
+                    ].map((p) => (
+                      <button
+                        key={p.hours}
+                        type="button"
+                        onClick={() => {
+                          const nextClose = new Date(Date.now() + p.hours * 3600000).toISOString();
+                          setEditingAssessment({
+                            ...editingAssessment,
+                            availabilityDurationHours: p.hours,
+                            closesAt: nextClose
+                          });
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-teal-950 border border-slate-800 text-teal-300 text-[11px] font-bold"
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="text-[11px] text-slate-400">
+                  تاريخ الإغلاق المحدد: <strong className="text-white font-mono">{new Date(editingAssessment.closesAt).toLocaleString('ar-YE')}</strong>
+                </div>
+              </div>
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800 sticky bottom-0 bg-slate-900 pb-1">
@@ -1644,6 +2110,74 @@ export default function AssessmentManager({
             </div>
           </form>
         </div>
+      )}
+
+      {/* MODAL: BULK QUESTION IMPORT (OFFLINE-FIRST + DIRECT SINGLE-MODE PUBLISHING) */}
+      {showBulkImportModal && selectedBank && (
+        <BulkQuestionImportModal
+          bank={selectedBank}
+          existingQuestions={bankQuestions}
+          userRole={userRole}
+          studyLevels={studyLevels}
+          defaultStudyLevelId={studyLevelId}
+          onClose={() => setShowBulkImportModal(false)}
+          onSaved={(result) => {
+            setBankQuestions(result.savedQuestions);
+            if (result.publishedAssessment) {
+              setAssessments((prev) => [
+                result.publishedAssessment!,
+                ...prev.filter((a) => a.id !== result.publishedAssessment!.id)
+              ]);
+            }
+
+            const modeSummary =
+              result.publishMode === 'exam_only' && result.publishedAssessment
+                ? `وتم نشره كـ "اختبار أكاديمي فقط" بعنوان (${result.publishedAssessment.titleArabic})`
+                : result.publishMode === 'competition_only' && result.publishedAssessment
+                ? `وتم نشره كـ "مسابقة طبية فقط" بعنوان (${result.publishedAssessment.titleArabic})`
+                : 'في بنك الأسئلة فقط';
+
+            setStatusMsg({
+              type: 'success',
+              text: `تم اعتماد الدفعة بنجاح (${result.createdCount} جديد، ${result.updatedCount} محدّث) ${modeSummary} — ${
+                result.syncedImmediately
+                  ? 'تمت المزامنة السحابية فوراً ✓'
+                  : 'محفوظ محلياً وسيتم مزامنته تلقائياً فور توفر الإنترنت'
+              }`
+            });
+          }}
+        />
+      )}
+
+      {/* MODAL: OFFLINE/ONLINE LIVE EXAM TESTING & PREVIEW FOR ADMIN/OWNER */}
+      {previewAssessmentModal && (
+        <ExamTakingModal
+          assessment={previewAssessmentModal.assessment}
+          attempt={{
+            id: `att-admin-preview-${previewAssessmentModal.assessment.id}-${Date.now()}`,
+            assessmentId: previewAssessmentModal.assessment.id,
+            uid: 'admin-preview',
+            attemptNumber: 1,
+            startedAt: new Date().toISOString(),
+            expiresAt: new Date(
+              Date.now() + (Number(previewAssessmentModal.assessment.durationMinutes) || 30) * 60000
+            ).toISOString(),
+            answers: {},
+            lastSavedAt: new Date().toISOString(),
+            status: 'in_progress'
+          }}
+          questions={previewAssessmentModal.questions}
+          studentNameArabic="معاينة وفحص المسؤول"
+          uid="admin-preview"
+          isGuestMode={false}
+          onClose={() => setPreviewAssessmentModal(null)}
+          onSubmitted={(res) => {
+            setStatusMsg({
+              type: 'success',
+              text: `اكتمل فحص الاختبار ("${previewAssessmentModal.assessment.titleArabic}") بنجاح — النتيجة التجريبية: ${res.score}/${res.totalPoints} (${res.percentage}%) ✓`
+            });
+          }}
+        />
       )}
 
     </div>
