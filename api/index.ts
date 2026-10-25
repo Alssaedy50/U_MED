@@ -13,6 +13,7 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
+import { GoogleGenAI } from '@google/genai';
 import type { UserRoleDoc, AuditLog, QuestionItemFull, Assessment } from '../src/types/umed.ts';
 
 dotenv.config();
@@ -1000,6 +1001,100 @@ app.post('/api/admin/release-results', requireAdmin, (req: AuthenticatedRequest,
     res.json({ success: true, updatedCount });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'فشل إفراج النتائج' });
+  }
+});
+
+// 15. Server-Authoritative Medical Explanation Generator with Gemini
+let genAIClient: GoogleGenAI | null = null;
+function getGenAI(): GoogleGenAI | null {
+  if (!genAIClient && process.env.GEMINI_API_KEY) {
+    genAIClient = new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build'
+        }
+      }
+    });
+  }
+  return genAIClient;
+}
+
+app.post('/api/admin/generate-mcq-explanations', optionalAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { questions } = req.body;
+    if (!Array.isArray(questions) || questions.length === 0) {
+      return res.json({ explanations: [] });
+    }
+
+    const ai = getGenAI();
+    if (!ai) {
+      // Deterministic fallback if GEMINI_API_KEY is not configured
+      const explanations = questions.map((item: any) => {
+        const correctOpt = item.options?.find((o: any) => o.id === item.correctOptionId);
+        const correctText = correctOpt?.textArabic || 'الخيار المعتمد';
+        const wrongOpts = (item.options || [])
+          .filter((o: any) => o.id !== item.correctOptionId)
+          .map((o: any) => o.textArabic);
+        const explanationArabic = wrongOpts.length > 0
+          ? `الإجابة الصحيحة هي (${correctText}) لأنها الخيار الطبي الأدق المطابق لمعطيات السؤال، بينما تُستبعد البدائل الأخرى (${wrongOpts.slice(0, 3).join('، ')}) لعدم انطباقها السريري المباشر.`
+          : `الإجابة الصحيحة المعتمدة هي (${correctText}) وفق المعايير الطبية والأكاديمية للمقرر.`;
+        return {
+          tempId: item.tempId,
+          explanationArabic
+        };
+      });
+      return res.json({ explanations });
+    }
+
+    const prompt = `أنت أستاذ ومستشار في التعليم الطبي لكليات الطب البشري.
+المطلوب: لكل سؤال طبي من الأسئلة التالية، قدّم تعليلاً سريرياً دقيقاً وموجزاً باللغة العربية يشرح سبب صحة الإجابة المحددة ولماذا تعتبر الخيارات الأخرى غير صحيحة.
+الأسئلة:
+${JSON.stringify(questions, null, 2)}
+
+أعد النتيجة حصراً بتنسيق JSON كمصفوفة كائنات بالبنية التالية دون أي نصوص إضافية:
+[
+  {
+    "tempId": "string",
+    "explanationArabic": "الشرح الطبي المعتمد باللغة العربية"
+  }
+]`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json'
+      }
+    });
+
+    const text = response.text || '[]';
+    let parsed: any[] = [];
+    try {
+      parsed = JSON.parse(text);
+      if (!Array.isArray(parsed)) {
+        parsed = [];
+      }
+    } catch {
+      parsed = [];
+    }
+
+    if (parsed.length > 0) {
+      return res.json({ explanations: parsed });
+    }
+
+    // Fallback if model returned empty or unexpected format
+    const fallbackExplanations = questions.map((item: any) => {
+      const correctOpt = item.options?.find((o: any) => o.id === item.correctOptionId);
+      const correctText = correctOpt?.textArabic || 'الخيار المعتمد';
+      return {
+        tempId: item.tempId,
+        explanationArabic: `الإجابة الصحيحة المعتمدة هي (${correctText}) وفق المعايير الطبية والأكاديمية للمقرر.`
+      };
+    });
+    return res.json({ explanations: fallbackExplanations });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'خطأ أثناء توليد الشروحات' });
   }
 });
 
