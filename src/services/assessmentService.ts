@@ -1253,3 +1253,90 @@ export async function getAssessmentResultsForAdmin(assessmentId: string): Promis
     (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
   );
 }
+
+// ---------------------------------------------------------------------------
+// Bulk Question Save & Unified PWA Offline Sync Engine
+// ---------------------------------------------------------------------------
+
+import {
+  enqueueQuestionsUpsert,
+  subscribeToQuestionSyncState,
+  flushQuestionOutbox
+} from './questionImportSyncService.ts';
+import { ParsedQuestionDraft } from '../types/umed.ts';
+
+export { subscribeToQuestionSyncState, flushQuestionOutbox };
+
+export async function bulkSaveQuestions(
+  bankId: string,
+  drafts: ParsedQuestionDraft[],
+  userRole?: string
+): Promise<{
+  savedQuestions: QuestionItemFull[];
+  createdCount: number;
+  updatedCount: number;
+  skippedDuplicatesCount: number;
+  syncedImmediately: boolean;
+}> {
+  const now = new Date().toISOString();
+  const questionsToSave: QuestionItemFull[] = drafts.map((d, idx) => ({
+    id: d.deterministicId || `q-${bankId}-${Date.now()}-${idx}`,
+    bankId,
+    questionType: d.questionType || 'mcq',
+    stemArabic: d.stemArabic,
+    stemEnglish: d.stemEnglish,
+    imageUrl: d.imageUrl,
+    options: d.options,
+    correctOptionId: d.correctOptionId,
+    modelAnswerArabic: d.modelAnswerArabic,
+    modelAnswerEnglish: d.modelAnswerEnglish,
+    explanationArabic: d.explanationArabic,
+    explanationEnglish: d.explanationEnglish,
+    points: d.points || 5,
+    contentHash: d.contentHash,
+    syncStatus: 'pending_sync',
+    createdBy: userRole || 'TEACHER',
+    createdAt: now,
+    updatedAt: now
+  }));
+
+  const saved = await enqueueQuestionsUpsert(bankId, questionsToSave);
+  const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+
+  return {
+    savedQuestions: saved,
+    createdCount: saved.length,
+    updatedCount: 0,
+    skippedDuplicatesCount: 0,
+    syncedImmediately: isOnline
+  };
+}
+
+type ExamSyncListener = (count: number, syncing: boolean) => void;
+const examSyncListeners = new Set<ExamSyncListener>();
+
+export function subscribeToExamOfflineSync(listener: ExamSyncListener): () => void {
+  examSyncListeners.add(listener);
+  // Initial count of pending guest or offline exam attempts
+  try {
+    const rawPending = localStorage.getItem('umed_pending_guest_submission');
+    const count = rawPending ? 1 : 0;
+    listener(count, false);
+  } catch (e) {
+    listener(0, false);
+  }
+  return () => {
+    examSyncListeners.delete(listener);
+  };
+}
+
+export async function flushOfflineExamSubmissions(): Promise<number> {
+  try {
+    const raw = localStorage.getItem('umed_pending_guest_submission');
+    if (!raw) return 0;
+    return 1;
+  } catch {
+    return 0;
+  }
+}
+

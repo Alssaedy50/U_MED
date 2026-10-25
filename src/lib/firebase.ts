@@ -7,7 +7,6 @@
  */
 
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAnalytics, isSupported, Analytics } from 'firebase/analytics';
 import { 
   getAuth, 
   signInWithPopup, 
@@ -51,16 +50,18 @@ import {
   EnrollmentStatus
 } from '../types/umed.ts';
 
-// Dynamic Firebase Configuration supporting Cloudflare/Vercel Environment Variables
+// Dynamic Firebase Configuration supporting Vite & Node/Test Environment Variables
+const metaEnv = (typeof import.meta !== 'undefined' && (import.meta as any).env) || {};
+
 export const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || firebaseAppletConfig.apiKey,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || firebaseAppletConfig.authDomain,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || firebaseAppletConfig.projectId,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || firebaseAppletConfig.storageBucket,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseAppletConfig.messagingSenderId,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || firebaseAppletConfig.appId,
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || firebaseAppletConfig.measurementId,
-  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_DATABASE_ID || firebaseAppletConfig.firestoreDatabaseId,
+  apiKey: metaEnv.VITE_FIREBASE_API_KEY || firebaseAppletConfig.apiKey,
+  authDomain: metaEnv.VITE_FIREBASE_AUTH_DOMAIN || firebaseAppletConfig.authDomain,
+  projectId: metaEnv.VITE_FIREBASE_PROJECT_ID || firebaseAppletConfig.projectId,
+  storageBucket: metaEnv.VITE_FIREBASE_STORAGE_BUCKET || firebaseAppletConfig.storageBucket,
+  messagingSenderId: metaEnv.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseAppletConfig.messagingSenderId,
+  appId: metaEnv.VITE_FIREBASE_APP_ID || firebaseAppletConfig.appId,
+  measurementId: metaEnv.VITE_FIREBASE_MEASUREMENT_ID || firebaseAppletConfig.measurementId,
+  firestoreDatabaseId: metaEnv.VITE_FIREBASE_DATABASE_ID || firebaseAppletConfig.firestoreDatabaseId,
 };
 
 // Primary Platform Owner Official Details (Non-duplicable & Strictly Reserved)
@@ -68,7 +69,7 @@ export const INITIAL_OWNER_EMAILS = [
   'alssaedy50@gmail.com',
   'alssaedy500@gmail.com',
   'doctoshi50@gmail.com',
-  (import.meta.env.VITE_INITIAL_OWNER_EMAIL || '').trim().toLowerCase()
+  (metaEnv.VITE_INITIAL_OWNER_EMAIL || '').trim().toLowerCase()
 ].filter(Boolean);
 
 export const INITIAL_OWNER_EMAIL = INITIAL_OWNER_EMAILS[0];
@@ -86,17 +87,8 @@ export const isPrimaryOwnerEmail = isInitialOwnerEmail;
 // 1. Initialize Firebase App
 export const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-// Safe Client Analytics Initialization (Guarded with isSupported() for browser/iFrame safety)
-export let analytics: Analytics | null = null;
-if (typeof window !== 'undefined') {
-  isSupported()
-    .then((supported) => {
-      if (supported) {
-        analytics = getAnalytics(app);
-      }
-    })
-    .catch(() => {});
-}
+// Client Analytics disabled to prevent unnecessary installations requests with restricted keys
+export const analytics = null;
 
 // 2. Export Auth & Firestore instances (forced long-polling prevents 10s WebChannel timeout in iFrames)
 export const auth = getAuth(app);

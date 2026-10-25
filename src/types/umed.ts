@@ -364,25 +364,38 @@ export interface QuestionBank {
   updatedAt?: string;
 }
 
+export type QuestionType = 'mcq' | 'true_false' | 'essay';
+
 export interface QuestionOption {
-  id: string; // e.g. 'opt-a'
+  id: string; // e.g. 'opt-a', 'opt-b', 'opt-c', 'opt-d', 'opt-e', etc.
   textArabic: string;
   textEnglish?: string;
+  explanationArabic?: string; // تعليل الخيار (لماذا هو صحيح أو لماذا هو خاطئ)
+  explanationEnglish?: string;
+  isCorrect?: boolean;
 }
+
+export type QuestionSyncStatus = 'synced' | 'pending_upload' | 'pending_sync' | 'sync_error' | 'conflict' | 'error';
 
 export interface QuestionItemFull {
   id: string;
   bankId: string;
+  questionType?: QuestionType; // 'mcq' | 'true_false' | 'essay'
   stemArabic: string;
   stemEnglish?: string;
   imageUrl?: string;
   options: QuestionOption[];
   correctOptionId: string;
-  explanationArabic?: string;
+  modelAnswerArabic?: string; // الإجابة النموذجية للأسئلة المقالية
+  modelAnswerEnglish?: string;
+  explanationArabic?: string; // التعليل العلمي العام للسؤال
   explanationEnglish?: string;
   points: number;
+  contentHash?: string;
+  syncStatus?: QuestionSyncStatus;
   createdBy: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 /**
@@ -391,11 +404,13 @@ export interface QuestionItemFull {
 export interface AssessmentQuestionPublic {
   id: string;
   bankId?: string;
+  questionType?: QuestionType;
   stemArabic: string;
   stemEnglish?: string;
   imageUrl?: string;
   options: QuestionOption[];
   points: number;
+  modelAnswerArabic?: string;
 }
 
 /**
@@ -405,9 +420,90 @@ export interface QuestionAnswerKey {
   questionId: string;
   assessmentId: string;
   correctOptionId: string;
+  modelAnswerArabic?: string;
   explanationArabic?: string;
   explanationEnglish?: string;
   points: number;
+}
+
+export interface QuestionValidationIssue {
+  code: string;
+  severity: 'error' | 'warning' | 'info';
+  messageArabic: string;
+  messageEnglish?: string;
+}
+
+export interface DetectedAssessmentMetadata {
+  titleArabic?: string;
+  titleEnglish?: string;
+  assessmentType?: AssessmentType; // 'exam' | 'competition'
+  studyLevelId?: string;
+  studyLevelName?: string;
+  batchName?: string;
+  batchNumber?: string;
+  courseName?: string;
+  blockCode?: string;
+  durationMinutes?: number;
+  questionDurationSeconds?: number;
+  totalQuestions?: number;
+}
+
+export interface ParsedQuestionDraft {
+  tempId: string;
+  deterministicId?: string;
+  sourceIndex: number;
+  questionType?: QuestionType;
+  stemArabic: string;
+  stemEnglish?: string;
+  imageUrl?: string;
+  options: QuestionOption[];
+  correctOptionId: string;
+  modelAnswerArabic?: string;
+  modelAnswerEnglish?: string;
+  explanationArabic?: string;
+  explanationEnglish?: string;
+  points: number;
+  selectedForImport: boolean;
+  isValid?: boolean;
+  issues?: QuestionValidationIssue[];
+  isDuplicateInBatch?: boolean;
+  isDuplicateInBank?: boolean;
+  existingQuestionId?: string;
+  contentHash?: string;
+  originalExplanationBeforeAi?: string;
+  aiGeneratedExplanation?: string;
+  optionExplanations?: Record<string, string>;
+}
+
+export interface BulkImportDraftSession {
+  id?: string;
+  bankId: string;
+  universityId?: string;
+  rawInput?: string;
+  rawInputText?: string;
+  sourceFormat?: string;
+  defaultPoints?: number;
+  drafts?: ParsedQuestionDraft[];
+  draftQuestions?: ParsedQuestionDraft[];
+  detectedMetadata?: DetectedAssessmentMetadata;
+  savedAt?: string;
+  updatedAt?: string;
+}
+
+export interface QuestionOutboxEntry {
+  id: string;
+  questionId?: string;
+  bankId?: string;
+  universityId?: string;
+  question?: QuestionItemFull;
+  operation: 'upsert' | 'delete';
+  idempotencyKey?: string;
+  status?: string;
+  retryCount?: number;
+  lastError?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  queuedAt?: string;
 }
 
 export interface Assessment {
@@ -419,8 +515,15 @@ export interface Assessment {
   universityId: string;
   programId: string;
   studyLevelId: string;
+  batchName?: string;
+  batchNumber?: string;
   courseOfferingId?: string;
   durationMinutes: number; // e.g. 45
+  enableExamTimer?: boolean;
+  questionDurationSeconds?: number;
+  availabilityDurationHours?: number;
+  allowTrialSharing?: boolean;
+  showLeaderboard?: boolean;
   maxAttempts: number; // usually 1 for exams, 1 or more for competitions
   opensAt: string; // ISO 8601
   closesAt: string; // ISO 8601
@@ -448,6 +551,21 @@ export interface AssessmentAttempt {
   attemptNumber: number;
 }
 
+export interface QuestionReviewItem {
+  questionId: string;
+  questionType?: QuestionType;
+  stemArabic: string;
+  stemEnglish?: string;
+  imageUrl?: string;
+  options: QuestionOption[];
+  correctOptionId?: string;
+  studentAnswer?: string;
+  isCorrect?: boolean;
+  explanationArabic?: string;
+  modelAnswerArabic?: string;
+  points: number;
+}
+
 export interface AssessmentResult {
   id: string;
   attemptId: string;
@@ -462,6 +580,7 @@ export interface AssessmentResult {
   gradedAt: string;
   isReleased: boolean;
   releasedAt?: string;
+  questionReviews?: QuestionReviewItem[];
 }
 
 // ---------------------------------------------------------------------------
@@ -489,7 +608,8 @@ export type AuditAction =
   | 'USER_ARCHIVED'
   | 'USER_UNARCHIVED'
   | 'USER_VERIFIED'
-  | 'USERS_EXPORTED';
+  | 'USERS_EXPORTED'
+  | 'QUESTIONS_BULK_IMPORTED';
 
 export interface AuditLog {
   id: string;

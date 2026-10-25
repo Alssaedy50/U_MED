@@ -721,17 +721,22 @@ app.post('/api/assessments/start-attempt', optionalAuth, (req: AuthenticatedRequ
       saveJsonSafe(ATTEMPTS_FILE, attemptsStore);
     }
 
-    // Public questions only (sanitized: NO correctOptionId or explanation)
+    // Public questions only (sanitized: NO correctOptionId or hidden model answers)
     const resolvedQuestions = targetIds
       .map((id) => questionsStore[id])
       .filter(Boolean)
       .map((q) => ({
         id: q.id,
         bankId: q.bankId,
+        questionType: q.questionType || 'mcq',
         stemArabic: q.stemArabic,
         stemEnglish: q.stemEnglish,
         imageUrl: q.imageUrl,
-        options: q.options,
+        options: (q.options || []).map((opt) => ({
+          id: opt.id,
+          textArabic: opt.textArabic,
+          textEnglish: opt.textEnglish
+        })),
         points: q.points || 5
       }));
 
@@ -741,9 +746,14 @@ app.post('/api/assessments/start-attempt', optionalAuth, (req: AuthenticatedRequ
         : DEFAULT_QUESTIONS.map((q) => ({
             id: q.id,
             bankId: q.bankId,
+            questionType: q.questionType || 'mcq',
             stemArabic: q.stemArabic,
             stemEnglish: q.stemEnglish,
-            options: q.options,
+            options: (q.options || []).map((opt) => ({
+              id: opt.id,
+              textArabic: opt.textArabic,
+              textEnglish: opt.textEnglish
+            })),
             points: q.points
           }));
 
@@ -842,14 +852,47 @@ app.post('/api/assessments/submit-attempt', optionalAuth, (req: AuthenticatedReq
 
     let score = 0;
     let totalPoints = 0;
+    const questionReviews: any[] = [];
 
     targetQuestionIds.forEach((qId) => {
-      const key = answerKeyMap[qId];
-      if (key) {
-        totalPoints += key.points;
-        if (finalAnswers[qId] === key.correctOptionId) {
-          score += key.points;
+      const q = questionsStore[qId];
+      if (q) {
+        const qPoints = Number(q.points) || 5;
+        totalPoints += qPoints;
+        const qType = q.questionType || 'mcq';
+        const studentAns = finalAnswers[qId] || '';
+        let isCorrect = false;
+
+        if (qType === 'essay') {
+          // Essay scoring: provisional full credit if student provided a non-trivial medical answer
+          isCorrect = studentAns.trim().length > 10;
+          if (isCorrect) score += qPoints;
+        } else {
+          // MCQ or True/False
+          isCorrect = Boolean(studentAns && studentAns === q.correctOptionId);
+          if (isCorrect) score += qPoints;
         }
+
+        questionReviews.push({
+          questionId: q.id,
+          questionType: qType,
+          stemArabic: q.stemArabic,
+          stemEnglish: q.stemEnglish,
+          imageUrl: q.imageUrl,
+          options: (q.options || []).map((opt) => ({
+            id: opt.id,
+            textArabic: opt.textArabic,
+            textEnglish: opt.textEnglish,
+            explanationArabic: opt.explanationArabic,
+            isCorrect: opt.id === q.correctOptionId
+          })),
+          correctOptionId: q.correctOptionId,
+          studentAnswer: studentAns,
+          isCorrect,
+          explanationArabic: q.explanationArabic,
+          modelAnswerArabic: q.modelAnswerArabic,
+          points: qPoints
+        });
       }
     });
 
@@ -870,7 +913,8 @@ app.post('/api/assessments/submit-attempt', optionalAuth, (req: AuthenticatedReq
       submittedAt: nowIso,
       gradedAt: nowIso,
       isReleased,
-      releasedAt: isReleased ? nowIso : undefined
+      releasedAt: isReleased ? nowIso : undefined,
+      questionReviews: isReleased ? questionReviews : undefined
     };
 
     resultsStore[attemptId] = result;
