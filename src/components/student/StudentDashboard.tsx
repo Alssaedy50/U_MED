@@ -838,14 +838,15 @@ export default function StudentDashboard({
                 <span>الاختبارات الدورية والمسابقات الطبية التفاعلية</span>
               </span>
               <p className="text-slate-300 leading-relaxed text-[11px]">
-                شارك في اختبارات البلوكات والمسابقات السريرية المخصصة لدفعتك في {currentUniversityName} مع التصحيح الفوري.
+                ابدأ اختبارات البلوكات والمسابقات السريرية المخصصة لدفعتك في {currentUniversityName} مع التصحيح الفوري وتحميل ملف الاختبار بعد الانتهاء.
               </p>
             </div>
             <button
               onClick={() => switchSection('assessments')}
-              className="px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-xs transition-colors shadow-lg"
+              className="px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs transition-colors shadow-lg flex items-center gap-2"
             >
-              الدخول لمركز الاختبارات
+              <span>عرض وبدء الاختبارات الآن</span>
+              <ChevronRight className="w-4 h-4 rotate-180" />
             </button>
           </div>
 

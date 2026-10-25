@@ -44,7 +44,8 @@ import {
   GraduationCap,
   Bell,
   Share2,
-  Check
+  Check,
+  Download
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext.tsx';
 import { UserRole, AuditLog, StudentEnrollment } from './types/umed.ts';
@@ -70,7 +71,8 @@ import {
   claimAndGradePendingGuestSubmission,
   getAssessmentLeaderboard,
   resolveResultPublicDisplayName,
-  PendingGuestExamSubmission
+  PendingGuestExamSubmission,
+  downloadExamBookletFile
 } from './services/assessmentService.ts';
 import { Assessment, AssessmentQuestionPublic, AssessmentResult } from './types/umed.ts';
 import ExamTakingModal from './components/assessment/ExamTakingModal.tsx';
@@ -949,6 +951,39 @@ export default function App() {
               </div>
             </div>
 
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  downloadExamBookletFile({
+                    assessment: claimedGuestOutcome.assessment,
+                    result: claimedGuestOutcome.result,
+                    studentNameArabic: userProfile?.displayNameArabic || user?.displayName || undefined,
+                    mode: 'solved'
+                  })
+                }
+                className="py-2.5 px-3 rounded-xl bg-teal-600/20 hover:bg-teal-600/30 border border-teal-500/40 text-teal-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+              >
+                <Download className="w-4 h-4 text-teal-400 shrink-0" />
+                <span>تحميل الاختبار محلولاً (مع التعليل)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  downloadExamBookletFile({
+                    assessment: claimedGuestOutcome.assessment,
+                    result: claimedGuestOutcome.result,
+                    studentNameArabic: userProfile?.displayNameArabic || user?.displayName || undefined,
+                    mode: 'blank'
+                  })
+                }
+                className="py-2.5 px-3 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-700 text-slate-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+              >
+                <FileText className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>تحميل نسخة غير محلولة للتدريب</span>
+              </button>
+            </div>
+
             <button
               type="button"
               onClick={() => setClaimedGuestOutcome(null)}
@@ -1119,7 +1154,7 @@ export default function App() {
                               }}
                               className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold transition-colors"
                             >
-                              ابدأ الحل
+                              بدء الاختبار
                             </button>
                           </div>
                         </div>
@@ -1245,9 +1280,9 @@ export default function App() {
                     <label className="block text-slate-300 mb-1 font-semibold flex items-center justify-between">
                       <span className="flex items-center gap-1.5">
                         <Hash className="w-3.5 h-3.5 text-teal-400" />
-                        <span>رقم القيد الجامعي / الأكاديمي (فريد لكل طالب):</span>
+                        <span>الرقم الجامعي / رقم القيد الأكاديمي:</span>
                       </span>
-                      <span className="text-[10px] text-teal-400 font-normal">يمنع تكرار القيد</span>
+                      <span className="text-[10px] text-teal-400 font-normal">خاص بكل طالب</span>
                     </label>
                     <input
                       type="text"
@@ -1265,8 +1300,8 @@ export default function App() {
               {authMethod === 'phone' ? (
                 <div>
                   <label className="block text-slate-300 mb-1 font-semibold flex items-center justify-between">
-                    <span>رقم الهاتف اليمني (تسجيل مستقل برقم الهاتف فقط):</span>
-                    <span className="text-[10px] text-teal-400 font-normal">فريد ولا يتكرر</span>
+                    <span>رقم الهاتف المحمول:</span>
+                    <span className="text-[10px] text-teal-400 font-normal">معتمد لتوثيق الحساب</span>
                   </label>
                   <div className="flex items-center gap-2" dir="ltr">
                     <span className="px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-teal-400 font-mono font-bold select-none shrink-0">
@@ -1289,8 +1324,8 @@ export default function App() {
               ) : (
                 <div>
                   <label className="block text-slate-300 mb-1 font-semibold flex items-center justify-between">
-                    <span>البريد الإلكتروني (تسجيل مستقل بالبريد فقط):</span>
-                    <span className="text-[10px] text-teal-400 font-normal">فريد ولا يتكرر</span>
+                    <span>البريد الإلكتروني:</span>
+                    <span className="text-[10px] text-teal-400 font-normal">معتمد لتوثيق الحساب</span>
                   </label>
                   <input
                     type="email"
@@ -1319,13 +1354,13 @@ export default function App() {
                     <>
                       <RefreshCw className="w-3.5 h-3.5 animate-spin text-teal-400 shrink-0" />
                       <span>
-                        جارٍ فحص عدم تكرار {authMethod === 'phone' ? 'رقم الهاتف' : 'البريد الإلكتروني'} ورقم القيد في السحابة...
+                        جارٍ التحقق من صلاحية {authMethod === 'phone' ? 'رقم الهاتف' : 'البريد الإلكتروني'} والرقم الجامعي...
                       </span>
                     </>
                   ) : uniquenessStatus.available ? (
                     <>
                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                      <span>بيانات الحساب فريدة ومتاحة للتسجيل (لا يوجد أي حساب مكرر) ✓</span>
+                      <span>البيانات المدخلة صحيحة ومتاحة للتسجيل ✓</span>
                     </>
                   ) : (
                     <>
@@ -1466,15 +1501,15 @@ export default function App() {
               </button>
             </div>
 
-            {/* Summary of Reserved Unique Identifiers */}
+            {/* Summary of Account Details */}
             <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
               <div className="text-[11px] font-bold text-teal-400 flex items-center gap-1.5">
                 <ShieldCheck className="w-4 h-4" />
-                <span>بيانات الحساب المحجوزة حصرياً في السحابة (لا يمكن تكرارها):</span>
+                <span>بيانات الحساب الأكاديمي المسجلة باسمك:</span>
               </div>
               {pendingVerification.verificationMethod === 'phone' && pendingVerification.phone && (
                 <div className="flex items-center justify-between text-slate-300 pt-1 border-t border-slate-900">
-                  <span>رقم الهاتف اليمني (طريقة التسجيل):</span>
+                  <span>رقم الهاتف المسجل:</span>
                   <span className="font-mono text-white flex items-center gap-1.5" dir="ltr">
                     {pendingVerification.phone}
                     {pendingVerification.phoneVerified ? (

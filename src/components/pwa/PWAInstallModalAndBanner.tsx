@@ -356,7 +356,7 @@ export const PWASettingsCard: React.FC = () => {
           <div className="flex items-center justify-between">
             <span className="text-slate-400 font-semibold flex items-center gap-1.5">
               <HardDrive className="w-3.5 h-3.5 text-sky-400" />
-              <span>صندوق المزامنة المحلي (Offline Outbox):</span>
+              <span>حالة حفظ ومزامنة الإجابات والبيانات:</span>
             </span>
             <span className="font-mono font-bold text-white">
               {totalPending === 0 ? 'مزامن 100% ✓' : `${totalPending} بانتظار المزامنة`}

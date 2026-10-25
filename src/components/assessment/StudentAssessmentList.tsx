@@ -31,7 +31,8 @@ import {
   Medal,
   X,
   Sparkles,
-  ExternalLink
+  ExternalLink,
+  Download
 } from 'lucide-react';
 import { 
   Assessment, 
@@ -56,7 +57,9 @@ import {
   resolveResultPublicDisplayName,
   getAssessmentLeaderboard,
   subscribeToAssessmentLeaderboard,
-  buildShareableAssessmentUrl
+  buildShareableAssessmentUrl,
+  downloadExamBookletFile,
+  getQuestionsForAssessmentPreview
 } from '../../services/assessmentService.ts';
 import { syncNotificationsForAssessments } from '../../services/notificationService.ts';
 import ExamTakingModal from './ExamTakingModal.tsx';
@@ -102,7 +105,9 @@ export default function StudentAssessmentList({
   const [activeAssessment, setActiveAssessment] = useState<Assessment | null>(null);
   const [activeAttempt, setActiveAttempt] = useState<AssessmentAttempt | null>(null);
   const [activeQuestions, setActiveQuestions] = useState<AssessmentQuestionPublic[]>([]);
+  const [activeInitialResult, setActiveInitialResult] = useState<AssessmentResult | null>(null);
   const [startingAttempt, setStartingAttempt] = useState<string | null>(null);
+  const [downloadingExamId, setDownloadingExamId] = useState<string | null>(null);
 
   // Share Trial Exam Modal State
   const [sharingAssessment, setSharingAssessment] = useState<Assessment | null>(null);
@@ -204,13 +209,74 @@ export default function StudentAssessmentList({
 
     try {
       const res = await startAttemptServer(assessment.id, assessment);
+      setActiveInitialResult(null);
       setActiveAssessment(assessment);
       setActiveAttempt(res.attempt);
       setActiveQuestions(res.questions);
     } catch (err: any) {
-      setStatusMsg({ type: 'error', text: err.message || 'فشل بدء الاختبار' });
+      setStatusMsg({ type: 'error', text: err.message || 'تعذر بدء الاختبار، يرجى المحاولة مرة أخرى' });
     } finally {
       setStartingAttempt(null);
+    }
+  };
+
+  const handleOpenCompletedExamReview = async (assessment: Assessment, userResult: AssessmentResult) => {
+    setStartingAttempt(assessment.id);
+    setStatusMsg(null);
+    try {
+      const qs = await getQuestionsForAssessmentPreview(assessment);
+      const matchingAttempt = attempts.find((a) => a.id === userResult.attemptId) || {
+        id: userResult.attemptId || `att-rev-${assessment.id}`,
+        assessmentId: assessment.id,
+        uid,
+        startedAt: userResult.submittedAt,
+        expiresAt: userResult.submittedAt,
+        status: 'scored' as const,
+        answers: {},
+        lastSavedAt: userResult.submittedAt,
+        attemptNumber: 1
+      };
+      setActiveInitialResult(userResult);
+      setActiveAssessment(assessment);
+      setActiveAttempt(matchingAttempt);
+      setActiveQuestions(qs);
+    } catch (err: any) {
+      setStatusMsg({ type: 'error', text: 'تعذر فتح تفاصيل النتيجة والمراجعة' });
+    } finally {
+      setStartingAttempt(null);
+    }
+  };
+
+  const handleQuickDownloadExamFile = async (
+    assessment: Assessment,
+    userResult: AssessmentResult | undefined,
+    mode: 'solved' | 'blank'
+  ) => {
+    const key = `${assessment.id}-${mode}`;
+    if (downloadingExamId) return;
+    setDownloadingExamId(key);
+    try {
+      const matchingAttempt = userResult
+        ? attempts.find((a) => a.id === userResult.attemptId)
+        : undefined;
+      await downloadExamBookletFile({
+        assessment,
+        result: userResult || null,
+        answers: matchingAttempt?.answers || {},
+        studentNameArabic,
+        mode
+      });
+      setStatusMsg({
+        type: 'success',
+        text:
+          mode === 'solved'
+            ? `تم تحميل ملف "${assessment.titleArabic}" محلولاً مع التعليلات الطبية بنجاح ✓`
+            : `تم تحميل نسخة التدريب لـ "${assessment.titleArabic}" بنجاح ✓`
+      });
+    } catch {
+      setStatusMsg({ type: 'error', text: 'تعذر تجهيز ملف الاختبار للتحميل' });
+    } finally {
+      setDownloadingExamId(null);
     }
   };
 
@@ -535,63 +601,115 @@ export default function StudentAssessmentList({
                   </div>
                 </div>
 
-                {/* Score Banner if completed */}
+                {/* Score Banner & Post-Exam Download Bar if completed */}
                 {userResult && (
                   userResult.isReleased ? (
-                    <div className="p-3 rounded-xl bg-teal-950/60 border border-teal-800/60 flex items-center justify-between text-xs text-teal-200">
-                      <div className="flex items-center gap-2">
-                        <Award className="w-4 h-4 text-teal-400" />
-                        <span>درجتك المعتمدة: <strong className="font-mono text-sm">{userResult.score}/{userResult.totalPoints}</strong></span>
+                    <div className="p-3.5 rounded-xl bg-teal-950/60 border border-teal-800/60 space-y-2.5 text-xs text-teal-200">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Award className="w-4 h-4 text-teal-400" />
+                          <span>درجتك المعتمدة: <strong className="font-mono text-sm">{userResult.score}/{userResult.totalPoints}</strong></span>
+                        </div>
+                        <span className="font-mono font-bold bg-teal-500/20 px-2 py-0.5 rounded text-teal-300">
+                          {userResult.percentage}%
+                        </span>
                       </div>
-                      <span className="font-mono font-bold bg-teal-500/20 px-2 py-0.5 rounded text-teal-300">
-                        {userResult.percentage}%
-                      </span>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1 border-t border-teal-800/50">
+                        <button
+                          type="button"
+                          disabled={downloadingExamId !== null}
+                          onClick={() => handleQuickDownloadExamFile(assessment, userResult, 'solved')}
+                          className="py-1.5 px-2.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors shadow-xs"
+                        >
+                          <Download className="w-3.5 h-3.5 shrink-0" />
+                          <span>
+                            {downloadingExamId === `${assessment.id}-solved`
+                              ? 'جارٍ التحميل...'
+                              : 'تحميل ملف الاختبار محلولاً'}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={downloadingExamId !== null}
+                          onClick={() => handleQuickDownloadExamFile(assessment, userResult, 'blank')}
+                          className="py-1.5 px-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-teal-700/50 text-teal-200 text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors"
+                        >
+                          <FileText className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          <span>
+                            {downloadingExamId === `${assessment.id}-blank`
+                              ? 'جارٍ التحميل...'
+                              : 'تحميل نسخة غير محلولة'}
+                          </span>
+                        </button>
+                      </div>
                     </div>
                   ) : (
                     <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-800/50 flex items-center gap-2 text-xs text-amber-300">
                       <Lock className="w-4 h-4 shrink-0" />
-                      <span>تم تسليم المحاولة بنجاح — ستظهر الدرجة فور إعلان النتائج رسمياً من الكلية.</span>
+                      <span>تم تسليم المحاولة بنجاح — ستظهر الدرجة وملف المراجعة فور إعلان النتائج رسمياً من الكلية.</span>
                     </div>
                   )
                 )}
 
-                {/* Action Buttons: Start Exam + Ranked Leaderboard + Share Trial Exam */}
+                {/* Action Buttons: Start Exam + Review Result + Ranked Leaderboard + Share Trial Exam */}
                 <div className="space-y-2">
                   <button
-                    onClick={() => handleStartAttempt(assessment)}
-                    disabled={!isOpen || hasMaxAttempts || startingAttempt === assessment.id}
+                    onClick={() =>
+                      hasMaxAttempts && userResult
+                        ? handleOpenCompletedExamReview(assessment, userResult)
+                        : handleStartAttempt(assessment)
+                    }
+                    disabled={(!isOpen && !userResult) || (hasMaxAttempts && !userResult) || startingAttempt === assessment.id}
                     className={`w-full py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all ${
                       isOpen && !hasMaxAttempts
                         ? activeTab === 'competition'
                           ? 'bg-amber-600 hover:bg-amber-500 text-white shadow-lg shadow-amber-900/30'
                           : 'bg-teal-600 hover:bg-teal-500 text-white shadow-lg shadow-teal-900/30'
+                        : hasMaxAttempts && userResult
+                        ? 'bg-teal-950/90 hover:bg-teal-900 border border-teal-500/50 text-teal-200'
                         : 'bg-slate-800 text-slate-500 cursor-not-allowed'
                     }`}
                   >
                     {startingAttempt === assessment.id ? (
                       <>
                         <RefreshCw className="w-4 h-4 animate-spin" />
-                        <span>جاري بدء الجلسة الموثوقة...</span>
+                        <span>جارٍ تجهيز جلسة الاختبار...</span>
+                      </>
+                    ) : hasMaxAttempts && userResult ? (
+                      <>
+                        <Award className="w-4 h-4 text-teal-400" />
+                        <span>مراجعة النتيجة والتعليلات وتحميل ملف الاختبار</span>
                       </>
                     ) : hasMaxAttempts ? (
                       <>
                         <CheckCircle2 className="w-4 h-4" />
                         <span>تم استيفاء المحاولات المسموحة</span>
                       </>
-                     ) : activeInProgressAttempt ? (
+                    ) : activeInProgressAttempt ? (
                       <>
                         <Play className="w-4 h-4 fill-current" />
-                        <span>متابعة المحاولة الجارية (#{activeInProgressAttempt.attemptNumber || attemptCount + 1})</span>
+                        <span>متابعة الاختبار الجاري (المحاولة #{activeInProgressAttempt.attemptNumber || attemptCount + 1})</span>
                       </>
                     ) : isOpen ? (
                       <>
                         <Play className="w-4 h-4 fill-current" />
-                        <span>{activeTab === 'competition' ? 'بدء المشاركة في المسابقة' : 'بدء الاختبار الآن'}</span>
+                        <span>{activeTab === 'competition' ? 'بدء الاختبار التنافسي الآن' : 'بدء الاختبار الآن'}</span>
                       </>
                     ) : (
                       <span>الاختبار غير متاح حالياً</span>
                     )}
                   </button>
+
+                  {userResult && !hasMaxAttempts && (
+                    <button
+                      type="button"
+                      onClick={() => handleOpenCompletedExamReview(assessment, userResult)}
+                      className="w-full py-2 rounded-xl bg-slate-950 hover:bg-slate-800 border border-teal-500/30 text-teal-300 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <Award className="w-3.5 h-3.5 text-teal-400" />
+                      <span>عرض نتيجتك السابقة ومراجعة وتحميل الاختبار</span>
+                    </button>
+                  )}
 
                   <div className="grid grid-cols-2 gap-2">
                     <button
@@ -609,7 +727,7 @@ export default function StudentAssessmentList({
                       className="py-2 px-3 rounded-xl bg-indigo-950/50 hover:bg-indigo-900/60 border border-indigo-500/30 text-indigo-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
                     >
                       <Share2 className="w-3.5 h-3.5 text-indigo-400" />
-                      <span>مشاركة كاختبار تجريبي</span>
+                      <span>مشاركة مع الزملاء</span>
                     </button>
                   </div>
                 </div>
@@ -641,7 +759,7 @@ export default function StudentAssessmentList({
               <div className="p-3.5 rounded-xl bg-indigo-950/40 border border-indigo-500/30 space-y-1.5">
                 <div className="font-bold text-indigo-200 text-sm">{sharingAssessment.titleArabic}</div>
                 <p className="text-slate-300">
-                  عند مشاركة هذا الرابط مع أي طالب أو زميل، سيتمكن من فتح الاختبار وحل جميع الأسئلة فوراً كاختبار تجريبي، وعندما يضغط على <strong>"إظهار النتيجة"</strong> سيُطلب منه إنشاء حساب إجباري في المنصة لتظهر له درجته وترتيبه بين الطلاب!
+                  عند مشاركة هذا الرابط مع أي طالب أو زميل، سيتمكن من فتح الاختبار وحل جميع الأسئلة فوراً ومعرفة نتيجته النهائية وتحميل ملف الاختبار للمذاكرة، مع إمكانية إنشاء حساب في المنصة لإدراج درجته في لوحة الشرف والمنافسة مع باقي الطلاب!
                 </p>
               </div>
 
@@ -853,9 +971,11 @@ export default function StudentAssessmentList({
           questions={activeQuestions}
           studentNameArabic={studentNameArabic}
           uid={uid}
+          initialResult={activeInitialResult}
           onClose={() => {
             setActiveAssessment(null);
             setActiveAttempt(null);
+            setActiveInitialResult(null);
             loadData();
           }}
           onSubmitted={(res) => {

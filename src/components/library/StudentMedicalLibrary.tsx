@@ -132,8 +132,8 @@ export default function StudentMedicalLibrary({
             <span className="text-xs px-2.5 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30 font-bold">
               المكتبة الطبية الرقمية المعتمدة
             </span>
-            <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-300 font-mono">
-              Low-Bandwidth Protected
+            <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-300 font-semibold">
+              تصفح سريع وموفر للبيانات
             </span>
           </div>
           <h2 className="text-lg sm:text-xl font-black text-white">

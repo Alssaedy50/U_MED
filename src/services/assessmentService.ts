@@ -1628,16 +1628,41 @@ export async function submitAttemptServer(
       if (Object.keys(resolvedKeyMap).length > 0) {
         let earned = 0;
         let maxPts = 0;
-        questionIds.forEach((qId) => {
+        const publicQs = await fetchPublicQuestionsForAssessment(questionIds).catch(() => []);
+        const pubQMap = new Map<string, AssessmentQuestionPublic>();
+        publicQs.forEach((pq) => pubQMap.set(pq.id, pq));
+
+        const questionReviews = questionIds.map((qId) => {
           const k = resolvedKeyMap[qId];
-          const pts = Number(k?.points) || 5;
+          const pq = pubQMap.get(qId);
+          const pts = Number(k?.points || pq?.points) || 5;
           maxPts += pts;
-          if (k && answers[qId] && answers[qId] === k.correctOptionId) {
+          const studentAns = answers[qId] || '';
+          const correctId = k?.correctOptionId || 'opt-a';
+          const isCorrect = Boolean(studentAns && studentAns === correctId);
+          if (isCorrect) {
             earned += pts;
           }
+          return {
+            questionId: qId,
+            questionType: pq?.questionType || 'mcq',
+            language: pq?.language,
+            stemArabic: pq?.stemArabic || '',
+            options: (pq?.options || []).map((o) => ({
+              id: o.id,
+              textArabic: o.textArabic,
+              isCorrect: o.id === correctId
+            })),
+            studentAnswer: studentAns,
+            correctOptionId: correctId,
+            points: pts,
+            earnedPoints: isCorrect ? pts : 0,
+            isCorrect
+          };
         });
+
         const nowIso = new Date().toISOString();
-        const isReleased = releasePolicy === 'immediate';
+        const isReleased = releasePolicy === 'immediate' || isGuestPreview;
         const finalTotal = maxPts || totalPoints;
         finalResult = {
           id: `res-${attemptId}`,
@@ -1655,7 +1680,8 @@ export async function submitAttemptServer(
           submittedAt: nowIso,
           gradedAt: nowIso,
           isReleased,
-          releasedAt: isReleased ? nowIso : undefined
+          releasedAt: isReleased ? nowIso : undefined,
+          questionReviews: isReleased ? questionReviews : undefined
         };
         if (typeof navigator === 'undefined' || navigator.onLine) {
           scoredOnServer = true;
@@ -3411,4 +3437,542 @@ export async function claimAndGradePendingGuestSubmission(
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// 6. Downloadable Exam Booklet Generator (Solved Study Copy & Blank Practice Copy)
+// ---------------------------------------------------------------------------
+
+function escapeHtmlSafe(str: string | undefined | null): string {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+export async function downloadExamBookletFile(params: {
+  assessment: Assessment;
+  questions?: AssessmentQuestionPublic[];
+  result?: AssessmentResult | null;
+  answers?: Record<string, string>;
+  studentNameArabic?: string;
+  mode: 'solved' | 'blank';
+}): Promise<void> {
+  const { assessment, result, answers = {}, studentNameArabic, mode } = params;
+
+  // 1. Resolve questions
+  let questionsList = Array.isArray(params.questions) && params.questions.length > 0
+    ? params.questions
+    : [];
+  if (questionsList.length === 0) {
+    questionsList = await getQuestionsForAssessmentPreview(assessment);
+  }
+
+  const qIds = questionsList.map((q) => q.id);
+
+  // 2. Resolve answer keys & explanations from result.questionReviews, local banks, and fallback keys
+  const fallbackKeys = await resolveFallbackAnswerKeys(assessment.id, qIds);
+  const fullBankMap = new Map<string, QuestionItemFull>();
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('umed_assessment_q_') && !k.startsWith('umed_assessment_q_init_')) {
+        const raw = localStorage.getItem(k);
+        if (raw) {
+          const list = JSON.parse(raw) as QuestionItemFull[];
+          if (Array.isArray(list)) {
+            list.forEach((fq) => {
+              if (fq && fq.id) fullBankMap.set(fq.id, fq);
+            });
+          }
+        }
+      }
+    }
+  } catch {}
+
+  // Also try reading Firestore questionAnswerKeys if online and reviews aren't already attached
+  const firestoreKeysMap = new Map<string, QuestionAnswerKey>();
+  if (
+    (!result?.questionReviews || result.questionReviews.length === 0) &&
+    (typeof navigator === 'undefined' || navigator.onLine)
+  ) {
+    try {
+      const snaps = await Promise.all(
+        qIds.map((id) => getDoc(doc(db, 'questionAnswerKeys', id)).catch(() => null))
+      );
+      snaps.forEach((s) => {
+        if (s && s.exists()) {
+          const d = s.data() as QuestionAnswerKey;
+          if (d && d.questionId) firestoreKeysMap.set(d.questionId, d);
+        }
+      });
+    } catch {}
+  }
+
+  const reviewByQuestionId = new Map<string, NonNullable<AssessmentResult['questionReviews']>[number]>();
+  if (Array.isArray(result?.questionReviews)) {
+    result!.questionReviews.forEach((rev) => {
+      if (rev && rev.questionId) {
+        reviewByQuestionId.set(rev.questionId, rev);
+      }
+    });
+  }
+
+  const isSolvedMode = mode === 'solved';
+  const studentDisplay = studentNameArabic || result?.studentNameArabic || 'طالب طب بشري';
+  const dateFormatted = new Date(result?.submittedAt || Date.now()).toLocaleDateString('ar-YE', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+
+  const answerKeySummaryRows: { qNum: number; correctLabel: string; points: number }[] = [];
+
+  const questionsHtml = questionsList
+    .map((q, idx) => {
+      const qNum = idx + 1;
+      const rev = reviewByQuestionId.get(q.id);
+      const bankQ = fullBankMap.get(q.id);
+      const fsKey = firestoreKeysMap.get(q.id);
+      const fbKey = fallbackKeys[q.id];
+
+      const stemText = rev?.stemArabic || q.stemArabic || '';
+      const isEnglish =
+        q.language === 'en' ||
+        (!/[\u0600-\u06FF]/.test(stemText) && /[A-Za-z]/.test(stemText));
+      const dirAttr = isEnglish ? 'ltr' : 'rtl';
+      const alignClass = isEnglish ? 'text-left' : 'text-right';
+
+      const correctOptionId =
+        rev?.correctOptionId ||
+        fsKey?.correctOptionId ||
+        bankQ?.correctOptionId ||
+        fbKey?.correctOptionId ||
+        'opt-a';
+
+      const studentPick = rev?.studentAnswer ?? answers[q.id] ?? '';
+      const explanationText =
+        rev?.explanationArabic ||
+        fsKey?.explanationArabic ||
+        bankQ?.explanationArabic ||
+        (q.id === 'q-cvs-1'
+          ? 'تضيق الصمام الأبهري (Aortic Stenosis) يتميز بنفخة انقباضية قذفية في الورب الثاني الأيمن تمتد إلى الشريانين السباتيين.'
+          : q.id === 'q-cvs-2'
+          ? 'العصب الحجابي (Phrenic nerve C3-C5) يغذي التامور الليفي والمصلي الجداري حسياً.'
+          : q.id === 'q-cvs-3'
+          ? 'الأسبرين بجرعة تحميلة (162-325 ملغ مضغاً) يثبط COX-1 وتكدس الصفائح الدموية فوراً في احتشاء عضلة القلب الحاد.'
+          : '');
+
+      const qType = rev?.questionType || q.questionType || 'mcq';
+      const qPoints = Number(rev?.points || q.points || fbKey?.points || 5);
+      const optionsList = rev?.options?.length ? rev.options : q.options || [];
+
+      let correctLabelForKey = '—';
+      optionsList.forEach((opt, oIdx) => {
+        const letter = isEnglish
+          ? ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'][oIdx] || opt.id
+          : ['أ', 'ب', 'ج', 'د', 'هـ', 'و', 'ز', 'ح'][oIdx] || opt.id;
+        if (opt.id === correctOptionId || (opt as any).isCorrect) {
+          correctLabelForKey = `${letter} — ${opt.textArabic}`;
+        }
+      });
+      if ((qType === 'essay' || qType === 'fill_blank') && (rev?.modelAnswerArabic || fsKey?.modelAnswerArabic || bankQ?.modelAnswerArabic)) {
+        correctLabelForKey = rev?.modelAnswerArabic || fsKey?.modelAnswerArabic || bankQ?.modelAnswerArabic || '—';
+      }
+      answerKeySummaryRows.push({ qNum, correctLabel: correctLabelForKey, points: qPoints });
+
+      const optionsHtml =
+        qType === 'essay' || qType === 'fill_blank'
+          ? `<div class="essay-box" dir="${dirAttr}">
+              ${
+                isSolvedMode
+                  ? `<div class="ans-row"><strong>إجابة الطالب:</strong> ${escapeHtmlSafe(studentPick || 'لم تتم الإجابة')}</div>
+                     <div class="ans-row correct-model"><strong>الإجابة النموذجية المعتمدة:</strong> ${escapeHtmlSafe(
+                       rev?.modelAnswerArabic || fsKey?.modelAnswerArabic || bankQ?.modelAnswerArabic || 'تُراجع وفق المعيار السريري للكلية'
+                     )}</div>`
+                  : `<div class="blank-lines">مساحة الإجابة التحريرية: ........................................................................................................</div>`
+              }
+            </div>`
+          : `<div class="options-grid" dir="${dirAttr}">
+              ${optionsList
+                .map((opt, oIdx) => {
+                  const letter = isEnglish
+                    ? ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'][oIdx] || opt.id
+                    : ['أ', 'ب', 'ج', 'د', 'هـ', 'و', 'ز', 'ح'][oIdx] || opt.id;
+                  const isCorrectOpt = opt.id === correctOptionId || Boolean((opt as any).isCorrect);
+                  const isPickedOpt = Boolean(studentPick && studentPick === opt.id);
+
+                  let optClass = 'opt-item';
+                  if (isSolvedMode) {
+                    if (isCorrectOpt) optClass += ' opt-correct';
+                    else if (isPickedOpt && !isCorrectOpt) optClass += ' opt-wrong';
+                  }
+
+                  return `<div class="${optClass}">
+                    <div class="opt-main">
+                      <span class="opt-letter">${isSolvedMode && isCorrectOpt ? '✓' : letter}</span>
+                      <span class="opt-text">${escapeHtmlSafe(opt.textArabic)}</span>
+                    </div>
+                    ${
+                      isSolvedMode
+                        ? `<div class="opt-badges" dir="rtl">
+                            ${isPickedOpt ? `<span class="badge ${isCorrectOpt ? 'badge-ok' : 'badge-err'}">اختيارك</span>` : ''}
+                            ${isCorrectOpt ? `<span class="badge badge-ok">الإجابة الصحيحة ✓</span>` : ''}
+                          </div>`
+                        : ''
+                    }
+                  </div>`;
+                })
+                .join('')}
+            </div>`;
+
+      return `<section class="question-card" dir="${dirAttr}">
+        <div class="q-header" dir="rtl">
+          <span class="q-num">السؤال #${qNum}</span>
+          <div class="q-meta">
+            <span class="q-points">${qPoints} درجات</span>
+            ${
+              isSolvedMode && studentPick
+                ? `<span class="q-status ${studentPick === correctOptionId ? 'status-ok' : 'status-err'}">${
+                    studentPick === correctOptionId ? 'إجابة صحيحة ✓' : 'إجابة غير صحيحة ✗'
+                  }</span>`
+                : ''
+            }
+          </div>
+        </div>
+        <div class="q-stem ${alignClass}" dir="${dirAttr}">
+          ${escapeHtmlSafe(stemText)}
+        </div>
+        ${optionsHtml}
+        ${
+          isSolvedMode && explanationText
+            ? `<div class="rationale-box" dir="${!/[\u0600-\u06FF]/.test(explanationText) ? 'ltr' : 'rtl'}">
+                <strong>${!/[\u0600-\u06FF]/.test(explanationText) ? 'Clinical & Medical Rationale:' : 'التعليل الطبي والسريري:'}</strong>
+                <p>${escapeHtmlSafe(explanationText)}</p>
+              </div>`
+            : ''
+        }
+      </section>`;
+    })
+    .join('\n');
+
+  const htmlDocument = `<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${escapeHtmlSafe(assessment.titleArabic)} - ${isSolvedMode ? 'ملف الاختبار المحلول' : 'نسخة التدريب'}</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap');
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px 16px 48px;
+      font-family: 'Cairo', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f1f5f9;
+      color: #0f172a;
+      line-height: 1.65;
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      border-radius: 16px;
+      padding: 28px;
+      box-shadow: 0 10px 25px rgba(15, 23, 42, 0.06);
+    }
+    .top-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      background: #0f172a;
+      color: #f8fafc;
+      padding: 14px 20px;
+      border-radius: 12px;
+      margin-bottom: 24px;
+    }
+    .top-bar button {
+      background: #0d9488;
+      color: #ffffff;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-family: inherit;
+      font-weight: 700;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .top-bar button:hover { background: #0f766e; }
+    .doc-header {
+      border-bottom: 2px solid #0d9488;
+      padding-bottom: 18px;
+      margin-bottom: 22px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .brand {
+      font-size: 13px;
+      font-weight: 800;
+      color: #0d9488;
+      margin-bottom: 4px;
+    }
+    .exam-title {
+      font-size: 22px;
+      font-weight: 800;
+      color: #0f172a;
+      margin: 0 0 6px 0;
+    }
+    .exam-desc {
+      font-size: 13px;
+      color: #475569;
+      margin: 0;
+    }
+    .score-card {
+      background: #f0fdfa;
+      border: 1px solid #99f6e4;
+      border-radius: 12px;
+      padding: 12px 18px;
+      text-align: center;
+      min-width: 190px;
+    }
+    .score-val {
+      font-size: 24px;
+      font-weight: 800;
+      color: #0f766e;
+    }
+    .meta-strip {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 10px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 12px 16px;
+      margin-bottom: 24px;
+      font-size: 13px;
+    }
+    .question-card {
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 18px;
+      margin-bottom: 18px;
+      background: #ffffff;
+      page-break-inside: avoid;
+    }
+    .q-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #f1f5f9;
+      padding-bottom: 8px;
+      margin-bottom: 12px;
+      font-size: 13px;
+    }
+    .q-num {
+      font-weight: 800;
+      color: #0f766e;
+      background: #f0fdfa;
+      padding: 3px 10px;
+      border-radius: 6px;
+      border: 1px solid #99f6e4;
+    }
+    .q-meta { display: flex; align-items: center; gap: 8px; }
+    .q-points { color: #64748b; font-weight: 700; }
+    .q-status { font-weight: 700; padding: 2px 8px; border-radius: 6px; font-size: 12px; }
+    .status-ok { background: #dcfce7; color: #166534; }
+    .status-err { background: #fee2e2; color: #991b1b; }
+    .q-stem {
+      font-size: 15px;
+      font-weight: 700;
+      color: #0f172a;
+      margin-bottom: 14px;
+    }
+    .text-left { text-align: left; }
+    .text-right { text-align: right; }
+    .options-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .opt-item {
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 14px;
+      background: #f8fafc;
+    }
+    .opt-correct {
+      background: #ecfdf5;
+      border-color: #10b981;
+      color: #065f46;
+      font-weight: 700;
+    }
+    .opt-wrong {
+      background: #fef2f2;
+      border-color: #f87171;
+      color: #991b1b;
+    }
+    .opt-main {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .opt-letter {
+      width: 26px;
+      height: 26px;
+      border-radius: 6px;
+      background: #e2e8f0;
+      color: #1e293b;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 12px;
+      flex-shrink: 0;
+    }
+    .opt-correct .opt-letter {
+      background: #10b981;
+      color: #ffffff;
+    }
+    .opt-badges { display: flex; gap: 6px; flex-shrink: 0; }
+    .badge { font-size: 11px; padding: 2px 8px; border-radius: 6px; font-weight: 700; }
+    .badge-ok { background: #d1fae5; color: #065f46; }
+    .badge-err { background: #fee2e2; color: #991b1b; }
+    .rationale-box {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-radius: 8px;
+      background: #f0fdfa;
+      border-right: 4px solid #0d9488;
+      font-size: 13px;
+      color: #134e4a;
+    }
+    .rationale-box p { margin: 4px 0 0 0; }
+    .answer-key-section {
+      margin-top: 32px;
+      padding-top: 20px;
+      border-top: 2px dashed #cbd5e1;
+      page-break-before: always;
+    }
+    .key-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin-top: 10px;
+    }
+    .key-table th, .key-table td {
+      border: 1px solid #cbd5e1;
+      padding: 8px 12px;
+      text-align: right;
+    }
+    .key-table th { background: #f1f5f9; font-weight: 800; }
+    @media print {
+      body { background: #ffffff; padding: 0; }
+      .container { border: none; box-shadow: none; padding: 0; max-width: 100%; }
+      .no-print { display: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="top-bar no-print">
+      <div>
+        <strong>منصة UMED التعليمية الطبية</strong> — ${
+          isSolvedMode
+            ? 'نسخة الاختبار المحلولة مع الإجابات المعتمدة والتعليل الطبي'
+            : 'نسخة الاختبار غير المحلولة للتدريب والمراجعة الذاتية'
+        }
+      </div>
+      <button onclick="window.print()">طباعة الملف أو حفظه كـ PDF</button>
+    </div>
+
+    <header class="doc-header">
+      <div>
+        <div class="brand">منصة UMED للتعليم الطبي الأكاديمي الموحد</div>
+        <h1 class="exam-title">${escapeHtmlSafe(assessment.titleArabic)}</h1>
+        ${assessment.descriptionArabic ? `<p class="exam-desc">${escapeHtmlSafe(assessment.descriptionArabic)}</p>` : ''}
+      </div>
+      ${
+        isSolvedMode && result
+          ? `<div class="score-card">
+              <div style="font-size:12px;color:#0f766e;font-weight:700;">النتيجة المعتمدة</div>
+              <div class="score-val">${result.score} / ${result.totalPoints} (${result.percentage}%)</div>
+              <div style="font-size:11px;color:#475569;">${escapeHtmlSafe(studentDisplay)}</div>
+            </div>`
+          : ''
+      }
+    </header>
+
+    <div class="meta-strip">
+      <div><strong>اسم الطالب:</strong> ${escapeHtmlSafe(studentDisplay)}</div>
+      <div><strong>عدد الأسئلة:</strong> ${questionsList.length} سؤال</div>
+      <div><strong>الدرجة الكلية:</strong> ${assessment.totalPoints} نقطة</div>
+      <div><strong>التاريخ:</strong> ${escapeHtmlSafe(dateFormatted)}</div>
+    </div>
+
+    <main>
+      ${questionsHtml}
+    </main>
+
+    ${
+      !isSolvedMode
+        ? `<section class="answer-key-section">
+            <h3 style="margin:0 0 6px 0;color:#0f172a;">مفتاح الإجابات النموذجية للمراجعة الذاتية (Answer Key)</h3>
+            <p style="margin:0 0 12px 0;font-size:12px;color:#64748b;">راجع إجاباتك بعد الانتهاء من حل النموذج التدريبي:</p>
+            <table class="key-table">
+              <thead>
+                <tr>
+                  <th style="width:90px;">رقم السؤال</th>
+                  <th>الإجابة الصحيحة المعتمدة</th>
+                  <th style="width:90px;">الدرجة</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${answerKeySummaryRows
+                  .map(
+                    (row) => `<tr>
+                      <td><strong>س ${row.qNum}</strong></td>
+                      <td dir="auto">${escapeHtmlSafe(row.correctLabel)}</td>
+                      <td>${row.points}</td>
+                    </tr>`
+                  )
+                  .join('')}
+              </tbody>
+            </table>
+          </section>`
+        : ''
+    }
+  </div>
+</body>
+</html>`;
+
+  const safeTitle = (assessment.titleArabic || 'اختبار-طبي')
+    .replace(/[\\/:*?"<>|]/g, '-')
+    .replace(/\s+/g, '-')
+    .slice(0, 60);
+  const suffix = isSolvedMode ? 'محلول-مع-التعليل' : 'نسخة-تدريبية';
+  const fileName = `UMED-${safeTitle}-${suffix}.html`;
+
+  const blob = new Blob(['\uFEFF' + htmlDocument], { type: 'text/html;charset=utf-8' });
+  const blobUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+}
+
 

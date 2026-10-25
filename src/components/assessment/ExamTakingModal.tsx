@@ -33,7 +33,11 @@ import {
   Timer,
   UserCheck,
   Sparkles,
-  Medal
+  Medal,
+  Download,
+  FileText,
+  Play,
+  ShieldCheck
 } from 'lucide-react';
 import { 
   Assessment, 
@@ -53,7 +57,8 @@ import {
   resolveResultPublicDisplayName,
   buildShareableAssessmentUrl,
   savePendingGuestExamSubmission,
-  PendingGuestExamSubmission
+  PendingGuestExamSubmission,
+  downloadExamBookletFile
 } from '../../services/assessmentService.ts';
 
 interface ExamTakingModalProps {
@@ -63,6 +68,7 @@ interface ExamTakingModalProps {
   studentNameArabic?: string;
   uid?: string;
   isGuestMode?: boolean;
+  initialResult?: AssessmentResult | null;
   onRequireGuestAccount?: (submission: PendingGuestExamSubmission) => void;
   onClose: () => void;
   onSubmitted: (result: AssessmentResult) => void;
@@ -75,18 +81,25 @@ export default function ExamTakingModal({
   studentNameArabic,
   uid,
   isGuestMode = false,
+  initialResult = null,
   onRequireGuestAccount,
   onClose,
   onSubmitted
 }: ExamTakingModalProps) {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
   const [answers, setAnswers] = useState<Record<string, string>>(attempt.answers || {});
+  const [hasStartedSolving, setHasStartedSolving] = useState<boolean>(() => {
+    if (initialResult) return true;
+    return Object.keys(attempt.answers || {}).length > 0;
+  });
   const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('saved');
   const [showConfirmSubmit, setShowConfirmSubmit] = useState<boolean>(false);
   const [showMandatoryGuestGate, setShowMandatoryGuestGate] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copiedShareLink, setCopiedShareLink] = useState<boolean>(false);
+  const [downloadingMode, setDownloadingMode] = useState<'solved' | 'blank' | null>(null);
+  const [downloadedToast, setDownloadedToast] = useState<string | null>(null);
 
   // Student Leaderboard Display Name Preferences
   const initialIdentity = getStudentLeaderboardIdentity(uid);
@@ -133,29 +146,67 @@ export default function ExamTakingModal({
     return diff > 0 ? diff : effectiveExamDurationSeconds || 1800;
   });
 
-  const [result, setResult] = useState<AssessmentResult | null>(null);
+  const [result, setResult] = useState<AssessmentResult | null>(initialResult);
   const [queuedOfflineSubmit, setQueuedOfflineSubmit] = useState<boolean>(false);
   const saveTimeoutRef = useRef<any>(null);
 
+  const handleStartExamSessionNow = () => {
+    const nowTs = Date.now();
+    startedAtTimestampRef.current = nowTs;
+    examDeadlineRef.current = nowTs + (effectiveExamDurationSeconds || 1800) * 1000;
+    if (isExamTimerEnabled) {
+      setTimeLeftSeconds(effectiveExamDurationSeconds || 1800);
+    }
+    if (isQuestionTimerEnabled) {
+      setQuestionTimeLeft(perQuestionDuration);
+    }
+    setHasStartedSolving(true);
+  };
+
+  const handleDownloadExamFile = async (mode: 'solved' | 'blank') => {
+    if (downloadingMode) return;
+    setDownloadingMode(mode);
+    try {
+      await downloadExamBookletFile({
+        assessment,
+        questions,
+        result,
+        answers,
+        studentNameArabic,
+        mode
+      });
+      setDownloadedToast(
+        mode === 'solved'
+          ? 'تم تحميل ملف الاختبار محلولاً مع التعليلات الطبية بنجاح ✓'
+          : 'تم تحميل نسخة الاختبار غير المحلولة للتدريب بنجاح ✓'
+      );
+      setTimeout(() => setDownloadedToast(null), 3500);
+    } catch (e) {
+      console.warn('Failed to download exam file:', e);
+    } finally {
+      setDownloadingMode(null);
+    }
+  };
+
   // Ensure deadline is refreshed when questions finish loading or when guest passes the identity gate
   useEffect(() => {
-    if (!isExamTimerEnabled || result) return;
+    if (!isExamTimerEnabled || result || !hasStartedSolving) return;
     const minDeadline = startedAtTimestampRef.current + effectiveExamDurationSeconds * 1000;
     if (examDeadlineRef.current < minDeadline) {
       examDeadlineRef.current = minDeadline;
       setTimeLeftSeconds(Math.max(1, Math.floor((examDeadlineRef.current - Date.now()) / 1000)));
     }
-  }, [effectiveExamDurationSeconds, isExamTimerEnabled, result]);
+  }, [effectiveExamDurationSeconds, isExamTimerEnabled, result, hasStartedSolving]);
 
   // Reset per-question timer whenever the question changes
   useEffect(() => {
-    if (!isQuestionTimerEnabled || result || showMandatoryGuestGate) return;
+    if (!isQuestionTimerEnabled || result || showMandatoryGuestGate || !hasStartedSolving) return;
     setQuestionTimeLeft(perQuestionDuration);
-  }, [currentQuestionIndex, isQuestionTimerEnabled, perQuestionDuration, result, showMandatoryGuestGate]);
+  }, [currentQuestionIndex, isQuestionTimerEnabled, perQuestionDuration, result, showMandatoryGuestGate, hasStartedSolving]);
 
   // Per-question countdown interval
   useEffect(() => {
-    if (!isQuestionTimerEnabled || result || submitting || showMandatoryGuestGate) return;
+    if (!isQuestionTimerEnabled || result || submitting || showMandatoryGuestGate || !hasStartedSolving) return;
 
     const qTimer = setInterval(() => {
       setQuestionTimeLeft((prev) => {
@@ -181,12 +232,13 @@ export default function ExamTakingModal({
     result,
     submitting,
     showMandatoryGuestGate,
-    isGuestMode
+    isGuestMode,
+    hasStartedSolving
   ]);
 
   // Full Exam Timer interval
   useEffect(() => {
-    if (!isExamTimerEnabled || result || showMandatoryGuestGate) return;
+    if (!isExamTimerEnabled || result || showMandatoryGuestGate || !hasStartedSolving) return;
 
     const timer = setInterval(() => {
       const nowTime = Date.now();
@@ -200,7 +252,7 @@ export default function ExamTakingModal({
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [isExamTimerEnabled, result, submitting, showMandatoryGuestGate, isGuestMode, answers]);
+  }, [isExamTimerEnabled, result, submitting, showMandatoryGuestGate, isGuestMode, answers, hasStartedSolving]);
 
   // Load Leaderboard when result is shown
   useEffect(() => {
@@ -783,6 +835,51 @@ export default function ExamTakingModal({
                 </div>
               )}
 
+              {/* Download Exam File Section (Solved with Rationale OR Blank for Self-Practice) */}
+              <div className="bg-slate-950/90 border border-teal-500/30 rounded-2xl p-4 sm:p-5 text-right max-w-2xl mx-auto space-y-3 shadow-lg">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2 text-xs sm:text-sm font-extrabold text-teal-300">
+                    <Download className="w-4 h-4 text-teal-400 shrink-0" />
+                    <span>تحميل ملف الاختبار الكامل للمذاكرة والمراجعة (يعمل بدون إنترنت وقابل للطباعة PDF):</span>
+                  </div>
+                  {downloadedToast && (
+                    <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold">
+                      {downloadedToast}
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    disabled={downloadingMode !== null}
+                    onClick={() => handleDownloadExamFile('solved')}
+                    className="py-2.5 px-4 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-60 text-white text-xs font-extrabold flex items-center justify-center gap-2 shadow-md transition-all"
+                  >
+                    <Download className="w-4 h-4 shrink-0" />
+                    <span>
+                      {downloadingMode === 'solved'
+                        ? 'جارٍ تجهيز الملف...'
+                        : 'تحميل الاختبار محلولاً (مع الإجابات والتعليل)'}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={downloadingMode !== null}
+                    onClick={() => handleDownloadExamFile('blank')}
+                    className="py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-60 border border-slate-700 text-slate-200 text-xs font-bold flex items-center justify-center gap-2 transition-all"
+                  >
+                    <FileText className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>
+                      {downloadingMode === 'blank'
+                        ? 'جارٍ تجهيز النسخة...'
+                        : 'تحميل نسخة غير محلولة (للتدريب الذاتي)'}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
               <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
                 <button
                   onClick={handleCopyShareUrl}
@@ -804,7 +901,7 @@ export default function ExamTakingModal({
                   onClick={onClose}
                   className="px-6 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-colors"
                 >
-                  {isGuestMode ? 'إغلاق والعودة للصفحة الرئيسية' : 'العودة إلى قائمة التقييمات'}
+                  {isGuestMode ? 'إغلاق والعودة للصفحة الرئيسية' : 'العودة إلى قائمة الاختبارات'}
                 </button>
               </div>
             </div>
@@ -1026,6 +1123,93 @@ export default function ExamTakingModal({
                 </div>
               </div>
             )}
+          </div>
+        ) : !hasStartedSolving ? (
+          /* B) Pre-Exam Readiness & "Start Exam Now" Screen (Timer starts only when student clicks Start Exam) */
+          <div className="max-w-2xl mx-auto bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-2xl space-y-6">
+            <div className="text-center space-y-3">
+              <div className={`w-16 h-16 rounded-2xl mx-auto flex items-center justify-center border ${
+                assessment.assessmentType === 'competition'
+                  ? 'bg-amber-500/20 border-amber-500/40 text-amber-400'
+                  : 'bg-teal-500/20 border-teal-500/40 text-teal-400'
+              }`}>
+                {assessment.assessmentType === 'competition' ? (
+                  <Trophy className="w-8 h-8" />
+                ) : (
+                  <FileText className="w-8 h-8" />
+                )}
+              </div>
+              <span className="inline-block px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-xs font-bold text-teal-300">
+                {assessment.assessmentType === 'competition' ? 'مسابقة طبية أكاديمية' : 'اختبار مقرر طبي معتمد'}
+              </span>
+              <h3 className="text-xl sm:text-2xl font-extrabold text-white leading-snug">
+                {assessment.titleArabic}
+              </h3>
+              {assessment.descriptionArabic && (
+                <p className="text-xs sm:text-sm text-slate-300 max-w-xl mx-auto leading-relaxed">
+                  {assessment.descriptionArabic}
+                </p>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-center">
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+                <div className="text-[11px] text-slate-400">عدد الأسئلة</div>
+                <div className="text-base sm:text-lg font-extrabold text-white font-mono">
+                  {questions.length} سؤال
+                </div>
+              </div>
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+                <div className="text-[11px] text-slate-400">الدرجة الكلية</div>
+                <div className="text-base sm:text-lg font-extrabold text-teal-400 font-mono">
+                  {assessment.totalPoints} نقطة
+                </div>
+              </div>
+              <div className="col-span-2 sm:col-span-1 p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+                <div className="text-[11px] text-slate-400">نظام الوقت والمؤقت</div>
+                <div className="text-sm sm:text-base font-extrabold text-amber-300">
+                  {isQuestionTimerEnabled
+                    ? `${perQuestionDuration} ثانية لكل سؤال`
+                    : isExamTimerEnabled
+                    ? `${Math.ceil(effectiveExamDurationSeconds / 60)} دقيقة`
+                    : 'وقت مفتوح'}
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 rounded-xl bg-slate-950/90 border border-slate-800 space-y-2 text-xs text-slate-300 leading-relaxed">
+              <div className="font-bold text-teal-300 flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-teal-400 shrink-0" />
+                <span>تعليمات هامة قبل الضغط على زر «بدء الاختبار الآن»:</span>
+              </div>
+              <ul className="space-y-1.5 pr-4 list-disc text-slate-300">
+                <li>لن يبدأ احتساب مؤقت الاختبار إلا بعد الضغط على زر <strong>«بدء الاختبار الآن»</strong> أدناه.</li>
+                <li>يتم حفظ إجاباتك تلقائياً أولاً بأول (سواء كنت متصلاً بالإنترنت أو في وضع عدم الاتصال).</li>
+                <li>بعد إنهاء الاختبار وتسليمه، ستظهر نتيجتك فوراً مع إمكانية <strong>تحميل ملف الاختبار كاملاً</strong> للمذاكرة والمراجعة.</li>
+              </ul>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-1">
+              <button
+                type="button"
+                onClick={handleStartExamSessionNow}
+                className={`flex-1 py-3.5 px-6 rounded-xl text-sm font-extrabold text-white flex items-center justify-center gap-2.5 shadow-xl transition-all ${
+                  assessment.assessmentType === 'competition'
+                    ? 'bg-gradient-to-l from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 shadow-amber-950/50'
+                    : 'bg-gradient-to-l from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 shadow-teal-950/50'
+                }`}
+              >
+                <Play className="w-5 h-5 fill-current" />
+                <span>بدء الاختبار الآن ({questions.length} سؤال)</span>
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="py-3.5 px-5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-colors"
+              >
+                رجوع
+              </button>
+            </div>
           </div>
         ) : (
           /* C) Active Question Solving Area */
@@ -1259,7 +1443,7 @@ export default function ExamTakingModal({
       </main>
 
       {/* 3. Footer Bar Navigation */}
-      {!result && !showMandatoryGuestGate && (
+      {!result && !showMandatoryGuestGate && hasStartedSolving && (
         <footer className="bg-slate-900 border-t border-slate-800 p-4 flex items-center justify-between gap-3 shadow-xl">
           <button
             onClick={() => setCurrentQuestionIndex(prev => Math.max(0, prev - 1))}
