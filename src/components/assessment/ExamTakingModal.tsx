@@ -900,8 +900,13 @@ export default function ExamTakingModal({
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2">
-                        <div className="text-xs sm:text-sm font-bold text-slate-100 leading-relaxed">
-                          <span className="text-teal-400 ml-1.5">س{qIdx + 1}:</span>
+                        <div
+                          className="text-xs sm:text-sm font-bold text-slate-100 leading-relaxed"
+                          dir={!/[\u0600-\u06FF]/.test(rev.stemArabic || '') ? 'ltr' : 'rtl'}
+                        >
+                          <span className="text-teal-400 ml-1.5 mr-1.5">
+                            {!/[\u0600-\u06FF]/.test(rev.stemArabic || '') ? `Q${qIdx + 1}:` : `س${qIdx + 1}:`}
+                          </span>
                           {rev.stemArabic}
                         </div>
                         <span
@@ -924,12 +929,20 @@ export default function ExamTakingModal({
                           {rev.modelAnswerArabic && (
                             <div className="p-3 rounded-lg bg-teal-950/40 border border-teal-800/50">
                               <span className="text-teal-300 font-semibold block mb-1">الإجابة النموذجية المعتمدة:</span>
-                              <p className="text-slate-200">{rev.modelAnswerArabic}</p>
+                              <p
+                                className="text-slate-200"
+                                dir={!/[\u0600-\u06FF]/.test(rev.modelAnswerArabic || '') ? 'ltr' : 'rtl'}
+                              >
+                                {rev.modelAnswerArabic}
+                              </p>
                             </div>
                           )}
                         </div>
                       ) : (
-                        <div className="space-y-1.5">
+                        <div
+                          className="space-y-1.5"
+                          dir={!/[\u0600-\u06FF]/.test(rev.stemArabic || '') ? 'ltr' : 'rtl'}
+                        >
                           {(rev.options || []).map((opt) => {
                             const isOptCorrect = opt.id === rev.correctOptionId || opt.isCorrect;
                             const isStudentPick = opt.id === rev.studentAnswer;
@@ -946,7 +959,7 @@ export default function ExamTakingModal({
                               >
                                 <div className="flex items-center justify-between gap-2">
                                   <span className="font-semibold">{opt.textArabic}</span>
-                                  <div className="flex items-center gap-1.5 shrink-0">
+                                  <div className="flex items-center gap-1.5 shrink-0" dir="rtl">
                                     {isStudentPick && (
                                       <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-200">
                                         اختيارك
@@ -960,7 +973,7 @@ export default function ExamTakingModal({
                                   </div>
                                 </div>
                                 {opt.explanationArabic && (
-                                  <p className="text-[11px] text-slate-300 pr-2 border-r-2 border-slate-700 mt-1">
+                                  <p className="text-[11px] text-slate-300 pr-2 pl-2 border-r-2 border-slate-700 mt-1">
                                     {opt.explanationArabic}
                                   </p>
                                 )}
@@ -971,8 +984,15 @@ export default function ExamTakingModal({
                       )}
 
                       {rev.explanationArabic && (
-                        <div className="p-3 rounded-lg bg-slate-950/90 border border-teal-900/50 text-xs text-teal-200 leading-relaxed">
-                          <strong className="text-teal-400 block mb-0.5">التعليل الطبي والسريري:</strong>
+                        <div
+                          className="p-3 rounded-lg bg-slate-950/90 border border-teal-900/50 text-xs text-teal-200 leading-relaxed"
+                          dir={!/[\u0600-\u06FF]/.test(rev.explanationArabic || '') ? 'ltr' : 'rtl'}
+                        >
+                          <strong className="text-teal-400 block mb-0.5">
+                            {!/[\u0600-\u06FF]/.test(rev.explanationArabic || '')
+                              ? 'Clinical & Medical Rationale:'
+                              : 'التعليل الطبي والسريري:'}
+                          </strong>
                           {rev.explanationArabic}
                         </div>
                       )}
@@ -1069,103 +1089,116 @@ export default function ExamTakingModal({
                   </span>
                 </div>
 
-                <div className="space-y-2">
-                  <p className="text-base md:text-lg font-bold text-slate-100 leading-relaxed">
-                    {currentQuestion.stemArabic}
-                  </p>
-                  {currentQuestion.stemEnglish && (
-                    <p className="text-xs md:text-sm font-medium text-slate-400 font-mono" dir="ltr">
-                      {currentQuestion.stemEnglish}
-                    </p>
-                  )}
-                  {currentQuestion.imageUrl && (
-                    <div className="mt-3 rounded-xl overflow-hidden border border-slate-800 max-h-64">
-                      <img src={currentQuestion.imageUrl} alt="Medical Slide" className="w-full object-contain bg-slate-950" />
-                    </div>
-                  )}
-                </div>
-
-                {/* Question Type: Essay Answer Area */}
-                {currentQuestion.questionType === 'essay' && (
-                  <div className="space-y-2 pt-2">
-                    <div className="flex items-center justify-between text-xs text-slate-400">
-                      <span>اكتب إجابتك المقالية الطبية بالتفصيل:</span>
-                      <span className="font-mono">{(answers[currentQuestion.id] || '').length} حرف</span>
-                    </div>
-                    <textarea
-                      value={answers[currentQuestion.id] || ''}
-                      onChange={(e) => handleSelectOption(currentQuestion.id, e.target.value)}
-                      rows={6}
-                      placeholder="اكتب الإجابة المقالية هنا بالتفصيل (يتم الحفظ التلقائي فور الكتابة)..."
-                      className="w-full p-4 rounded-xl bg-slate-950/80 border border-slate-700 text-sm text-white focus:outline-none focus:border-teal-500 leading-relaxed"
-                    />
-                  </div>
-                )}
-
-                {/* Question Type: True / False Choice Cards */}
-                {currentQuestion.questionType === 'true_false' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-                    {currentQuestion.options.map((opt) => {
-                      const isSelected = answers[currentQuestion.id] === opt.id;
-                      const isTrue = opt.id === 'opt-a' || opt.textArabic.includes('صح');
-                      return (
-                        <button
-                          key={opt.id}
-                          type="button"
-                          onClick={() => handleSelectOption(currentQuestion.id, opt.id)}
-                          className={`p-5 rounded-2xl border text-base font-bold transition-all flex items-center justify-center gap-3 ${
-                            isSelected
-                              ? isTrue
-                                ? 'bg-emerald-950/80 border-emerald-500 text-emerald-100 ring-2 ring-emerald-500/50 shadow-lg'
-                                : 'bg-rose-950/80 border-rose-500 text-rose-100 ring-2 ring-rose-500/50 shadow-lg'
-                              : 'bg-slate-950/60 border-slate-800 text-slate-300 hover:bg-slate-900 hover:border-slate-700'
-                          }`}
-                        >
-                          {isTrue ? (
-                            <CheckCircle2 className={`w-6 h-6 ${isSelected ? 'text-emerald-400' : 'text-slate-500'}`} />
-                          ) : (
-                            <X className={`w-6 h-6 ${isSelected ? 'text-rose-400' : 'text-slate-500'}`} />
-                          )}
-                          <span>{opt.textArabic}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {/* Question Type: MCQ with Dynamic Options */}
-                {(!currentQuestion.questionType || currentQuestion.questionType === 'mcq') && (
-                  <div className="space-y-3 pt-2">
-                    {currentQuestion.options.map((opt, oIdx) => {
-                      const isSelected = answers[currentQuestion.id] === opt.id;
-                      const letter = ['أ', 'ب', 'ج', 'د', 'هـ', 'و', 'ز', 'ح'][oIdx] || opt.id;
-
-                      return (
-                        <button
-                          key={opt.id}
-                          onClick={() => handleSelectOption(currentQuestion.id, opt.id)}
-                          className={`w-full text-right p-4 rounded-xl border text-sm font-medium transition-all flex items-start gap-3 ${
-                            isSelected
-                              ? 'bg-teal-950/70 border-teal-500 text-teal-100 shadow-lg shadow-teal-950/50 ring-1 ring-teal-500/50'
-                              : 'bg-slate-950/60 border-slate-800 text-slate-300 hover:bg-slate-800/80 hover:border-slate-700'
-                          }`}
-                        >
-                          <div className={`w-7 h-7 rounded-lg border text-xs font-bold flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
-                            isSelected ? 'bg-teal-500 border-teal-400 text-slate-950' : 'border-slate-700 bg-slate-900 text-slate-400'
-                          }`}>
-                            {isSelected ? `✓ ${letter}` : letter}
+                {(() => {
+                  const isEnglishQuestion =
+                    currentQuestion.language === 'en' ||
+                    (!/[\u0600-\u06FF]/.test(currentQuestion.stemArabic || '') &&
+                      /[A-Za-z]/.test(currentQuestion.stemArabic || ''));
+                  return (
+                    <>
+                      <div className="space-y-2" dir={isEnglishQuestion ? 'ltr' : 'rtl'}>
+                        <p className={`text-base md:text-lg font-bold text-slate-100 leading-relaxed ${isEnglishQuestion ? 'text-left' : 'text-right'}`}>
+                          {currentQuestion.stemArabic}
+                        </p>
+                        {currentQuestion.stemEnglish && currentQuestion.stemEnglish !== currentQuestion.stemArabic && (
+                          <p className="text-xs md:text-sm font-medium text-slate-400 font-mono text-left" dir="ltr">
+                            {currentQuestion.stemEnglish}
+                          </p>
+                        )}
+                        {currentQuestion.imageUrl && (
+                          <div className="mt-3 rounded-xl overflow-hidden border border-slate-800 max-h-64">
+                            <img src={currentQuestion.imageUrl} alt="Medical Slide" className="w-full object-contain bg-slate-950" />
                           </div>
-                          <div className="flex-1 space-y-1">
-                            <div>{opt.textArabic}</div>
-                            {opt.textEnglish && (
-                              <div className="text-xs text-slate-500 font-mono" dir="ltr">{opt.textEnglish}</div>
-                            )}
+                        )}
+                      </div>
+
+                      {/* Question Type: Essay Answer Area */}
+                      {currentQuestion.questionType === 'essay' && (
+                        <div className="space-y-2 pt-2">
+                          <div className="flex items-center justify-between text-xs text-slate-400">
+                            <span>{isEnglishQuestion ? 'Write your detailed medical essay answer:' : 'اكتب إجابتك المقالية الطبية بالتفصيل:'}</span>
+                            <span className="font-mono">{(answers[currentQuestion.id] || '').length} {isEnglishQuestion ? 'chars' : 'حرف'}</span>
                           </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
+                          <textarea
+                            value={answers[currentQuestion.id] || ''}
+                            onChange={(e) => handleSelectOption(currentQuestion.id, e.target.value)}
+                            rows={6}
+                            dir={isEnglishQuestion ? 'ltr' : 'rtl'}
+                            placeholder={isEnglishQuestion ? 'Type your detailed clinical answer here (auto-saved)...' : 'اكتب الإجابة المقالية هنا بالتفصيل (يتم الحفظ التلقائي فور الكتابة)...'}
+                            className="w-full p-4 rounded-xl bg-slate-950/80 border border-slate-700 text-sm text-white focus:outline-none focus:border-teal-500 leading-relaxed"
+                          />
+                        </div>
+                      )}
+
+                      {/* Question Type: True / False Choice Cards */}
+                      {currentQuestion.questionType === 'true_false' && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2" dir={isEnglishQuestion ? 'ltr' : 'rtl'}>
+                          {currentQuestion.options.map((opt) => {
+                            const isSelected = answers[currentQuestion.id] === opt.id;
+                            const isTrue = opt.id === 'opt-a' || opt.textArabic.includes('صح') || /true/i.test(opt.textArabic);
+                            return (
+                              <button
+                                key={opt.id}
+                                type="button"
+                                onClick={() => handleSelectOption(currentQuestion.id, opt.id)}
+                                className={`p-5 rounded-2xl border text-base font-bold transition-all flex items-center justify-center gap-3 ${
+                                  isSelected
+                                    ? isTrue
+                                      ? 'bg-emerald-950/80 border-emerald-500 text-emerald-100 ring-2 ring-emerald-500/50 shadow-lg'
+                                      : 'bg-rose-950/80 border-rose-500 text-rose-100 ring-2 ring-rose-500/50 shadow-lg'
+                                    : 'bg-slate-950/60 border-slate-800 text-slate-300 hover:bg-slate-900 hover:border-slate-700'
+                                }`}
+                              >
+                                {isTrue ? (
+                                  <CheckCircle2 className={`w-6 h-6 ${isSelected ? 'text-emerald-400' : 'text-slate-500'}`} />
+                                ) : (
+                                  <X className={`w-6 h-6 ${isSelected ? 'text-rose-400' : 'text-slate-500'}`} />
+                                )}
+                                <span>{opt.textArabic}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Question Type: MCQ with Dynamic Options */}
+                      {(!currentQuestion.questionType || currentQuestion.questionType === 'mcq') && (
+                        <div className="space-y-3 pt-2" dir={isEnglishQuestion ? 'ltr' : 'rtl'}>
+                          {currentQuestion.options.map((opt, oIdx) => {
+                            const isSelected = answers[currentQuestion.id] === opt.id;
+                            const letter = isEnglishQuestion
+                              ? ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'][oIdx] || opt.id
+                              : ['أ', 'ب', 'ج', 'د', 'هـ', 'و', 'ز', 'ح'][oIdx] || opt.id;
+
+                            return (
+                              <button
+                                key={opt.id}
+                                onClick={() => handleSelectOption(currentQuestion.id, opt.id)}
+                                className={`w-full ${isEnglishQuestion ? 'text-left' : 'text-right'} p-4 rounded-xl border text-sm font-medium transition-all flex items-start gap-3 ${
+                                  isSelected
+                                    ? 'bg-teal-950/70 border-teal-500 text-teal-100 shadow-lg shadow-teal-950/50 ring-1 ring-teal-500/50'
+                                    : 'bg-slate-950/60 border-slate-800 text-slate-300 hover:bg-slate-800/80 hover:border-slate-700'
+                                }`}
+                              >
+                                <div className={`w-7 h-7 rounded-lg border text-xs font-bold flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
+                                  isSelected ? 'bg-teal-500 border-teal-400 text-slate-950' : 'border-slate-700 bg-slate-900 text-slate-400'
+                                }`}>
+                                  {isSelected ? `✓ ${letter}` : letter}
+                                </div>
+                                <div className="flex-1 space-y-1">
+                                  <div>{opt.textArabic}</div>
+                                  {opt.textEnglish && opt.textEnglish !== opt.textArabic && (
+                                    <div className="text-xs text-slate-500 font-mono" dir="ltr">{opt.textEnglish}</div>
+                                  )}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
 
               </div>
             )}

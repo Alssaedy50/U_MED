@@ -685,7 +685,7 @@ app.get('/api/admin/questions', requireAdmin, (req: Request, res: Response) => {
   }
 });
 
-// 9c. Optional AI Medical Explanation Generator (Protected: Admin Only, Strictly Preserves User's Correct Answer)
+// 9c. Optional AI Medical Explanation Generator (Protected: Admin Only, Strictly Preserves User's Correct Answer & Language)
 app.post('/api/admin/generate-mcq-explanations', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   const rawQuestions = Array.isArray(req.body?.questions) ? req.body.questions.slice(0, 15) : [];
   if (rawQuestions.length === 0) {
@@ -696,12 +696,36 @@ app.post('/api/admin/generate-mcq-explanations', requireAdmin, async (req: Authe
     items.map((q: any) => {
       const opts = Array.isArray(q.options) ? q.options : [];
       const correctOpt = opts.find((o: any) => o.id === q.correctOptionId) || opts[0];
-      const correctText = String(correctOpt?.textArabic || '').trim();
+      const correctText = String(correctOpt?.textArabic || correctOpt?.textEnglish || '').trim();
       const wrongTexts = opts
-        .filter((o: any) => o.id !== q.correctOptionId && String(o.textArabic || '').trim())
-        .map((o: any) => String(o.textArabic).trim());
+        .filter((o: any) => o.id !== q.correctOptionId && String(o.textArabic || o.textEnglish || '').trim())
+        .map((o: any) => String(o.textArabic || o.textEnglish).trim());
+
+      const isEnglishQ =
+        q.language === 'en' ||
+        (!/[\u0600-\u06FF]/.test(String(q.stemArabic || '')) && /[A-Za-z]/.test(String(q.stemArabic || '')));
 
       const optionExplanations: Record<string, string> = {};
+      if (isEnglishQ) {
+        for (const o of opts) {
+          const lbl = o.textArabic || o.textEnglish || o.id;
+          if (o.id === q.correctOptionId) {
+            optionExplanations[o.id] = `Correct: (${lbl}) directly matches the clinical presentation and diagnostic findings.`;
+          } else {
+            optionExplanations[o.id] = `Incorrect: (${lbl}) is less consistent with the clinical picture compared to (${correctText}).`;
+          }
+        }
+        const explanationArabic = wrongTexts.length > 0
+          ? `The correct answer is (${correctText}) as it best fits the clinical vignette, whereas the distractors (${wrongTexts.slice(0, 3).join(', ')}) are ruled out.`
+          : `The authoritative correct answer is (${correctText}) based on standard clinical guidelines.`;
+
+        return {
+          tempId: String(q.tempId || ''),
+          explanationArabic,
+          optionExplanations
+        };
+      }
+
       for (const o of opts) {
         if (o.id === q.correctOptionId) {
           optionExplanations[o.id] = `إجابة صحيحة ومعتمدة طبياً: (${o.textArabic}) يتوافق مباشرة مع المعطيات السريرية والعلمية في السؤال.`;
@@ -744,23 +768,28 @@ app.post('/api/admin/generate-mcq-explanations', requireAdmin, async (req: Authe
       const optionsText = (q.options || [])
         .map((o: any) => `${o.id}: ${o.textArabic}${o.textEnglish ? ` (${o.textEnglish})` : ''}`)
         .join(' | ');
-      return `Question #${idx + 1} [tempId=${q.tempId}]:
-Stem (AR): ${q.stemArabic}
-${q.stemEnglish ? `Stem (EN): ${q.stemEnglish}\n` : ''}Options: ${optionsText}
+      const qLang =
+        q.language ||
+        (!/[\u0600-\u06FF]/.test(String(q.stemArabic || '')) && /[A-Za-z]/.test(String(q.stemArabic || ''))
+          ? 'en'
+          : 'ar');
+      return `Question #${idx + 1} [tempId=${q.tempId}] [Language=${qLang}]:
+Stem: ${q.stemArabic}
+${q.stemEnglish && q.stemEnglish !== q.stemArabic ? `Stem (EN): ${q.stemEnglish}\n` : ''}Options: ${optionsText}
 Authoritative User-Supplied Correct Option ID (DO NOT CHANGE): ${q.correctOptionId}`;
     }).join('\n\n');
 
     const response = await ai.models.generateContent({
       model: 'gemini-3.8-flash',
-      contents: `You are an expert medical faculty professor generating concise, accurate Arabic medical rationales for multiple-choice questions (MCQs).
-For each question below, explain clearly and concisely in Arabic:
-1) Why the user-supplied correct option (${'`Authoritative User-Supplied Correct Option ID`'}) is medically correct.
-2) Briefly why the other distractor options are incorrect.
+      contents: `You are an expert medical faculty professor generating concise, accurate medical rationales for multiple-choice questions (MCQs).
+For each question below, write the rationale in the SAME language as the question ([Language=en] -> write in professional Medical English; [Language=ar] or [Language=bilingual] -> write in clear Medical Arabic with English medical terms in parentheses):
+1) Explain why the user-supplied correct option (${'`Authoritative User-Supplied Correct Option ID`'}) is medically correct.
+2) Briefly explain why the other distractor options are incorrect.
 CRITICAL RULE: You must treat the supplied Correct Option ID as fixed and authoritative. Never alter or override the correct option ID.
 
 ${formattedPromptItems}`,
       config: {
-        systemInstruction: 'Return concise, clinically accurate Arabic medical explanations for each question. Never modify the user-supplied correct answer.',
+        systemInstruction: 'Return concise, clinically accurate medical explanations matching each question language. Never modify the user-supplied correct answer.',
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.ARRAY,
@@ -773,7 +802,7 @@ ${formattedPromptItems}`,
               },
               explanationArabic: {
                 type: Type.STRING,
-                description: 'Concise unified Arabic medical explanation (2-4 sentences) explaining why the correct option is right and why distractors are wrong.'
+                description: 'Concise unified medical explanation (2-4 sentences) in the question language explaining why the correct option is right and why distractors are wrong.'
               }
             },
             required: ['tempId', 'explanationArabic']
@@ -800,6 +829,102 @@ ${formattedPromptItems}`,
     return res.json({
       success: true,
       explanations: buildServerFallbackExplanations(rawQuestions)
+    });
+  }
+});
+
+// 9d. Direct AI Smart Exam & Question Bank Generator / Formatter (Protected: Admin Only)
+app.post('/api/admin/generate-smart-exam', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const {
+      mode = 'generate_new',
+      language = 'ar',
+      assessmentType = 'exam',
+      title = '',
+      topic = 'القلب والأوعية الدموية (Cardiovascular System)',
+      studyLevelName = 'المستوى الرابع',
+      batchName = '',
+      durationMinutes = 30,
+      questionDurationSeconds = 45,
+      mcqCount = 5,
+      optionsCount = 4,
+      trueFalseCount = 1,
+      essayCount = 1,
+      difficultyMix = 'clinical_usmle',
+      includeOptionRationales = true,
+      rawContentToConvert = ''
+    } = req.body || {};
+
+    const { buildProfessionalAiPrompt, getSampleTemplateByLanguage } = await import('../src/services/mcqBulkParser.ts');
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.json({
+        success: true,
+        usedFallback: true,
+        formattedText: getSampleTemplateByLanguage(language)
+      });
+    }
+
+    const { GoogleGenAI } = await import('@google/genai');
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build'
+        }
+      }
+    });
+
+    const masterPrompt = buildProfessionalAiPrompt({
+      mode,
+      language,
+      assessmentType,
+      title,
+      topic,
+      studyLevelName,
+      batchName,
+      durationMinutes: Number(durationMinutes) || 30,
+      questionDurationSeconds: Number(questionDurationSeconds) || 45,
+      mcqCount: Math.min(Math.max(Number(mcqCount) || 5, 1), 30),
+      optionsCount: Number(optionsCount) === 5 ? 5 : 4,
+      trueFalseCount: Math.min(Math.max(Number(trueFalseCount) || 0, 0), 15),
+      essayCount: Math.min(Math.max(Number(essayCount) || 0, 0), 10),
+      difficultyMix,
+      includeOptionRationales: Boolean(includeOptionRationales)
+    });
+
+    const fullContents =
+      mode === 'format_existing' && rawContentToConvert
+        ? `${masterPrompt}\n\n${rawContentToConvert}`
+        : masterPrompt;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: fullContents
+    });
+
+    const rawText = (response.text || '').trim();
+    if (!rawText) {
+      return res.json({
+        success: true,
+        usedFallback: true,
+        formattedText: getSampleTemplateByLanguage(language)
+      });
+    }
+
+    return res.json({
+      success: true,
+      usedFallback: false,
+      formattedText: rawText
+    });
+  } catch (err: any) {
+    console.warn('[AI Smart Exam Generator] Fallback triggered:', err?.message);
+    const { getSampleTemplateByLanguage } = await import('../src/services/mcqBulkParser.ts');
+    return res.json({
+      success: true,
+      usedFallback: true,
+      formattedText: getSampleTemplateByLanguage(req.body?.language || 'ar')
     });
   }
 });

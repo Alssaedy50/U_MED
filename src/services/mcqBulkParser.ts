@@ -18,6 +18,7 @@ import {
   QuestionOption,
   QuestionValidationIssue,
   QuestionType,
+  AssessmentLanguage,
   DetectedAssessmentMetadata
 } from '../types/umed.ts';
 
@@ -52,6 +53,86 @@ export function normalizeMedicalText(input?: string | null): string {
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * Automatically detects whether a block of text is Arabic ('ar'), English ('en'), or Bilingual ('bilingual').
+ */
+export function detectLanguageFromText(text?: string | null): AssessmentLanguage {
+  if (!text) return 'ar';
+  const arabicMatches = text.match(/[\u0600-\u06FF]/g) || [];
+  const latinMatches = text.match(/[A-Za-z]/g) || [];
+  const arCount = arabicMatches.length;
+  const enCount = latinMatches.length;
+
+  if (arCount === 0 && enCount > 0) return 'en';
+  if (enCount === 0 && arCount > 0) return 'ar';
+  // If both exist in substantial proportions (e.g., bilingual lines)
+  const total = arCount + enCount;
+  if (total > 0 && arCount / total >= 0.2 && enCount / total >= 0.35) {
+    return 'bilingual';
+  }
+  return arCount >= enCount ? 'ar' : 'en';
+}
+
+/**
+ * Cleans and normalizes raw AI / LLM / Word / PDF text before parsing:
+ * - Extracts content from markdown code fences (```text ... ```) if wrapped
+ * - Strips markdown bold/italic wrappers (**...**, __...__) around headers, numbers, and option labels
+ *   while preserving trailing * or ✓ correct answer markers!
+ * - Normalizes Arabic-Indic digits (١٢٣٤٥٦٧٨٩٠) in question numbers and metadata
+ */
+export function preprocessRawAiText(rawInput: string): string {
+  if (!rawInput) return '';
+  let text = rawInput.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+
+  // Convert Arabic-Indic digits (٠-٩) to standard digits (0-9) when used in numbering/timers
+  const arabicDigits = '٠١٢٣٤٥٦٧٨٩';
+  text = text.replace(/[٠-٩]/g, (d) => String(arabicDigits.indexOf(d)));
+
+  // If the AI wrapped the output inside a markdown code fence ```...```, extract the fenced block(s)
+  const codeBlockMatches = Array.from(text.matchAll(/```(?:[a-zA-Z0-9_\-]+)?\s*\n([\s\S]*?)```/g));
+  if (codeBlockMatches.length > 0) {
+    const combinedBlocks = codeBlockMatches.map((m) => m[1].trim()).filter(Boolean).join('\n\n');
+    if (combinedBlocks.length >= 20) {
+      text = combinedBlocks;
+    }
+  } else {
+    // Strip stray opening/closing ``` lines
+    text = text.replace(/^\s*```[a-zA-Z0-9_\-]*\s*$/gm, '');
+  }
+
+  const cleanedLines: string[] = [];
+  for (const rawLine of text.split('\n')) {
+    let line = rawLine.trim();
+
+    // Skip horizontal markdown dividers (---, ***, ___, ===)
+    if (/^(?:[-=_]{3,}|\*{3,})$/.test(line)) {
+      cleanedLines.push('');
+      continue;
+    }
+
+    // Strip markdown heading hashes (e.g. "### Question 1:" -> "Question 1:")
+    line = line.replace(/^#{1,6}\s+/, '');
+
+    // Strip markdown bullet before option or metadata (e.g. "- **A)** Text" or "• A) Text")
+    line = line.replace(/^(?:[-•‣◦])\s+(?=(?:\*\*|__)?[([]?[A-Ha-hأابجدتثهـهو][)\].\-:])/u, '');
+
+    // Preserve trailing * correct marker before stripping markdown **bold**
+    const hasTrailingSingleStar = /(?:^|[^*])\*\s*$/.test(line) && !/\*\*$/.test(line);
+    const hasTrailingTripleStar = /\*\*\*\s*$/.test(line);
+
+    // Strip **bold** and __bold__ wrappers
+    line = line.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/__([^_]+)__/g, '$1');
+
+    if ((hasTrailingSingleStar || hasTrailingTripleStar) && !/\*\s*$/.test(line)) {
+      line = `${line.trim()} *`;
+    }
+
+    cleanedLines.push(line);
+  }
+
+  return cleanedLines.join('\n').trim();
 }
 
 /**
@@ -101,7 +182,7 @@ export function resolveCanonicalOptionId(
   options: QuestionOption[] = []
 ): string {
   if (!rawToken) return '';
-  const cleaned = rawToken.trim();
+  const cleaned = rawToken.replace(/\*\*/g, '').trim();
   const lower = cleaned.toLowerCase();
 
   // True / False detection
@@ -111,7 +192,9 @@ export function resolveCanonicalOptionId(
     cleaned === 'صواب' ||
     cleaned === 'صحيح' ||
     lower === 't' ||
-    cleaned === 'صح (صواب)'
+    cleaned === 'صح (صواب)' ||
+    cleaned === 'صح / true' ||
+    lower === 'true (صح)'
   ) {
     const trueOpt = options.find(
       o => o.id === 'opt-a' || /صح|صواب|true/i.test(o.textArabic) || /true/i.test(o.textEnglish || '')
@@ -124,7 +207,9 @@ export function resolveCanonicalOptionId(
     cleaned === 'خطأ' ||
     cleaned === 'خاطئ' ||
     cleaned === 'غلط' ||
-    lower === 'f'
+    lower === 'f' ||
+    cleaned === 'خطأ / false' ||
+    lower === 'false (خطأ)'
   ) {
     const falseOpt = options.find(
       o => o.id === 'opt-b' || /خطأ|خاطئ|غلط|false/i.test(o.textArabic) || /false/i.test(o.textEnglish || '')
@@ -164,7 +249,7 @@ export function resolveCanonicalOptionId(
     return resolveCanonicalOptionId(prefixMatch[1], options);
   }
 
-  const leadingTokenMatch = cleaned.match(/^(?:خيار|الخيار|option)?\s*[\(\[]?([A-Ha-hأابجدتثهـهو1-8])[\)\]]?(?:\s|$)/iu);
+  const leadingTokenMatch = cleaned.match(/^(?:خيار|الخيار|option)?\s*[\(\[]?([A-Ha-hأابجدتثهـهو1-8])[\)\].\-:](?:\s|$)/iu);
   if (leadingTokenMatch) {
     return resolveCanonicalOptionId(leadingTokenMatch[1], options);
   }
@@ -179,7 +264,11 @@ export function resolveCanonicalOptionId(
 
     const partialMatch = options.find(o => {
       const normOpt = normalizeMedicalText(o.textArabic);
-      return normOpt && (normOpt.includes(normTarget) || normTarget.includes(normOpt));
+      const normOptEn = normalizeMedicalText(o.textEnglish);
+      return (
+        (normOpt && (normOpt.includes(normTarget) || normTarget.includes(normOpt))) ||
+        (normOptEn && (normOptEn.includes(normTarget) || normTarget.includes(normOptEn)))
+      );
     });
     if (partialMatch) return partialMatch.id;
   }
@@ -190,7 +279,7 @@ export function resolveCanonicalOptionId(
 /**
  * Parses inline explanation / rationale embedded within an option line
  * Example: "الشريان التاجي الأيمن (التعليل: صحيح لأنه يغذي الجدار السفلي)"
- * Example: "المثيل دوبا - تعليل: غير صحيح لأنه دواء آمن في الحمل"
+ * Example: "Right Coronary Artery (Rationale: Correct because it supplies the inferior wall)"
  */
 export function extractOptionAndExplanation(rawText: string): {
   text: string;
@@ -201,27 +290,35 @@ export function extractOptionAndExplanation(rawText: string): {
   let explanation: string | undefined = undefined;
   let isCorrect: boolean | undefined = undefined;
 
-  // Check parenthesized or bracketed explanation: (التعليل: ...) or [التعليل: ...]
-  const bracketExpMatch = text.match(/[\(\[]\s*(?:التعليل|تعليل|السبب|سبب|تفسير|Explanation|Rationale)\s*[:\-]?\s*([^\]\)]+)[\)\]]\s*$/iu);
+  // Check parenthesized or bracketed explanation: (التعليل: ...) or (Rationale: ...) or (Explanation: ...)
+  const bracketExpMatch = text.match(/[\(\[]\s*(?:التعليل|تعليل|السبب|سبب|تفسير|Explanation|Rationale|Reason|Why)\s*[:\-]?\s*([^\]\)]+)[\)\]]\s*$/iu);
   if (bracketExpMatch) {
     explanation = bracketExpMatch[1].trim();
     text = text.replace(bracketExpMatch[0], '').trim();
   }
 
-  // Check dashed or pipe explanation: " - تعليل: ..." or " | التعليل: ..."
+  // Check dashed or pipe explanation: " - تعليل: ..." or " | Rationale: ..." or " — Explanation: ..."
   if (!explanation) {
-    const dashExpMatch = text.match(/\s+[\-|]\s*(?:التعليل|تعليل|السبب|تفسير|Explanation|Rationale)\s*[:\-]?\s*(.+)$/iu);
+    const dashExpMatch = text.match(/\s+[\-|—–]\s*(?:التعليل|تعليل|السبب|تفسير|Explanation|Rationale|Reason)\s*[:\-]?\s*(.+)$/iu);
     if (dashExpMatch) {
       explanation = dashExpMatch[1].trim();
       text = text.slice(0, dashExpMatch.index).trim();
     }
   }
 
-  // Check if explanation indicates correctness
-  if (explanation) {
-    if (/^(?:صحيح|صح|إجابة صحيحة|correct|true)/iu.test(explanation)) {
+  // Re-check if there is a trailing * or ✓ left on `text` after stripping the parenthesized rationale!
+  // Example: "ب) الشريان التاجي الأيمن * (التعليل: ...)"
+  const trailingCheckAfterExp = parseInlineCorrectMarker(text);
+  if (trailingCheckAfterExp.isCorrect) {
+    text = trailingCheckAfterExp.cleanedText;
+    isCorrect = true;
+  }
+
+  // Check if explanation itself indicates correctness
+  if (explanation && isCorrect === undefined) {
+    if (/^(?:صحيح|صح|إجابة صحيحة|correct|true|right)/iu.test(explanation)) {
       isCorrect = true;
-    } else if (/^(?:خطأ|خاطئ|غير صحيح|غلط|incorrect|false)/iu.test(explanation)) {
+    } else if (/^(?:خطأ|خاطئ|غير صحيح|غلط|incorrect|false|wrong)/iu.test(explanation)) {
       isCorrect = false;
     }
   }
@@ -231,13 +328,14 @@ export function extractOptionAndExplanation(rawText: string): {
 
 /**
  * Extracts Assessment Metadata from the top of the text/file if present:
- * Title, Assessment Type, Study Level, Batch, Subject/Block, Duration, Question Timer
+ * Language, Title, Assessment Type, Study Level, Batch, Subject/Block, Duration, Question Timer
  */
 export function extractAssessmentMetadataFromText(rawText: string): {
   detectedMetadata: DetectedAssessmentMetadata;
   cleanedText: string;
 } {
-  const lines = rawText.split(/\r?\n/);
+  const preprocessed = preprocessRawAiText(rawText);
+  const lines = preprocessed.split(/\r?\n/);
   const metadata: DetectedAssessmentMetadata = {};
   const remainingLines: string[] = [];
   let headerFinished = false;
@@ -246,8 +344,8 @@ export function extractAssessmentMetadataFromText(rawText: string): {
     const line = lines[i];
     const trimmed = line.trim();
 
-    // Stop inspecting header once we hit an actual question start (e.g. "1. ", "س1:", "[سؤال مقالي]")
-    const isQuestionStart = /^\s*(?:(?:س|سؤال|السؤال|Q|Question)\s*\d*\s*[.:\-)]|\d+\s*[.\-)]|\[(?:سؤال مقالي|صح وخطأ|مقالي)\])/iu.test(trimmed);
+    // Stop inspecting header once we hit an actual question start (e.g. "1. ", "Q1:", "[Essay]", "[سؤال مقالي]")
+    const isQuestionStart = /^\s*(?:(?:س|سؤال|السؤال|Q|Question)\s*#?\d*\s*[.:\-)]|\[\d+\]|\(\d+\)|\d+\s*[.\-)]|\[(?:سؤال مقالي|صح وخطأ|مقالي|True\s*\/\s*False|T\/F|Essay|Short\s*Answer)\])/iu.test(trimmed);
     if (isQuestionStart) {
       headerFinished = true;
     }
@@ -257,37 +355,69 @@ export function extractAssessmentMetadataFromText(rawText: string): {
       continue;
     }
 
+    // Language: اللغة: عربي / إنجليزي / ثنائي اللغة | Language: English / Arabic / Bilingual
+    const langMatch = trimmed.match(/^(?:اللغة|لغة الاختبار|لغة البنك|لغة الأسئلة|Language|Exam\s*Language|Test\s*Language)\s*[:\-=]\s*(.+)$/iu);
+    if (langMatch) {
+      const val = langMatch[1].trim().toLowerCase();
+      if (/ثنائي|مزدوج|bilingual|both|ar.*en|en.*ar|عربي.*إنجليزي|عربي.*انجليزي/i.test(val)) {
+        metadata.language = 'bilingual';
+      } else if (/إنجليز|انجليز|english|\ben\b/i.test(val)) {
+        metadata.language = 'en';
+      } else {
+        metadata.language = 'ar';
+      }
+      continue;
+    }
+
     // Title: العنوان: ... or اسم الاختبار: ... or Title: ...
-    const titleMatch = trimmed.match(/^(?:العنوان|عنوان الاختبار|عنوان التقييم|اسم الاختبار|اسم المسابقة|Title|Assessment\s*Title)\s*[:\-]\s*(.+)$/iu);
+    const titleMatch = trimmed.match(/^(?:العنوان|عنوان الاختبار|عنوان التقييم|اسم الاختبار|اسم المسابقة|Title|Exam\s*Title|Assessment\s*Title|Quiz\s*Title)\s*[:\-=]\s*(.+)$/iu);
     if (titleMatch) {
-      metadata.titleArabic = titleMatch[1].trim();
+      const titleVal = titleMatch[1].trim();
+      metadata.titleArabic = titleVal;
+      if (!/[\u0600-\u06FF]/.test(titleVal)) {
+        metadata.titleEnglish = titleVal;
+      }
       continue;
     }
 
     // Assessment Type: النوع: ... or نوع التقييم: مسابقة / اختبار
-    const typeMatch = trimmed.match(/^(?:النوع|نوع التقييم|نوع الاختبار|التصنيف|Type|Category)\s*[:\-]\s*(.+)$/iu);
+    const typeMatch = trimmed.match(/^(?:النوع|نوع التقييم|نوع الاختبار|التصنيف|Type|Assessment\s*Type|Category|Mode)\s*[:\-=]\s*(.+)$/iu);
     if (typeMatch) {
       const val = typeMatch[1].trim().toLowerCase();
-      metadata.assessmentType = /مسابقة|تنافسي|competition|contest/i.test(val) ? 'competition' : 'exam';
+      metadata.assessmentType = /مسابقة|تنافسي|competition|contest|challenge/i.test(val) ? 'competition' : 'exam';
       continue;
     }
 
     // Study Level: المستوى: المستوى الرابع / Level 4
-    const levelMatch = trimmed.match(/^(?:المستوى|المستوى الدراسي|السنة الدراسية|Level|Study\s*Level)\s*[:\-]\s*(.+)$/iu);
+    const levelMatch = trimmed.match(/^(?:المستوى|المستوى الدراسي|المرحلة|المرحلة الدراسية|السنة الدراسية|Level|Study\s*Level|Academic\s*Level|Year)\s*[:\-=]\s*(.+)$/iu);
     if (levelMatch) {
       const val = levelMatch[1].trim();
       metadata.studyLevelName = val;
       const numMatch = val.match(/(\d+)/);
       if (numMatch) {
         metadata.studyLevelId = `lvl-${numMatch[1]}`;
-      } else if (/امتياز|internship/i.test(val)) {
+      } else if (/امتياز|internship|intern/i.test(val)) {
         metadata.studyLevelId = 'lvl-internship';
+      } else if (/الأول|الاول|first/i.test(val)) {
+        metadata.studyLevelId = 'lvl-1';
+      } else if (/الثاني|second/i.test(val)) {
+        metadata.studyLevelId = 'lvl-2';
+      } else if (/الثالث|third/i.test(val)) {
+        metadata.studyLevelId = 'lvl-3';
+      } else if (/الرابع|fourth/i.test(val)) {
+        metadata.studyLevelId = 'lvl-4';
+      } else if (/الخامس|fifth/i.test(val)) {
+        metadata.studyLevelId = 'lvl-5';
+      } else if (/السادس|sixth/i.test(val)) {
+        metadata.studyLevelId = 'lvl-6';
+      } else if (/السابع|seventh/i.test(val)) {
+        metadata.studyLevelId = 'lvl-7';
       }
       continue;
     }
 
     // Batch: الدفعة: الدفعة السادسة / دفعة 28 / Batch 6
-    const batchMatch = trimmed.match(/^(?:الدفعة|دفعة|اسم الدفعة|Batch)\s*[:\-]\s*(.+)$/iu);
+    const batchMatch = trimmed.match(/^(?:الدفعة|دفعة|اسم الدفعة|رقم الدفعة|Batch|Cohort)\s*[:\-=]\s*(.+)$/iu);
     if (batchMatch) {
       metadata.batchName = batchMatch[1].trim();
       const bNum = batchMatch[1].match(/(\d+)/);
@@ -296,23 +426,28 @@ export function extractAssessmentMetadataFromText(rawText: string): {
     }
 
     // Subject / Block: المادة: باطنة / البلوك: CVS
-    const courseMatch = trimmed.match(/^(?:المادة|البلوك|المقرر|الكورس|الموضوع|Subject|Block|Course)\s*[:\-]\s*(.+)$/iu);
+    const courseMatch = trimmed.match(/^(?:المادة|البلوك|المقرر|الكورس|الموضوع|Subject|Block|Course|Module|Topic)\s*[:\-=]\s*(.+)$/iu);
     if (courseMatch) {
       metadata.courseName = courseMatch[1].trim();
       continue;
     }
 
     // Exam Duration: المدة: 30 دقيقة / Duration: 45 min
-    const durationMatch = trimmed.match(/^(?:المدة|مدة الاختبار|وقت الاختبار|Duration|Time\s*Limit)\s*[:\-]\s*(\d+)\s*(?:دقيقة|دقائق|د|min|mins|minutes)?/iu);
+    const durationMatch = trimmed.match(/^(?:المدة|مدة الاختبار|زمن الاختبار|وقت الاختبار|Duration|Exam\s*Duration|Time\s*Limit)\s*[:\-=]\s*(\d+)\s*(?:دقيقة|دقائق|د|min|mins|minutes)?/iu);
     if (durationMatch) {
       metadata.durationMinutes = parseInt(durationMatch[1], 10);
       continue;
     }
 
     // Question Timer: مؤقت السؤال: 45 ثانية / Question Timer: 60s
-    const qTimerMatch = trimmed.match(/^(?:مؤقت السؤال|مدة السؤال|مؤقت لكل سؤال|Question\s*Timer|Per\s*Question)\s*[:\-]\s*(\d+)\s*(?:ثانية|ثواني|ث|sec|secs|seconds)?/iu);
+    const qTimerMatch = trimmed.match(/^(?:مؤقت السؤال|مدة السؤال|زمن السؤال|مؤقت لكل سؤال|Question\s*Timer|Time\s*Per\s*Question|Per\s*Question)\s*[:\-=]\s*(\d+)\s*(?:ثانية|ثواني|ث|sec|secs|seconds|s)?/iu);
     if (qTimerMatch) {
       metadata.questionDurationSeconds = parseInt(qTimerMatch[1], 10);
+      continue;
+    }
+
+    // Skip conversational AI intro lines before the first question (e.g. "بالتأكيد، إليك الأسئلة..." or "Sure, here are the questions:")
+    if (/^(?:بالتأكيد|طبعاً|إليك|فيما يلي|هذا نموذج|sure|certainly|here\s+are|below\s+are)/iu.test(trimmed)) {
       continue;
     }
 
@@ -324,9 +459,14 @@ export function extractAssessmentMetadataFromText(rawText: string): {
     remainingLines.push(line);
   }
 
+  const cleanedBodyText = remainingLines.join('\n').trim();
+  if (!metadata.language && cleanedBodyText) {
+    metadata.language = detectLanguageFromText(cleanedBodyText);
+  }
+
   return {
     detectedMetadata: metadata,
-    cleanedText: remainingLines.join('\n').trim()
+    cleanedText: cleanedBodyText
   };
 }
 
@@ -599,16 +739,18 @@ function extractTrailingAnswerKeyMap(rawText: string): {
 
 export function parseStructuredTextMCQs(
   rawText: string,
-  defaultPoints: number = 5
+  defaultPoints: number = 5,
+  languageHint?: AssessmentLanguage
 ): Omit<
   ParsedQuestionDraft,
   'issues' | 'isValid' | 'isDuplicateInBatch' | 'isDuplicateInBank' | 'existingQuestionId' | 'contentHash' | 'deterministicId'
 >[] {
-  const normalizedNewlines = rawText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
-  if (!normalizedNewlines) return [];
+  const preprocessed = preprocessRawAiText(rawText);
+  if (!preprocessed) return [];
 
   // Extract metadata header first so it doesn't pollute questions
-  const { cleanedText: textWithoutHeader } = extractAssessmentMetadataFromText(normalizedNewlines);
+  const { detectedMetadata, cleanedText: textWithoutHeader } = extractAssessmentMetadataFromText(preprocessed);
+  const effectiveLangHint = languageHint || detectedMetadata.language;
   const { cleanedBody, answerKeyByNumber } = extractTrailingAnswerKeyMap(textWithoutHeader);
 
   // Split into question blocks:
@@ -620,10 +762,10 @@ export function parseStructuredTextMCQs(
   let currentBlockHasAnswerLine = false;
   let currentBlockHasModelAnswer = false;
 
-  const questionStartRegex = /^\s*(?:(?:س|سؤال|السؤال|Q|Question)\s*\d*\s*[.:\-)]|\d+\s*[.\-)]|\[(?:سؤال مقالي|صح وخطأ|مقالي)\])\s+\S+/iu;
-  const optionLineTestRegex = /^\s*[([]?([A-Ha-hأابجدتثهـهو])[)\].\-:]\s+\S+/u;
-  const answerLineTestRegex = /^\s*(?:الإجابة الصحيحة|الاجابة الصحيحة|الإجابة|الاجابة|الجواب الصحيح|الجواب|الحل|Answer|Correct\s*Answer|Correct|ANS)\s*[:\-=]\s*\S+/iu;
-  const modelAnswerLineTestRegex = /^\s*(?:الإجابة النموذجية|الاجابة النموذجية|إجابة نموذجية|اجابة نموذجية|نموذج الإجابة|Model\s*Answer|Rubric)\s*[:\-=]\s*\S+/iu;
+  const questionStartRegex = /^\s*(?:(?:س|سؤال|السؤال|Q|Question)\s*#?\d*\s*[.:\-)]|\[\d+\]|\(\d+\)|\d+\s*[.\-)]|\[(?:سؤال مقالي|صح وخطأ|مقالي|True\s*\/\s*False|T\/F|Essay|Short\s*Answer)\])\s*\S+/iu;
+  const optionLineTestRegex = /^\s*(?:[✓✔☑✅*]+\s*)?[([]?([A-Ha-hأابجدتثهـهو])[)\].\-:]\s+\S+/u;
+  const answerLineTestRegex = /^\s*(?:الإجابة الصحيحة|الاجابة الصحيحة|الإجابة|الاجابة|الجواب الصحيح|الجواب|الحل|Answer|Correct\s*Answer|Correct\s*Option|Correct|Key|ANS)\s*[:\-=]\s*\S+/iu;
+  const modelAnswerLineTestRegex = /^\s*(?:الإجابة النموذجية|الاجابة النموذجية|إجابة نموذجية|اجابة نموذجية|نموذج الإجابة|الجواب النموذجي|معايير التقييم|معايير التصحيح|Model\s*Answer|Ideal\s*Answer|Expected\s*Answer|Scoring\s*Rubric|Rubric)\s*[:\-=]\s*\S*/iu;
 
   for (const rawLine of lines) {
     const trimmed = rawLine.trim();
@@ -669,8 +811,8 @@ export function parseStructuredTextMCQs(
   }
 
   return blocks.map((blockLines, idx) => {
-    const stemArabicLines: string[] = [];
-    const stemEnglishLines: string[] = [];
+    const rawStemLines: string[] = [];
+    const explicitEnglishStemLines: string[] = [];
     const rawOptions: RawOptionCandidate[] = [];
     let explicitAnswerToken = '';
     let explanationLines: string[] = [];
@@ -681,11 +823,12 @@ export function parseStructuredTextMCQs(
 
     const optionRegex = /^\s*(?:([✓✔☑✅*]+)\s*)?[([]?([A-Ha-hأابجدتثهـهو1-8])[)\].\-:]\s*(.+)$/u;
     const inlineMultiOptionRegex = /(?:^|\s+)[([]?([A-Ha-hأابجدتثهـهو])[)\].\-:]\s*([^([\n]+?)(?=\s+[([]?[A-Ha-hأابجدتثهـهو][)\].\-:]|$)/gu;
-    const answerRegex = /^\s*(?:الإجابة الصحيحة|الاجابة الصحيحة|الإجابة|الاجابة|الجواب الصحيح|الجواب|الحل|Answer|Correct\s*Answer|Correct|ANS)\s*[:\-=]?\s*(.+)$/iu;
-    const modelAnswerRegex = /^\s*(?:الإجابة النموذجية|الاجابة النموذجية|الجواب النموذجي|معايير التصحيح|سلم التصحيح|Model\s*Answer|Rubric)\s*[:\-=]?\s*(.+)$/iu;
-    const explanationRegex = /^\s*(?:التعليل الطبي|التعليل العام|التعليل|الشرح|التفسير|توضيح|السبب|Explanation|Rationale|Reason)\s*[:\-=]\s*(.+)$/iu;
-    const pointsRegex = /^\s*(?:الدرجة|النقاط|درجة السؤال|Points|Score|Marks)\s*[:\-=]\s*(\d+(?:\.\d+)?)/iu;
+    const answerRegex = /^\s*(?:الإجابة الصحيحة|الاجابة الصحيحة|الإجابة|الاجابة|الجواب الصحيح|الجواب|الحل|Answer|Correct\s*Answer|Correct\s*Option|Correct|Key|ANS)\s*[:\-=]?\s*(.+)$/iu;
+    const modelAnswerRegex = /^\s*(?:الإجابة النموذجية|الاجابة النموذجية|الجواب النموذجي|نموذج الإجابة|معايير التصحيح|معايير التقييم|سلم التصحيح|Model\s*Answer|Ideal\s*Answer|Expected\s*Answer|Scoring\s*Rubric|Rubric)\s*[:\-=]?\s*(.*)$/iu;
+    const explanationRegex = /^\s*(?:التعليل الطبي|التعليل العام|التعليل العلمي|التعليل|الشرح|التفسير|توضيح|السبب|Explanation|Clinical\s*Rationale|Rationale|Reason)\s*[:\-=]\s*(.+)$/iu;
+    const pointsRegex = /^\s*(?:الدرجة|النقاط|درجة السؤال|Points|Score|Marks|Grade)\s*[:\-=]\s*(\d+(?:\.\d+)?)/iu;
     const typeIndicatorRegex = /^\s*(?:نوع السؤال|النوع|Question\s*Type)\s*[:\-=]\s*(.+)$/iu;
+    const explicitEnStemPrefixRegex = /^\s*(?:EN|English|الترجمة|النص الإنجليزي)\s*[:\-]\s*(.+)$/iu;
 
     let inExplanation = false;
     let inModelAnswer = false;
@@ -705,7 +848,7 @@ export function parseStructuredTextMCQs(
       if (typeMatch) {
         const val = typeMatch[1].toLowerCase();
         if (/مقالي|essay|short/i.test(val)) explicitQuestionType = 'essay';
-        else if (/صح|خطأ|true|false/i.test(val)) explicitQuestionType = 'true_false';
+        else if (/صح|خطأ|true|false|t\/f/i.test(val)) explicitQuestionType = 'true_false';
         else explicitQuestionType = 'mcq';
         continue;
       }
@@ -716,7 +859,9 @@ export function parseStructuredTextMCQs(
         inModelAnswer = true;
         inExplanation = false;
         explicitQuestionType = 'essay';
-        modelAnswerLines.push(modelMatch[1].trim());
+        if (modelMatch[1].trim()) {
+          modelAnswerLines.push(modelMatch[1].trim());
+        }
         continue;
       }
 
@@ -735,8 +880,8 @@ export function parseStructuredTextMCQs(
         inExplanation = false;
         inModelAnswer = false;
         const rawAns = ansMatch[1].trim();
-        // Check if inline explanation is appended on the same line after " - التعليل: ..."
-        const inlineExpSplit = rawAns.split(/\s+(?:[\-|]|التعليل|الشرح|Explanation)\s*[:\-]?\s*/iu);
+        // Check if inline explanation is appended on the same line after " - التعليل: ..." or " - Rationale: ..."
+        const inlineExpSplit = rawAns.split(/\s+(?:[\-|—–]\s*(?:التعليل|الشرح|Explanation|Rationale)?|(?:التعليل|الشرح|Explanation|Rationale))\s*[:\-]\s*/iu);
         explicitAnswerToken = inlineExpSplit[0].trim();
         if (inlineExpSplit.length > 1 && inlineExpSplit.slice(1).join(' ').trim()) {
           explanationLines.push(inlineExpSplit.slice(1).join(' ').trim());
@@ -744,8 +889,9 @@ export function parseStructuredTextMCQs(
         continue;
       }
 
-      // Check sub-option explanation line: e.g. "تعليل أ: صحيح لأنه..." or "تعليل الخيار أ: ..."
-      const optionSpecificExpMatch = line.match(/^\s*(?:تعليل|التعليل الخاص بـ|تفسير)\s*(?:الخيار\s*)?([A-Ha-hأابجدتثهـهو1-8])\s*[:\-]\s*(.+)$/iu);
+      // Check sub-option explanation line in Arabic or English:
+      // e.g. "تعليل أ: صحيح لأنه..." or "Rationale A: Correct because..." or "Option B Explanation: ..."
+      const optionSpecificExpMatch = line.match(/^\s*(?:تعليل|التعليل الخاص بـ|تفسير|Rationale|Explanation|Option)\s*(?:الخيار\s*|for\s*|of\s*)?[([]?([A-Ha-hأابجدتثهـهو1-8])[)\]]?\s*(?:Rationale|Explanation)?\s*[:\-]\s*(.+)$/iu);
       if (optionSpecificExpMatch) {
         const targetMarker = optionSpecificExpMatch[1].trim();
         const expBody = optionSpecificExpMatch[2].trim();
@@ -756,7 +902,7 @@ export function parseStructuredTextMCQs(
         continue;
       }
 
-      // Check if multiple options are on a single line (e.g. "أ) خيار 1   ب) خيار 2   ج) خيار 3")
+      // Check if multiple options are on a single line (e.g. "أ) خيار 1   ب) خيار 2   ج) خيار 3" or "A) Opt 1   B) Opt 2 *   C) Opt 3")
       const inlineMatches = Array.from(line.matchAll(inlineMultiOptionRegex));
       if (inlineMatches.length >= 2) {
         inExplanation = false;
@@ -782,7 +928,7 @@ export function parseStructuredTextMCQs(
         const markerChar = optMatch[2];
         const isNumericMarker = /^[1-8]$/.test(markerChar);
 
-        if (!isNumericMarker || stemArabicLines.length > 0 || stemEnglishLines.length > 0) {
+        if (!isNumericMarker || rawStemLines.length > 0 || explicitEnglishStemLines.length > 0) {
           inExplanation = false;
           inModelAnswer = false;
           const { cleanedText, isCorrect } = parseInlineCorrectMarker(optMatch[3]);
@@ -807,25 +953,51 @@ export function parseStructuredTextMCQs(
         continue;
       }
 
+      // Check explicit "EN: ..." stem line
+      const explicitEnMatch = line.match(explicitEnStemPrefixRegex);
+      if (explicitEnMatch) {
+        explicitEnglishStemLines.push(explicitEnMatch[1].trim());
+        continue;
+      }
+
       // Otherwise it is part of the question stem
-      if (stemArabicLines.length === 0 && stemEnglishLines.length === 0) {
-        // Detect question type tag in stem (e.g. "[صح وخطأ]", "[سؤال مقالي]")
-        if (/\[\s*(?:صح\s*و\s*خطأ|صواب\s*\/\s*خطأ|true\s*\/\s*false)\s*\]/iu.test(line)) {
-          explicitQuestionType = 'true_false';
-          line = line.replace(/\[\s*(?:صح\s*و\s*خطأ|صواب\s*\/\s*خطأ|true\s*\/\s*false)\s*\]/iu, '').trim();
-        } else if (/\[\s*(?:سؤال\s*مقالي|مقالي|essay|short\s*answer)\s*\]/iu.test(line)) {
-          explicitQuestionType = 'essay';
-          line = line.replace(/\[\s*(?:سؤال\s*مقالي|مقالي|essay|short\s*answer)\s*\]/iu, '').trim();
+      if (rawStemLines.length === 0 && explicitEnglishStemLines.length === 0) {
+        // Detect question type tag anywhere in first stem line (e.g. "2. [صح وخطأ] ...", "[True/False] 2. ...", "[Essay]")
+        const tfTagRegex = /\[\s*(?:صح\s*و\s*خطأ|صواب\s*و\s*خطأ|صواب\s*\/\s*خطأ|صح\s*\/\s*خطأ|true\s*\/\s*false|true\s*or\s*false|t\/f)\s*\]|\(\s*(?:صح\s*أم\s*خطأ|true\s*or\s*false)\s*\)/iu;
+        const essayTagRegex = /\[\s*(?:سؤال\s*مقالي|مقالي|سؤال\s*سريري\s*مقالي|essay|short\s*answer|clinical\s*essay)\s*\]/iu;
+
+        // Strip leading question number first or after tag
+        const qNumMatch = line.match(/^\s*(?:(?:س|سؤال|السؤال|Q|Question)\s*#?(\d+)\s*[.:\-)]?|\[\s*(\d+)\s*\]|\(\s*(\d+)\s*\)|(\d+)\s*[.\-):])\s*(.+)$/iu);
+        if (qNumMatch) {
+          const numStr = qNumMatch[1] || qNumMatch[2] || qNumMatch[3] || qNumMatch[4];
+          if (numStr) detectedQuestionNumber = parseInt(numStr, 10);
+          line = qNumMatch[5].trim();
         }
 
-        // Strip leading question number (e.g. "1. ", "س1: ", "Q1) ")
-        const qNumMatch = line.match(/^\s*(?:(?:س|سؤال|السؤال|Q|Question)\s*(\d+)\s*[.:\-)]?|(\d+)\s*[.\-)])\s*(.+)$/iu);
-        if (qNumMatch) {
-          const numStr = qNumMatch[1] || qNumMatch[2];
-          if (numStr) detectedQuestionNumber = parseInt(numStr, 10);
-          line = qNumMatch[3].trim();
+        if (tfTagRegex.test(line)) {
+          explicitQuestionType = 'true_false';
+          line = line.replace(tfTagRegex, '').trim();
+        } else if (essayTagRegex.test(line)) {
+          explicitQuestionType = 'essay';
+          line = line.replace(essayTagRegex, '').trim();
         }
+
+        // Strip question number if it appeared AFTER the type tag (e.g. "[True/False] 1. Question...")
+        const qNumAfterTag = line.match(/^\s*(?:(?:س|سؤال|السؤال|Q|Question)\s*#?(\d+)\s*[.:\-)]?|(\d+)\s*[.\-):])\s*(.+)$/iu);
+        if (qNumAfterTag) {
+          const numStr = qNumAfterTag[1] || qNumAfterTag[2];
+          if (numStr && !detectedQuestionNumber) detectedQuestionNumber = parseInt(numStr, 10);
+          line = qNumAfterTag[3].trim();
+        }
+
         // Extract inline points like "(5 نقاط)" or "[5 pts]" at the end of the stem
+        const inlinePts = line.match(/\s*[\(\[]\s*(\d+)\s*(?:نقاط|نقطة|درجات|درجة|pts|points|marks)\s*[\)\]]\s*$/iu);
+        if (inlinePts) {
+          points = Number(inlinePts[1]) || defaultPoints;
+          line = line.replace(inlinePts[0], '').trim();
+        }
+      } else {
+        // Also check inline points on subsequent stem lines
         const inlinePts = line.match(/\s*[\(\[]\s*(\d+)\s*(?:نقاط|نقطة|درجات|درجة|pts|points|marks)\s*[\)\]]\s*$/iu);
         if (inlinePts) {
           points = Number(inlinePts[1]) || defaultPoints;
@@ -833,19 +1005,38 @@ export function parseStructuredTextMCQs(
         }
       }
 
-      // Detect if line is purely English vs Arabic/bilingual
-      const hasArabicChars = /[\u0600-\u06FF]/.test(line);
-      if (!hasArabicChars && stemArabicLines.length > 0) {
-        stemEnglishLines.push(line);
-      } else {
-        stemArabicLines.push(line);
+      if (line) {
+        rawStemLines.push(line);
       }
     }
 
-    const stemArabic = stemArabicLines.join(' ').trim() || stemEnglishLines.join(' ').trim();
-    const stemEnglish = stemArabicLines.length > 0 && stemEnglishLines.length > 0
-      ? stemEnglishLines.join(' ').trim()
-      : undefined;
+    // Intelligently separate or combine Arabic & English stem lines without splitting multi-line English vignettes!
+    const arabicStemLines = rawStemLines.filter(l => /[\u0600-\u06FF]/.test(l));
+    const pureEnglishStemLines = [
+      ...rawStemLines.filter(l => !/[\u0600-\u06FF]/.test(l) && /[A-Za-z]/.test(l)),
+      ...explicitEnglishStemLines
+    ];
+
+    let stemArabic = '';
+    let stemEnglish: string | undefined = undefined;
+    let questionLanguage: AssessmentLanguage = effectiveLangHint || 'ar';
+
+    if (arabicStemLines.length > 0 && pureEnglishStemLines.length > 0) {
+      // Bilingual stem (has both Arabic lines and pure English lines)
+      stemArabic = arabicStemLines.join(' ').trim();
+      stemEnglish = pureEnglishStemLines.join(' ').trim();
+      questionLanguage = 'bilingual';
+    } else if (arabicStemLines.length === 0 && pureEnglishStemLines.length > 0) {
+      // Pure English stem (even if multi-line clinical vignette!)
+      stemArabic = pureEnglishStemLines.join(' ').trim();
+      stemEnglish = pureEnglishStemLines.join(' ').trim();
+      questionLanguage = 'en';
+    } else {
+      // Pure Arabic stem (may contain inline English terms)
+      stemArabic = rawStemLines.join(' ').trim();
+      stemEnglish = explicitEnglishStemLines.length > 0 ? explicitEnglishStemLines.join(' ').trim() : undefined;
+      questionLanguage = effectiveLangHint === 'bilingual' ? 'bilingual' : 'ar';
+    }
 
     // Determine Final Question Type
     let questionType: QuestionType = explicitQuestionType || 'mcq';
@@ -854,16 +1045,16 @@ export function parseStructuredTextMCQs(
         questionType = 'essay';
       } else if (
         rawOptions.length === 2 &&
-        /صح|صواب|true/i.test(rawOptions[0]?.text) &&
-        /خطأ|خاطئ|false/i.test(rawOptions[1]?.text)
+        /^(?:صح|صواب|صحيح|صح \(صواب\)|صح \/ true|true|t)$/i.test(rawOptions[0]?.text.trim()) &&
+        /^(?:خطأ|خاطئ|غلط|خطأ \/ false|false|f)$/i.test(rawOptions[1]?.text.trim())
       ) {
         questionType = 'true_false';
-      } else if (rawOptions.length === 0 && /^(?:صح|صواب|خطأ|true|false)$/i.test(explicitAnswerToken)) {
+      } else if (rawOptions.length === 0 && /^(?:صح|صواب|صحيح|خطأ|خاطئ|true|false|t|f)$/i.test(explicitAnswerToken)) {
         questionType = 'true_false';
       }
     }
 
-    // Build Options dynamically based on Question Type
+    // Build Options dynamically based on Question Type and Language
     let options: QuestionOption[] = [];
     let correctOptionId = '';
 
@@ -871,19 +1062,32 @@ export function parseStructuredTextMCQs(
       options = [];
       correctOptionId = 'essay';
     } else if (questionType === 'true_false') {
-      const optAExp = rawOptions.find(o => /^(opt-a|a|أ|1)/i.test(o.marker) || /صح/i.test(o.text))?.explanation;
-      const optBExp = rawOptions.find(o => /^(opt-b|b|ب|2)/i.test(o.marker) || /خطأ/i.test(o.text))?.explanation;
+      const optAExp = rawOptions.find(o => /^(opt-a|a|أ|1)/i.test(o.marker) || /صح|صواب|true/i.test(o.text))?.explanation;
+      const optBExp = rawOptions.find(o => /^(opt-b|b|ب|2)/i.test(o.marker) || /خطأ|خاطئ|false/i.test(o.text))?.explanation;
+
+      const trueLabel =
+        questionLanguage === 'en'
+          ? 'True'
+          : questionLanguage === 'bilingual'
+          ? 'صح / True'
+          : 'صح (صواب)';
+      const falseLabel =
+        questionLanguage === 'en'
+          ? 'False'
+          : questionLanguage === 'bilingual'
+          ? 'خطأ / False'
+          : 'خطأ';
 
       options = [
-        { id: 'opt-a', textArabic: 'صح (صواب)', textEnglish: 'True', ...(optAExp ? { explanationArabic: optAExp } : {}) },
-        { id: 'opt-b', textArabic: 'خطأ', textEnglish: 'False', ...(optBExp ? { explanationArabic: optBExp } : {}) }
+        { id: 'opt-a', textArabic: trueLabel, textEnglish: 'True', ...(optAExp ? { explanationArabic: optAExp } : {}) },
+        { id: 'opt-b', textArabic: falseLabel, textEnglish: 'False', ...(optBExp ? { explanationArabic: optBExp } : {}) }
       ];
 
       if (explicitAnswerToken) {
         correctOptionId = resolveCanonicalOptionId(explicitAnswerToken, options);
       } else {
-        const markedTrue = rawOptions.find(o => o.isMarkedCorrect && /صح|صواب/i.test(o.text));
-        const markedFalse = rawOptions.find(o => o.isMarkedCorrect && /خطأ/i.test(o.text));
+        const markedTrue = rawOptions.find(o => o.isMarkedCorrect && /صح|صواب|true/i.test(o.text));
+        const markedFalse = rawOptions.find(o => o.isMarkedCorrect && /خطأ|خاطئ|false/i.test(o.text));
         if (markedFalse) correctOptionId = 'opt-b';
         else if (markedTrue) correctOptionId = 'opt-a';
       }
@@ -895,9 +1099,12 @@ export function parseStructuredTextMCQs(
       options = Array.from({ length: count }).map((_, optIdx) => {
         const candidate = rawOptions[optIdx];
         const optId = getOptionIdByIndex(optIdx);
+        const optText = candidate ? candidate.text : '';
+        const isPureEnOpt = optText && !/[\u0600-\u06FF]/.test(optText) && /[A-Za-z]/.test(optText);
         return {
           id: optId,
-          textArabic: candidate ? candidate.text : '',
+          textArabic: optText,
+          ...(isPureEnOpt ? { textEnglish: optText } : {}),
           ...(candidate?.explanation ? { explanationArabic: candidate.explanation } : {}),
           ...(candidate?.isMarkedCorrect !== undefined ? { isCorrect: candidate.isMarkedCorrect } : {})
         };
@@ -923,6 +1130,7 @@ export function parseStructuredTextMCQs(
       tempId: `draft-${idx}-${Date.now()}`,
       sourceIndex: idx + 1,
       questionType,
+      language: questionLanguage,
       stemArabic,
       stemEnglish,
       options,
@@ -995,7 +1203,8 @@ function parseDelimitedRows(raw: string, delimiter: string): string[][] {
 
 export function parseCsvMCQs(
   rawCsv: string,
-  defaultPoints: number = 5
+  defaultPoints: number = 5,
+  languageHint?: AssessmentLanguage
 ): Omit<
   ParsedQuestionDraft,
   'issues' | 'isValid' | 'isDuplicateInBatch' | 'isDuplicateInBank' | 'existingQuestionId' | 'contentHash' | 'deterministicId'
@@ -1037,11 +1246,11 @@ export function parseCsvMCQs(
   const colOptD = findCol([/^(d|opt_d|optd|option_d|option d|د|خيار د|الخيار د|4)$/i], 4);
   const colOptE = findCol([/^(e|opt_e|opte|option_e|option e|هـ|ه|خيار هـ|الخيار هـ|5)$/i], -1);
 
-  const colExpA = findCol([/^(exp_a|تعليل أ|التعليل أ|تعليل الخيار أ)$/i], -1);
-  const colExpB = findCol([/^(exp_b|تعليل ب|التعليل ب|تعليل الخيار ب)$/i], -1);
-  const colExpC = findCol([/^(exp_c|تعليل ج|التعليل ج|تعليل الخيار ج)$/i], -1);
-  const colExpD = findCol([/^(exp_d|تعليل د|التعليل د|تعليل الخيار د)$/i], -1);
-  const colExpE = findCol([/^(exp_e|تعليل هـ|التعليل هـ|تعليل الخيار هـ)$/i], -1);
+  const colExpA = findCol([/^(exp_a|rationale_a|تعليل أ|التعليل أ|تعليل الخيار أ)$/i], -1);
+  const colExpB = findCol([/^(exp_b|rationale_b|تعليل ب|التعليل ب|تعليل الخيار ب)$/i], -1);
+  const colExpC = findCol([/^(exp_c|rationale_c|تعليل ج|التعليل ج|تعليل الخيار ج)$/i], -1);
+  const colExpD = findCol([/^(exp_d|rationale_d|تعليل د|التعليل د|تعليل الخيار د)$/i], -1);
+  const colExpE = findCol([/^(exp_e|rationale_e|تعليل هـ|التعليل هـ|تعليل الخيار هـ)$/i], -1);
 
   const colAns = findCol([/^(answer|correct|correctoptionid|correct_answer|الإجابة|الاجابة|الإجابة الصحيحة|الجواب|الحل)$/i], 5);
   const colModelAns = findCol([/^(model_answer|rubric|الإجابة النموذجية|الجواب النموذجي|سلم التصحيح)$/i], -1);
@@ -1052,6 +1261,7 @@ export function parseCsvMCQs(
     const stemArabic = (row[colStemAr] || '').trim();
     const stemEnglish = colStemEn >= 0 ? (row[colStemEn] || '').trim() : undefined;
     const rawTypeVal = colType >= 0 ? (row[colType] || '').trim().toLowerCase() : '';
+    const detectedLang = languageHint || (stemEnglish ? 'bilingual' : detectLanguageFromText(stemArabic));
 
     let questionType: QuestionType = 'mcq';
     if (/مقالي|essay/i.test(rawTypeVal)) questionType = 'essay';
@@ -1071,8 +1281,8 @@ export function parseCsvMCQs(
       correctOptionId = 'essay';
     } else if (questionType === 'true_false') {
       options = [
-        { id: 'opt-a', textArabic: rawA.cleanedText || 'صح (صواب)', textEnglish: 'True' },
-        { id: 'opt-b', textArabic: rawB.cleanedText || 'خطأ', textEnglish: 'False' }
+        { id: 'opt-a', textArabic: rawA.cleanedText || (detectedLang === 'en' ? 'True' : 'صح (صواب)'), textEnglish: 'True' },
+        { id: 'opt-b', textArabic: rawB.cleanedText || (detectedLang === 'en' ? 'False' : 'خطأ'), textEnglish: 'False' }
       ];
       if (rawA.isCorrect) correctOptionId = 'opt-a';
       else if (rawB.isCorrect) correctOptionId = 'opt-b';
@@ -1112,6 +1322,7 @@ export function parseCsvMCQs(
       tempId: `csv-draft-${idx}-${Date.now()}`,
       sourceIndex: idx + 1,
       questionType,
+      language: detectedLang,
       stemArabic,
       stemEnglish: stemEnglish || undefined,
       options,
@@ -1130,7 +1341,8 @@ export function parseCsvMCQs(
 
 export function parseJsonMCQs(
   rawJson: string,
-  defaultPoints: number = 5
+  defaultPoints: number = 5,
+  languageHint?: AssessmentLanguage
 ): Omit<
   ParsedQuestionDraft,
   'issues' | 'isValid' | 'isDuplicateInBatch' | 'isDuplicateInBank' | 'existingQuestionId' | 'contentHash' | 'deterministicId'
@@ -1146,9 +1358,11 @@ export function parseJsonMCQs(
 
   return items.map((item, idx) => {
     const stemArabic = String(
-      item.stemArabic || item.questionArabic || item.question || item.stem || item['السؤال'] || ''
+      item.stemArabic || item.questionArabic || item.question || item.stem || item.stemEnglish || item['السؤال'] || ''
     ).trim();
     const stemEnglish = String(item.stemEnglish || item.questionEnglish || '').trim() || undefined;
+    const detectedLang: AssessmentLanguage =
+      item.language || languageHint || (stemEnglish && stemArabic !== stemEnglish ? 'bilingual' : detectLanguageFromText(stemArabic));
 
     const rawType = String(item.questionType || item.type || item['نوع السؤال'] || '').toLowerCase();
     let questionType: QuestionType = 'mcq';
@@ -1166,10 +1380,10 @@ export function parseJsonMCQs(
         }
         return {
           id: optId,
-          textArabic: String(rawOpt?.textArabic || rawOpt?.text || rawOpt?.label || '').trim(),
+          textArabic: String(rawOpt?.textArabic || rawOpt?.text || rawOpt?.textEnglish || rawOpt?.label || '').trim(),
           ...(rawOpt?.textEnglish ? { textEnglish: String(rawOpt.textEnglish).trim() } : {}),
-          ...(rawOpt?.explanationArabic || rawOpt?.explanation
-            ? { explanationArabic: String(rawOpt.explanationArabic || rawOpt.explanation).trim() }
+          ...(rawOpt?.explanationArabic || rawOpt?.explanation || rawOpt?.rationale
+            ? { explanationArabic: String(rawOpt.explanationArabic || rawOpt.explanation || rawOpt.rationale).trim() }
             : {}),
           ...(rawOpt?.isCorrect !== undefined ? { isCorrect: Boolean(rawOpt.isCorrect) } : {})
         };
@@ -1222,6 +1436,7 @@ export function parseJsonMCQs(
       tempId: `json-draft-${idx}-${Date.now()}`,
       sourceIndex: idx + 1,
       questionType,
+      language: detectedLang,
       stemArabic,
       stemEnglish,
       options,
@@ -1241,6 +1456,7 @@ export function parseJsonMCQs(
 export function parseBulkQuestionsInput(params: {
   rawInput: string;
   formatHint?: 'auto' | 'text' | 'csv' | 'json';
+  languageHint?: AssessmentLanguage;
   fileName?: string;
   bankId: string;
   defaultPoints?: number;
@@ -1253,6 +1469,7 @@ export function parseBulkQuestionsInput(params: {
   const {
     rawInput,
     formatHint = 'auto',
+    languageHint,
     fileName = '',
     bankId,
     defaultPoints = 5,
@@ -1264,8 +1481,12 @@ export function parseBulkQuestionsInput(params: {
     return { detectedFormat: 'text', drafts: [], detectedMetadata: {} };
   }
 
-  // Extract Metadata Header (Title, Type, Level, Batch, Duration)
+  // Extract Metadata Header (Language, Title, Type, Level, Batch, Duration)
   const { detectedMetadata, cleanedText } = extractAssessmentMetadataFromText(trimmed);
+  const effectiveLanguage = detectedMetadata.language || languageHint || detectLanguageFromText(cleanedText);
+  if (!detectedMetadata.language) {
+    detectedMetadata.language = effectiveLanguage;
+  }
 
   const lowerFile = fileName.toLowerCase();
   let detectedFormat: 'text' | 'csv' | 'json' = 'text';
@@ -1293,15 +1514,15 @@ export function parseBulkQuestionsInput(params: {
 
   try {
     if (detectedFormat === 'json') {
-      rawDrafts = parseJsonMCQs(cleanedText, defaultPoints);
+      rawDrafts = parseJsonMCQs(cleanedText, defaultPoints, effectiveLanguage);
     } else if (detectedFormat === 'csv') {
-      rawDrafts = parseCsvMCQs(cleanedText, defaultPoints);
+      rawDrafts = parseCsvMCQs(cleanedText, defaultPoints, effectiveLanguage);
     } else {
-      rawDrafts = parseStructuredTextMCQs(cleanedText, defaultPoints);
+      rawDrafts = parseStructuredTextMCQs(cleanedText, defaultPoints, effectiveLanguage);
     }
   } catch (e) {
     detectedFormat = 'text';
-    rawDrafts = parseStructuredTextMCQs(cleanedText, defaultPoints);
+    rawDrafts = parseStructuredTextMCQs(cleanedText, defaultPoints, effectiveLanguage);
   }
 
   const validated = validateAndAnnotateDrafts(rawDrafts, bankId, existingBankQuestions);
@@ -1313,10 +1534,11 @@ export function parseBulkQuestionsInput(params: {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Ready-to-Use Medical Assessment Sample Templates (MCQ, True/False, Essay)
+// 5. Ready-to-Use Medical Assessment Sample Templates (Arabic, English, Bilingual)
 // ---------------------------------------------------------------------------
 
-export const SAMPLE_BULK_TEXT_TEMPLATE = `العنوان: اختبار منتصف بلوك القلب والأوعية الدموية (CVS)
+export const SAMPLE_BULK_TEXT_TEMPLATE = `اللغة: عربي
+العنوان: اختبار منتصف بلوك القلب والأوعية الدموية (CVS)
 النوع: اختبار
 المستوى: المستوى الرابع
 الدفعة: الدفعة السادسة
@@ -1342,54 +1564,398 @@ export const SAMPLE_BULK_TEXT_TEMPLATE = `العنوان: اختبار منتص�
 التعليل: الأدرينالين هو العلاج المنقذ للحياة ويجب حقنه فوراً بدون أي تأخير لعكس التوسع الوعائي والتشنج القصبي.
 النقاط: 10`;
 
+export const SAMPLE_BULK_TEXT_TEMPLATE_EN = `Language: English
+Title: Cardiovascular System (CVS) Block Midterm Exam
+Type: Exam
+Level: Level 4
+Batch: Batch 6
+Subject: Cardiovascular System (CVS-401)
+Duration: 30 minutes
+Question Timer: 45 seconds
+
+1. A 58-year-old male presents to the emergency department with crushing substernal chest pain and diaphoresis. ECG shows ST-segment elevation in leads II, III, and aVF. Occlusion of which coronary artery is the most likely cause?
+A) Left Anterior Descending Artery (LAD) (Rationale: Incorrect, supplies the anterior wall and septum, leads V1-V4)
+B) Right Coronary Artery (RCA) * (Rationale: Correct, supplies the inferior wall in 85% of right-dominant hearts)
+C) Left Circumflex Artery (LCx) (Rationale: Incorrect, supplies the lateral wall, leads I, aVL, V5-V6)
+D) Left Main Coronary Artery (LMCA) (Rationale: Incorrect, causes extensive anterolateral myocardial infarction)
+Answer: B
+Rationale: Inferior STEMI (leads II, III, aVF) is classically caused by occlusion of the Right Coronary Artery (RCA) via the posterior descending artery.
+
+2. [True/False] Angiotensin-Converting Enzyme (ACE) inhibitors are strictly contraindicated during pregnancy due to the risk of fetal renal dysplasia and oligohydramnios.
+A) True (Rationale: Correct, ACEIs/ARBs cause fetal renal failure and Potter sequence)
+B) False (Rationale: Incorrect, they carry an FDA Black Box Warning for fetotoxicity)
+Answer: True
+Rationale: ACE inhibitors and ARBs are teratogenic and must be discontinued immediately in pregnancy; labetalol, nifedipine, or methyldopa are safe alternatives.
+
+3. [Essay] List the first three immediate life-saving steps in the emergency management of acute anaphylactic shock, including the first-line drug, dose, and route of administration.
+Model Answer: 1. Intramuscular (IM) Epinephrine 0.3–0.5 mg (1:1000) into the mid-anterolateral thigh (vastus lateralis). 2. Airway assessment and high-flow 100% supplemental oxygen. 3. Two large-bore IV lines with rapid isotonic crystalloid (0.9% Normal Saline) bolus for hypotension.
+Rationale: Immediate IM epinephrine reverses bronchospasm and vasodilation and prevents progression to cardiovascular collapse.
+Points: 10`;
+
+export const SAMPLE_BULK_TEXT_TEMPLATE_BILINGUAL = `اللغة: ثنائي اللغة (عربي + إنجليزي)
+العنوان: الاختبار السريري الموحد لبلوك القلب (CVS Bilingual Exam)
+النوع: اختبار
+المستوى: المستوى الرابع
+الدفعة: الدفعة السادسة
+المدة: 30 دقيقة
+مؤقت السؤال: 45 ثانية
+
+1. مريض يبلغ من العمر 58 عاماً حضر للطوارئ بألم صدري ضاغط مع ارتفاع القطعة ST في المساري II, III, aVF. أي الشرايين التاجية هو الأكثر احتمالاً للإصابة؟
+A 58-year-old male presents with crushing chest pain and ST-segment elevation in leads II, III, and aVF. Which coronary artery is most likely occluded?
+أ) الشريان الأمامي النازل الأيسر / Left Anterior Descending (LAD) (التعليل: يغذي الجدار الأمامي والحاجز البطيني)
+ب) الشريان التاجي الأيمن / Right Coronary Artery (RCA) * (التعليل: صحيح لأنه يغذي الجدار السفلي للقلب في 85% من الحالات)
+ج) الشريان المنعطف الأيسر / Left Circumflex (LCx) (التعليل: يغذي الجدار الجانبي للبطين الأيسر)
+د) الجذع التاجي الأيسر الرئيسي / Left Main Coronary Artery (التعليل: يسبب احتشاءً أمامياً وجانبياً واسعاً)
+الإجابة: ب
+التعليل: ارتفاع القطعة ST في المساري السفلية (II, III, aVF) يدل على احتشاء الجدار السفلي المغذى بالشريان التاجي الأيمن (RCA).
+
+2. [صح وخطأ] يُمنع استخدام مثبطات الإنزيم المحول للأنجيوتنسين (ACE Inhibitors) أثناء الحمل بسبب خطر الفشل الكلوي الجنيني.
+ACE inhibitors are strictly contraindicated during pregnancy due to the risk of fetal renal dysplasia.
+أ) صح / True (التعليل: صحيح لأنها تسبب قصوراً كلوياً جنينياً وقلة السائل الأمنيوسي)
+ب) خطأ / False (التعليل: خطأ لأنها ممنوعة قطعياً في جميع مراحل الحمل)
+الإجابة: صح
+التعليل: مثبطات ACE تسبب تشوهات كلوية جنينية خطيرة وتستبدل بأدوية آمنة مثل اللابيتالول أو المثيل دوبا.`;
+
 export const SAMPLE_BULK_CSV_TEMPLATE = `السؤال,نوع السؤال,خيار أ,تعليل أ,خيار ب,تعليل ب,خيار ج,تعليل ج,خيار د,تعليل د,الإجابة الصحيحة,التعليل العام,النقاط
 "ما هو الصمام القلبي الذي يُسمع في الورب الخامس الأيسر عند خط منتصف الترقوة؟","mcq","الصمام الأبهري","يسمع في الورب الثاني الأيمن","الصمام الرئوي","يسمع في الورب الثاني الأيسر","الصمام التاجي (الميترالي)","صحيح لأنه يقع في قمة القلب","الصمام ثلاثي الشرف","يسمع عند الحافة اليسرى لعظم القص","ج","بؤرة التسمع التاجية تقع في قمة القلب عند الورب الخامس الأيسر.",5
 "البنسلين هو العلاج المعياري الأول لالتهاب البلعوم العقدي للوقاية من الحمى الروماتيزمية.","true_false","صح","صحيح لأنه يقضي على المكورات العقدية","خطأ","غير صحيح","","","","","أ","البنسلين هو الخيار الأول المثبت للوقاية من الحمى الروماتيزمية.",5`;
 
+export function getSampleTemplateByLanguage(lang: AssessmentLanguage): string {
+  if (lang === 'en') return SAMPLE_BULK_TEXT_TEMPLATE_EN;
+  if (lang === 'bilingual') return SAMPLE_BULK_TEXT_TEMPLATE_BILINGUAL;
+  return SAMPLE_BULK_TEXT_TEMPLATE;
+}
+
 // ---------------------------------------------------------------------------
-// 6. Universal Master AI Prompt for UMED (Arabic)
+// 6. Professional & Dynamic AI Prompt Builder for UMED Smart Exam Creator
 // ---------------------------------------------------------------------------
 
-export const UMED_AI_UNIVERSAL_PROMPT_ARABIC = `أنت مساعد أكاديمي طبي مبرمج خصيصاً لإعداد وتنسيق بنوك الأسئلة والاختبارات الطبية لمنصة UMED.
-مهمتك: تحويل أي ملف أو نص أسئلة أرسله لك (مهما كانت صيغته، ترتيبه، أو لغته)، أو إنشاء نموذج اختبار/مسابقة جديد حسب الموضوع الطبي المطلوب، وإخراج النتيجة بدقة تامة داخل مربع نص واحد (Code Block) جاهز للصق المباشر في UMED ويتعرف عليه النظام فوراً دون أي خطأ.
+export interface AiPromptGeneratorConfig {
+  mode: 'generate_new' | 'format_existing';
+  language: AssessmentLanguage; // 'ar' | 'en' | 'bilingual'
+  assessmentType: 'exam' | 'competition';
+  title?: string;
+  topic?: string;
+  studyLevelName?: string;
+  batchName?: string;
+  durationMinutes?: number;
+  questionDurationSeconds?: number;
+  mcqCount?: number;
+  optionsCount?: 4 | 5;
+  trueFalseCount?: number;
+  essayCount?: number;
+  difficultyMix?: 'balanced' | 'clinical_usmle' | 'foundational';
+  includeOptionRationales?: boolean;
+}
 
-قواعد التنسيق الإلزامية في نظام UMED:
-1. ترويسة الاختبار التلقائية (ضعها في بداية النص، سيتعرف عليها نظام UMED لضبط الإعدادات فوراً):
-العنوان: [اسم الاختبار أو المسابقة الطبية]
-النوع: [اختبار أو مسابقة]
-المستوى: [المستوى الدراسي، مثال: المستوى الرابع]
-الدفعة: [اسم أو رقم الدفعة، مثال: الدفعة السادسة]
-المادة: [المادة أو البلوك، مثال: بلوك القلب والأوعية الدموية CVS]
-المدة: [المدة بالدقائق، مثال: 30]
-مؤقت السؤال: [مدة السؤال بالثواني، مثال: 45]
+/**
+ * Generates a crystal-clear, highly structured, professional AI Prompt
+ * tailored to the user's selected Language ('ar' | 'en' | 'bilingual'),
+ * Mode ('generate_new' | 'format_existing'), Question counts, and Medical Style.
+ */
+export function buildProfessionalAiPrompt(config: AiPromptGeneratorConfig): string {
+  const {
+    mode = 'generate_new',
+    language = 'ar',
+    assessmentType = 'exam',
+    title = '',
+    topic = '',
+    studyLevelName = 'المستوى الرابع',
+    batchName = '',
+    durationMinutes = 30,
+    questionDurationSeconds = 45,
+    mcqCount = 10,
+    optionsCount = 4,
+    trueFalseCount = 2,
+    essayCount = 1,
+    difficultyMix = 'clinical_usmle',
+    includeOptionRationales = true
+  } = config;
 
-2. أنواع الأسئلة المدعومة وتنسيقها:
-أ) أسئلة الاختيار من متعدد (MCQ) - عدد خيارات ديناميكي (3 أو 4 أو 5 خيارات):
-1. [نص السؤال الطبي بالعربية]
-[Optional English stem if bilingual]
-أ) [نص الخيار الأول] (التعليل: سبب صحة أو خطأ هذا الخيار)
-ب) [نص الخيار الثاني] (التعليل: سبب صحة أو خطأ هذا الخيار)
-ج) [نص الخيار الثالث] (التعليل: سبب صحة أو خطأ هذا الخيار)
-د) [نص الخيار الرابع] (التعليل: سبب صحة أو خطأ هذا الخيار)
-الإجابة: [حرف الإجابة الصحيحة: أ أو ب أو ج أو د]
-التعليل: [التعليل الطبي الشامل للسؤال في سطر واحد]
+  const totalRequested = (Number(mcqCount) || 0) + (Number(trueFalseCount) || 0) + (Number(essayCount) || 0);
 
-ب) أسئلة الصواب والخطأ (True / False):
-2. [صح وخطأ] [نص العبارة الطبية]
-أ) صح (التعليل: ...)
-ب) خطأ (التعليل: ...)
+  if (language === 'en') {
+    const resolvedTitle = title.trim() || `${topic.trim() || 'Medical Block'} ${assessmentType === 'competition' ? 'Competition' : 'Exam'}`;
+    const resolvedTopic = topic.trim() || '[Insert Medical Topic / Lecture / Block Here]';
+    const styleDesc =
+      difficultyMix === 'clinical_usmle'
+        ? 'USMLE / NBME-style clinical vignettes (patient presentation, vitals, lab/imaging findings, and high-yield clinical decision-making)'
+        : difficultyMix === 'foundational'
+        ? 'Clear foundational medical science concepts, mechanisms, and direct recall'
+        : 'Balanced mix (50% clinical case vignettes and 50% high-yield medical concepts)';
+
+    const optionLetters = optionsCount === 5 ? ['A', 'B', 'C', 'D', 'E'] : ['A', 'B', 'C', 'D'];
+    const optionTemplateLines = optionLetters
+      .map(
+        (ltr, i) =>
+          `${ltr}) [Option ${ltr} text]${i === 1 ? ' *' : ''}${
+            includeOptionRationales ? ` (Rationale: ${i === 1 ? 'Correct because...' : 'Incorrect because...'})` : ''
+          }`
+      )
+      .join('\n');
+
+    return `You are a Senior Medical Education Professor and Assessment Architect for the UMED Medical Platform.
+${
+  mode === 'generate_new'
+    ? `Your task is to GENERATE a complete, rigorous, high-yield medical ${assessmentType === 'competition' ? 'competition' : 'exam'} in **Professional Medical English** based on the specifications below.`
+    : `Your task is to CONVERT, CLEAN, and STANDARDIZE the raw medical questions or lecture material I provide below into UMED's exact **Professional Medical English** format without omitting any question.`
+}
+
+==================================================
+1. ASSESSMENT SPECIFICATIONS
+==================================================
+- Target Language: Pure Medical English (EN)
+- Topic / Subject / Block: ${resolvedTopic}
+- Academic Level: ${studyLevelName}
+- Question Breakdown (Total: ${totalRequested} Questions):
+  * Multiple Choice Questions (MCQ - ${optionsCount} options each): ${mcqCount} questions
+  * True / False Questions: ${trueFalseCount} questions
+  * Clinical Essay / Short-Answer Questions: ${essayCount} questions
+- Academic & Clinical Style: ${styleDesc}
+- Scientific Accuracy: 100% evidence-based (Harrison's, Robbins, USMLE Step 1/2 CK standards).
+
+==================================================
+2. STRICT UMED OUTPUT FORMAT (MANDATORY)
+==================================================
+Output the entire response inside a SINGLE plain-text code block (\`\`\`text ... \`\`\`) starting with the metadata header and followed immediately by the numbered questions. Do NOT use markdown bolding (**...**) around question numbers or option letters.
+
+\`\`\`text
+Language: English
+Title: ${resolvedTitle}
+Type: ${assessmentType === 'competition' ? 'Competition' : 'Exam'}
+Level: ${studyLevelName}
+${batchName ? `Batch: ${batchName}\n` : ''}Subject: ${resolvedTopic}
+Duration: ${durationMinutes} minutes
+Question Timer: ${questionDurationSeconds} seconds
+
+1. [Full clinical vignette or question stem in English]
+${optionTemplateLines}
+Answer: B
+Rationale: [Concise 2-sentence clinical explanation of why the correct option is right and key differential points]
+${
+  trueFalseCount > 0
+    ? `
+2. [True/False] [Clear, unambiguous medical statement in English]
+A) True (Rationale: [Why True is correct/incorrect])
+B) False (Rationale: [Why False is correct/incorrect])
+Answer: [True or False]
+Rationale: [Overall medical explanation]
+`
+    : ''
+}${
+  essayCount > 0
+    ? `
+3. [Essay] [Clinical scenario or structured short-answer question]
+Model Answer: [Numbered key clinical points / grading rubric required for full marks]
+Rationale: [Core pathophysiology or clinical guideline summary]
+Points: 10
+`
+    : ''
+}\`\`\`
+
+CRITICAL RULES FOR UMED PARSER COMPATIBILITY:
+1. Separate each question from the next with ONE blank line.
+2. Always include both the inline \`*\` on the correct option AND the \`Answer: [Letter/True/False]\` line.
+3. Never write conversational intros or summaries outside the code block.
+
+${mode === 'generate_new' ? `Now, generate the ${totalRequested} questions for: ${resolvedTopic}` : 'Now, convert and standardize the following content:'}`;
+  }
+
+  if (language === 'bilingual') {
+    const resolvedTitle = title.trim() || `${assessmentType === 'competition' ? 'مسابقة' : 'اختبار'} ${topic.trim() || 'البلوك الطبي'} (Bilingual)`;
+    const resolvedTopic = topic.trim() || '[اكتب اسم الموضوع الطبي أو المحاضرة هنا]';
+
+    return `أنت بروفيسور في التعليم الطبي وخبير معتمد في صياغة الامتحانات الطبية ثنائية اللغة (العربية + الإنجليزية) لمنصة UMED الطبية.
+${
+  mode === 'generate_new'
+    ? `مهمتك: توليد ${assessmentType === 'competition' ? 'مسابقة طبية تنافسية' : 'اختبار أكاديمي طبي'} احترافي **ثنائي اللغة (عربي + إنجليزي معاً)** وفق المواصفات الدقيقة أدناه.`
+    : `مهمتك: تحويل وتنسيق الأسئلة أو المحاضرة المرفقة أدناه إلى صيغة منصة UMED القياسية **ثنائية اللغة (عربي + إنجليزي)** بدقة 100% دون حذف أي سؤال.`
+}
+
+==================================================
+أولاً: مواصفات الاختبار المطلوب
+==================================================
+- لغة الاختبار: ثنائي اللغة (Bilingual: Arabic + Medical English)
+  * يُكتب نص السؤال بالعربية في السطر الأول، وتحته مباشرة الترجمة الطبية الإنجليزية الدقيقة في السطر الثاني.
+  * تُكتب الخيارات بصيغة مزدوجة واضحة: (المصطلح بالعربية / English Medical Term).
+- الموضوع / المقرر الطبي: ${resolvedTopic}
+- المستوى الدراسي: ${studyLevelName}
+- توزيع الأسئلة المطلوبة (الإجمالي: ${totalRequested} سؤال):
+  * أسئلة اختيار من متعدد (MCQ - ${optionsCount} خيارات لكل سؤال): ${mcqCount} سؤال
+  * أسئلة صواب وخطأ (True / False): ${trueFalseCount} سؤال
+  * أسئلة مقالية سريرية (Clinical Essay): ${essayCount} سؤال
+- الأسلوب العلمي: حالات سريرية (Clinical Vignettes) وأسئلة طبية عالية الدقة مع تعليل علمي رصين.
+
+==================================================
+ثانياً: القالب الإلزامي المعتمد في نظام UMED
+==================================================
+أخرج النتيجة كاملة داخل مربع كود نصي واحد فقط (\`\`\`text ... \`\`\`) يبدأ بالترويسة التالية متبوعة بالأسئلة مباشرة دون أي نجوم تنسيق عريض (**):
+
+\`\`\`text
+اللغة: ثنائي اللغة (عربي + إنجليزي)
+العنوان: ${resolvedTitle}
+النوع: ${assessmentType === 'competition' ? 'مسابقة' : 'اختبار'}
+المستوى: ${studyLevelName}
+${batchName ? `الدفعة: ${batchName}\n` : ''}المادة: ${resolvedTopic}
+المدة: ${durationMinutes} دقيقة
+مؤقت السؤال: ${questionDurationSeconds} ثانية
+
+1. [نص السؤال أو الحالة السريرية باللغة العربية الفصحى]
+[Exact English clinical vignette / question stem on the second line]
+أ) [الخيار الأول بالعربية / Option A in English]${includeOptionRationales ? ' (التعليل: سبب صحة أو خطأ هذا الخيار)' : ''}
+ب) [الخيار الثاني بالعربية / Option B in English] *${includeOptionRationales ? ' (التعليل: صحيح لأن...)' : ''}
+ج) [الخيار الثالث بالعربية / Option C in English]${includeOptionRationales ? ' (التعليل: سبب صحة أو خطأ هذا الخيار)' : ''}
+د) [الخيار الرابع بالعربية / Option D in English]${includeOptionRationales ? ' (التعليل: سبب صحة أو خطأ هذا الخيار)' : ''}${
+      optionsCount === 5
+        ? `\nهـ) [الخيار الخامس بالعربية / Option E in English]${includeOptionRationales ? ' (التعليل: سبب صحة أو خطأ هذا الخيار)' : ''}`
+        : ''
+    }
+الإجابة: ب
+التعليل: [التعليل الطبي الشامل للسؤال باللغتين أو بالعربية مع المصطلحات الإنجليزية]
+${
+  trueFalseCount > 0
+    ? `
+2. [صح وخطأ] [نص العبارة الطبية بالعربية]
+[English translation of the medical statement]
+أ) صح / True (التعليل: ...)
+ب) خطأ / False (التعليل: ...)
+الإجابة: صح
+التعليل: [الشرح الطبي الدقيق للعبارة]
+`
+    : ''
+}${
+  essayCount > 0
+    ? `
+3. [سؤال مقالي] [نص السؤال السريري بالعربية]
+[English translation of the clinical essay question]
+الإجابة النموذجية: [عناصر الإجابة النموذجية الكاملة وسلّم التقييم بالعربية والإنجليزية]
+التعليل: [الملخص السريري والعلمي]
+النقاط: 10
+`
+    : ''
+}\`\`\`
+
+${mode === 'generate_new' ? `ابدأ الآن بتوليد الـ ${totalRequested} سؤال حول موضوع: ${resolvedTopic}` : 'ابدأ الآن بتحويل وتنسيق المحتوى التالي:'}`;
+  }
+
+  // Default: Arabic ('ar') with clear medical terminology
+  const resolvedTitle = title.trim() || `${assessmentType === 'competition' ? 'مسابقة' : 'اختبار'} ${topic.trim() || 'البلوك الطبي'}`;
+  const resolvedTopic = topic.trim() || '[اكتب اسم الموضوع الطبي أو المحاضرة هنا]';
+  const styleDescAr =
+    difficultyMix === 'clinical_usmle'
+      ? 'حالات سريرية واقعية (Clinical Vignettes) تحاكي اختبارات الكفاءة والـ USMLE (شكوى المريض، العلامات الحيوية، الفحوصات، والتشخيص أو التدبير العلاجي الأدق)'
+      : difficultyMix === 'foundational'
+      ? 'أسئلة مفاهيمية وأساسية مباشرة تقيس الفهم العميق للعلوم الطبية الأساسية والسريرية'
+      : 'مزيج متوازن (50% حالات سريرية تطبيقية + 50% مفاهيم طبية مباشرة عالية الأهمية)';
+
+  return `أنت بروفيسور في التعليم الطبي وخبير معتمد في إعداد بنوك الأسئلة والامتحانات الطبية لمنصة UMED.
+${
+  mode === 'generate_new'
+    ? `مهمتك: توليد ${assessmentType === 'competition' ? 'مسابقة طبية تنافسية' : 'اختبار أكاديمي طبي'} متكامل واحترافي **باللغة العربية الفصحى** (مع كتابة المصطلحات الطبية الإنجليزية الأساسية بين قوسين) وفق المواصفات الدقيقة أدناه.`
+    : `مهمتك: تحويل وتنسيق أي ملف أو نص أسئلة أو محاضرة أرسلها لك إلى صيغة منصة UMED القياسية **باللغة العربية الطبية** بدقة 100% دون حذف أي سؤال أو تغيير الإجابات الصحيحة المعتمدة.`
+}
+
+==================================================
+أولاً: مواصفات الاختبار الطبي المطلوب
+==================================================
+- لغة الاختبار: العربية الطبية الفصحى (مع المصطلحات الإنجليزية المعيارية بين قوسين مثل: Aortic Stenosis)
+- الموضوع / البلوك / المحاضرة: ${resolvedTopic}
+- المستوى الدراسي: ${studyLevelName}
+- توزيع الأسئلة المطلوبة (الإجمالي: ${totalRequested} سؤال):
+  * أسئلة اختيار من متعدد (MCQ - ${optionsCount} خيارات لكل سؤال): ${mcqCount} سؤال
+  * أسئلة صواب وخطأ (صح وخطأ): ${trueFalseCount} سؤال
+  * أسئلة مقالية سريرية (سؤال مقالي): ${essayCount} سؤال
+- المستوى والأسلوب العلمي: ${styleDescAr}
+
+==================================================
+ثانياً: القالب الإلزامي المعتمد في نظام UMED
+==================================================
+أخرج النتيجة كاملة داخل مربع كود نصي واحد فقط (\`\`\`text ... \`\`\`) يبدأ بالترويسة التلقائية ثم الأسئلة مباشرة، بدون استخدام علامات الخط العريض (**) حول أرقام الأسئلة أو حروف الخيارات:
+
+\`\`\`text
+اللغة: عربي
+العنوان: ${resolvedTitle}
+النوع: ${assessmentType === 'competition' ? 'مسابقة' : 'اختبار'}
+المستوى: ${studyLevelName}
+${batchName ? `الدفعة: ${batchName}\n` : ''}المادة: ${resolvedTopic}
+المدة: ${durationMinutes} دقيقة
+مؤقت السؤال: ${questionDurationSeconds} ثانية
+
+1. [نص السؤال الطبي أو الحالة السريرية بوضوح]
+أ) [نص الخيار الأول]${includeOptionRationales ? ' (التعليل: سبب خطأ هذا الخيار طبياً)' : ''}
+ب) [نص الخيار الثاني الصحيح] *${includeOptionRationales ? ' (التعليل: صحيح لأن...)' : ''}
+ج) [نص الخيار الثالث]${includeOptionRationales ? ' (التعليل: سبب خطأ هذا الخيار طبياً)' : ''}
+د) [نص الخيار الرابع]${includeOptionRationales ? ' (التعليل: سبب خطأ هذا الخيار طبياً)' : ''}${
+    optionsCount === 5
+      ? `\nهـ) [نص الخيار الخامس]${includeOptionRationales ? ' (التعليل: سبب خطأ هذا الخيار طبياً)' : ''}`
+      : ''
+  }
+الإجابة: ب
+التعليل: [التعليل الطبي الشامل للسؤال في سطرين يوضح آلية الإجابة الصحيحة وأهم الفروقات التشخيصية]
+${
+  trueFalseCount > 0
+    ? `
+2. [صح وخطأ] [نص العبارة الطبية الدقيقة]
+أ) صح (التعليل: [سبب الصحة أو الخطأ])
+ب) خطأ (التعليل: [سبب الصحة أو الخطأ])
 الإجابة: [صح أو خطأ]
-التعليل: [الشرح والتعليل الطبي للعبارة]
+التعليل: [الشرح الطبي المعتمد للعبارة]
+`
+    : ''
+}${
+  essayCount > 0
+    ? `
+3. [سؤال مقالي] [نص السؤال السريري المقالي]
+الإجابة النموذجية: [النقاط الطبية الأساسية المطلوبة في إجابة الطالب مرتبة بوضوح]
+التعليل: [الشرح العلمي والمرجعي للسؤال]
+النقاط: 10
+`
+    : ''
+}\`\`\`
 
-ج) الأسئلة المقالية والسريرية (Essay / Short Answer):
-3. [سؤال مقالي] [نص السؤال السريري]
-الإجابة النموذجية: [الإجابة النموذجية الكاملة وعناصر التقييم]
-التعليل: [التعليل والشرح العلمي]
-النقاط: [درجة السؤال، مثال: 10]
+قواعد صارمة لضمان التعرف الفوري في منصة UMED:
+1. افصل بين كل سؤال والذي يليه بسطر فارغ واحد.
+2. ضع دائماً علامة النجمة \`*\` بجوار الخيار الصحيح، بالإضافة إلى سطر \`الإجابة: [الحرف]\` أسفل الخيارات.
+3. لا تكتب أي مقدمات أو عبارات ترحيبية خارج مربع الكود (\`\`\`text).
 
-3. افصل بين كل سؤال والذي يليه بسطر فارغ واحد.
-4. لا تكتب أي مقدمات أو خاتمة خارج إطار الأسئلة، بل أخرج المحتوى كاملاً داخل كود موحد (Code Block).
+${mode === 'generate_new' ? `ابدأ الآن بتوليد الـ ${totalRequested} سؤال حول موضوع: ${resolvedTopic}` : 'الآن طبّق هذه القواعد بدقة 100% على المحتوى التالي:'}`;
+}
 
-الآن طبّق هذه القواعد بدقة 100% على المحتوى أو الموضوع التالي:`;
+export const UMED_AI_UNIVERSAL_PROMPT_ARABIC = buildProfessionalAiPrompt({
+  mode: 'format_existing',
+  language: 'ar',
+  assessmentType: 'exam',
+  mcqCount: 10,
+  optionsCount: 4,
+  trueFalseCount: 2,
+  essayCount: 1,
+  difficultyMix: 'clinical_usmle',
+  includeOptionRationales: true
+});
+
+export const UMED_AI_UNIVERSAL_PROMPT_ENGLISH = buildProfessionalAiPrompt({
+  mode: 'format_existing',
+  language: 'en',
+  assessmentType: 'exam',
+  mcqCount: 10,
+  optionsCount: 4,
+  trueFalseCount: 2,
+  essayCount: 1,
+  difficultyMix: 'clinical_usmle',
+  includeOptionRationales: true
+});
+
+export const UMED_AI_UNIVERSAL_PROMPT_BILINGUAL = buildProfessionalAiPrompt({
+  mode: 'format_existing',
+  language: 'bilingual',
+  assessmentType: 'exam',
+  mcqCount: 10,
+  optionsCount: 4,
+  trueFalseCount: 2,
+  essayCount: 1,
+  difficultyMix: 'clinical_usmle',
+  includeOptionRationales: true
+});
+
 
 

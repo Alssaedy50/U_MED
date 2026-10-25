@@ -30,7 +30,9 @@ import {
   ChevronDown,
   ChevronUp,
   Trophy,
-  BookOpen
+  BookOpen,
+  Globe,
+  Wand2
 } from 'lucide-react';
 import {
   QuestionBank,
@@ -42,22 +44,24 @@ import {
   DAR_AL_SALAM_SEED,
   QuestionOption,
   QuestionType,
+  AssessmentLanguage,
   DetectedAssessmentMetadata
 } from '../../types/umed.ts';
 import {
   parseBulkQuestionsInput,
   validateAndAnnotateDrafts,
-  SAMPLE_BULK_TEXT_TEMPLATE,
+  getSampleTemplateByLanguage,
   SAMPLE_BULK_CSV_TEMPLATE,
-  UMED_AI_UNIVERSAL_PROMPT_ARABIC
+  buildProfessionalAiPrompt
 } from '../../services/mcqBulkParser.ts';
 import {
   saveBulkImportDraftSession,
   loadBulkImportDraftSession,
   clearBulkImportDraftSession,
-  requestOptionalAiExplanations
+  requestOptionalAiExplanations,
+  requestDirectAiSmartExamGeneration
 } from '../../services/questionImportSyncService.ts';
-import { bulkSaveQuestions, createAssessment } from '../../services/assessmentService.ts';
+import { bulkSaveQuestions, createAssessment, updateQuestionBank } from '../../services/assessmentService.ts';
 
 export type ApprovalPublishMode = 'bank_only' | 'exam_only' | 'competition_only';
 
@@ -91,6 +95,7 @@ export default function BulkQuestionImportModal({
   onSaved
 }: BulkQuestionImportModalProps) {
   const [step, setStep] = useState<'input' | 'review'>('input');
+  const [examLanguage, setExamLanguage] = useState<AssessmentLanguage>(bank.language || 'ar');
   const [rawInput, setRawInput] = useState<string>('');
   const [sourceFormat, setSourceFormat] = useState<'auto' | 'text' | 'csv' | 'json'>('auto');
   const [defaultPoints, setDefaultPoints] = useState<number>(5);
@@ -99,13 +104,28 @@ export default function BulkQuestionImportModal({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({});
   const [showFormatOptions, setShowFormatOptions] = useState<boolean>(false);
+  const [showAiPromptStudio, setShowAiPromptStudio] = useState<boolean>(false);
   const [isOnline, setIsOnline] = useState<boolean>(
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
 
+  // AI Smart Exam Prompt Studio Configuration
+  const [aiMode, setAiMode] = useState<'generate_new' | 'format_existing'>('generate_new');
+  const [aiTopic, setAiTopic] = useState<string>(bank.titleArabic || 'بلوك القلب والأوعية الدموية (CVS)');
+  const [aiAssessmentType, setAiAssessmentType] = useState<'exam' | 'competition'>('exam');
+  const [aiMcqCount, setAiMcqCount] = useState<number>(10);
+  const [aiOptionsCount, setAiOptionsCount] = useState<4 | 5>(4);
+  const [aiTfCount, setAiTfCount] = useState<number>(2);
+  const [aiEssayCount, setAiEssayCount] = useState<number>(1);
+  const [aiDifficultyMix, setAiDifficultyMix] = useState<'clinical_usmle' | 'balanced' | 'foundational'>('clinical_usmle');
+  const [aiIncludeOptionRationales, setAiIncludeOptionRationales] = useState<boolean>(true);
+  const [directAiGenerating, setDirectAiGenerating] = useState<boolean>(false);
+
   // Direct Approval & Single-Mode Publishing State (Strictly Bank Only OR Exam Only OR Competition Only)
   const [publishMode, setPublishMode] = useState<ApprovalPublishMode>('bank_only');
-  const [publishTitle, setPublishTitle] = useState<string>(`اختبار ${bank.titleArabic}`);
+  const [publishTitle, setPublishTitle] = useState<string>(
+    (bank.language === 'en' ? `Exam: ${bank.titleEnglish || bank.titleArabic}` : `اختبار ${bank.titleArabic}`)
+  );
   const [publishStudyLevelId, setPublishStudyLevelId] = useState<string>(
     bank.studyLevelId || defaultStudyLevelId || 'lvl-4'
   );
@@ -123,21 +143,67 @@ export default function BulkQuestionImportModal({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const ARABIC_LETTERS = ['أ', 'ب', 'ج', 'د', 'هـ', 'و', 'ز', 'ح'];
+  const ENGLISH_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+
+  const currentStudyLevelTitle = useMemo(() => {
+    const found = studyLevels.find((l) => l.id === publishStudyLevelId);
+    if (!found) return examLanguage === 'en' ? 'Level 4' : 'المستوى الرابع';
+    return examLanguage === 'en' ? (found.titleEnglish || found.titleArabic) : found.titleArabic;
+  }, [studyLevels, publishStudyLevelId, examLanguage]);
+
+  const generatedAiPrompt = useMemo(() => {
+    return buildProfessionalAiPrompt({
+      mode: aiMode,
+      language: examLanguage,
+      assessmentType: aiAssessmentType,
+      title: publishTitle,
+      topic: aiTopic || bank.titleArabic,
+      studyLevelName: currentStudyLevelTitle,
+      durationMinutes: publishDurationMinutes || 30,
+      questionDurationSeconds: publishQuestionSeconds || 45,
+      mcqCount: aiMcqCount,
+      optionsCount: aiOptionsCount,
+      trueFalseCount: aiTfCount,
+      essayCount: aiEssayCount,
+      difficultyMix: aiDifficultyMix,
+      includeOptionRationales: aiIncludeOptionRationales
+    });
+  }, [
+    aiMode,
+    examLanguage,
+    aiAssessmentType,
+    publishTitle,
+    aiTopic,
+    bank.titleArabic,
+    currentStudyLevelTitle,
+    publishDurationMinutes,
+    publishQuestionSeconds,
+    aiMcqCount,
+    aiOptionsCount,
+    aiTfCount,
+    aiEssayCount,
+    aiDifficultyMix,
+    aiIncludeOptionRationales
+  ]);
 
   // Update default title & duration when switching between Exam Only and Competition Only
   const handleSelectPublishMode = (mode: ApprovalPublishMode) => {
     setPublishMode(mode);
     if (mode === 'exam_only') {
       setPublishTitle((prev) =>
-        !prev.trim() || prev.startsWith('مسابقة ')
-          ? `اختبار ${bank.titleArabic}`
+        !prev.trim() || prev.startsWith('مسابقة ') || prev.startsWith('Competition:')
+          ? examLanguage === 'en'
+            ? `Exam: ${bank.titleEnglish || bank.titleArabic}`
+            : `اختبار ${bank.titleArabic}`
           : prev
       );
       setPublishDurationMinutes(30);
     } else if (mode === 'competition_only') {
       setPublishTitle((prev) =>
-        !prev.trim() || prev.startsWith('اختبار ')
-          ? `مسابقة ${bank.titleArabic}`
+        !prev.trim() || prev.startsWith('اختبار ') || prev.startsWith('Exam:')
+          ? examLanguage === 'en'
+            ? `Competition: ${bank.titleEnglish || bank.titleArabic}`
+            : `مسابقة ${bank.titleArabic}`
           : prev
       );
       setPublishDurationMinutes(15);
@@ -162,6 +228,7 @@ export default function BulkQuestionImportModal({
     loadBulkImportDraftSession(bank.id).then((saved) => {
       if (!active || !saved) return;
       if ((saved.rawInputText && saved.rawInputText.trim()) || (saved.draftQuestions && saved.draftQuestions.length > 0)) {
+        if (saved.language) setExamLanguage(saved.language);
         setRawInput(saved.rawInputText || saved.rawInput || '');
         setSourceFormat((saved.sourceFormat as any) || 'auto');
         if (saved.defaultPoints) setDefaultPoints(saved.defaultPoints);
@@ -185,6 +252,7 @@ export default function BulkQuestionImportModal({
       id: `draft_${bank.id}`,
       bankId: bank.id,
       universityId: bank.universityId,
+      language: examLanguage,
       rawInputText: rawInput,
       sourceFormat: sourceFormat === 'auto' ? 'text' : sourceFormat,
       defaultPoints,
@@ -192,25 +260,27 @@ export default function BulkQuestionImportModal({
       updatedAt: nowIso
     };
     saveBulkImportDraftSession(session).catch(() => {});
-  }, [bank.id, bank.universityId, rawInput, sourceFormat, defaultPoints, drafts]);
+  }, [bank.id, bank.universityId, examLanguage, rawInput, sourceFormat, defaultPoints, drafts]);
 
   const toggleExpandCard = (tempId: string) => {
     setExpandedCards((prev) => ({ ...prev, [tempId]: !prev[tempId] }));
   };
 
-  const handleParseInput = () => {
+  const handleParseInput = (overrideRawText?: string) => {
     setFeedback(null);
-    if (!rawInput.trim()) {
+    const inputToParse = overrideRawText !== undefined ? overrideRawText : rawInput;
+    if (!inputToParse.trim()) {
       setFeedback({
         type: 'error',
-        text: 'يرجى لصق نص الأسئلة أو رفع ملف (TXT / CSV / JSON) أولاً.'
+        text: 'يرجى لصق نص الأسئلة أو رفع ملف (TXT / CSV / JSON) أو استخدام التوليد الذكي أولاً.'
       });
       return;
     }
 
     const { drafts: parsed, detectedMetadata } = parseBulkQuestionsInput({
-      rawInput,
+      rawInput: inputToParse,
       formatHint: sourceFormat,
+      languageHint: examLanguage,
       bankId: bank.id,
       defaultPoints,
       existingBankQuestions: existingQuestions
@@ -227,6 +297,9 @@ export default function BulkQuestionImportModal({
     setDrafts(parsed);
     setDetectedMeta(detectedMetadata || null);
     if (detectedMetadata) {
+      if (detectedMetadata.language) {
+        setExamLanguage(detectedMetadata.language);
+      }
       if (detectedMetadata.titleArabic) {
         setPublishTitle(detectedMetadata.titleArabic);
       }
@@ -246,11 +319,52 @@ export default function BulkQuestionImportModal({
 
     setStep('review');
     setFilter('all');
+    const langBadge =
+      (detectedMetadata?.language || examLanguage) === 'en'
+        ? ' [English]'
+        : (detectedMetadata?.language || examLanguage) === 'bilingual'
+        ? ' [ثنائي اللغة]'
+        : ' [عربي]';
     const extraInfo = detectedMetadata?.titleArabic ? ` (الترويسة: "${detectedMetadata.titleArabic}")` : '';
     setFeedback({
       type: 'success',
-      text: `تم استخراج وتنظيم ${parsed.length} سؤال بنجاح${extraInfo}. راجع الإجابات واعتمد الحفظ.`
+      text: `تم استخراج وتنظيم ${parsed.length} سؤال بنجاح${langBadge}${extraInfo}. راجع الإجابات واعتمد الحفظ.`
     });
+  };
+
+  const handleDirectAiGenerateExam = async () => {
+    setDirectAiGenerating(true);
+    setFeedback(null);
+    try {
+      const res = await requestDirectAiSmartExamGeneration({
+        mode: aiMode,
+        language: examLanguage,
+        assessmentType: aiAssessmentType,
+        title: publishTitle,
+        topic: aiTopic || bank.titleArabic,
+        studyLevelName: currentStudyLevelTitle,
+        durationMinutes: publishDurationMinutes || 30,
+        questionDurationSeconds: publishQuestionSeconds || 45,
+        mcqCount: aiMcqCount,
+        optionsCount: aiOptionsCount,
+        trueFalseCount: aiTfCount,
+        essayCount: aiEssayCount,
+        difficultyMix: aiDifficultyMix,
+        includeOptionRationales: aiIncludeOptionRationales,
+        rawContentToConvert: aiMode === 'format_existing' ? rawInput : undefined
+      });
+      setRawInput(res.formattedText);
+      setSourceFormat('text');
+      setShowAiPromptStudio(false);
+      handleParseInput(res.formattedText);
+    } catch (err: any) {
+      setFeedback({
+        type: 'error',
+        text: err.message || 'تعذر التوليد المباشر حالياً، يمكنك نسخ طلب التوليد ولصقه في ChatGPT أو Gemini.'
+      });
+    } finally {
+      setDirectAiGenerating(false);
+    }
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -276,6 +390,7 @@ export default function BulkQuestionImportModal({
       const { drafts: parsed, detectedMetadata } = parseBulkQuestionsInput({
         rawInput: text,
         formatHint: detectedFormat,
+        languageHint: examLanguage,
         fileName: file.name,
         bankId: bank.id,
         defaultPoints,
@@ -285,6 +400,9 @@ export default function BulkQuestionImportModal({
         setDrafts(parsed);
         setDetectedMeta(detectedMetadata || null);
         if (detectedMetadata) {
+          if (detectedMetadata.language) {
+            setExamLanguage(detectedMetadata.language);
+          }
           if (detectedMetadata.titleArabic) {
             setPublishTitle(detectedMetadata.titleArabic);
           }
@@ -323,13 +441,13 @@ export default function BulkQuestionImportModal({
   };
 
   const handleDownloadTemplate = (kind: 'txt' | 'csv') => {
-    const content = kind === 'csv' ? '\uFEFF' + SAMPLE_BULK_CSV_TEMPLATE : SAMPLE_BULK_TEXT_TEMPLATE;
+    const content = kind === 'csv' ? '\uFEFF' + SAMPLE_BULK_CSV_TEMPLATE : getSampleTemplateByLanguage(examLanguage);
     const mime = kind === 'csv' ? 'text/csv;charset=utf-8;' : 'text/plain;charset=utf-8;';
     const blob = new Blob([content], { type: mime });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = kind === 'csv' ? 'umed_mcq_bulk_template.csv' : 'umed_mcq_bulk_template.txt';
+    a.download = kind === 'csv' ? 'umed_mcq_bulk_template.csv' : `umed_exam_template_${examLanguage}.txt`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -361,10 +479,21 @@ export default function BulkQuestionImportModal({
 
   const handleChangeQuestionType = (tempId: string, newType: QuestionType) => {
     updateDraftItem(tempId, (d) => {
+      const qLang = d.language || examLanguage;
       if (newType === 'true_false') {
         const tfOpts = [
-          { id: 'opt-a', textArabic: 'صح (صواب)', explanationArabic: '' },
-          { id: 'opt-b', textArabic: 'خطأ', explanationArabic: '' }
+          {
+            id: 'opt-a',
+            textArabic: qLang === 'en' ? 'True' : qLang === 'bilingual' ? 'صح / True' : 'صح (صواب)',
+            textEnglish: 'True',
+            explanationArabic: ''
+          },
+          {
+            id: 'opt-b',
+            textArabic: qLang === 'en' ? 'False' : qLang === 'bilingual' ? 'خطأ / False' : 'خطأ',
+            textEnglish: 'False',
+            explanationArabic: ''
+          }
         ];
         return {
           ...d,
@@ -433,6 +562,7 @@ export default function BulkQuestionImportModal({
       deterministicId: `q-${bank.id}-manual-${Date.now()}`,
       sourceIndex: drafts.length + 1,
       questionType: 'mcq',
+      language: examLanguage,
       stemArabic: '',
       stemEnglish: '',
       options: [
@@ -613,8 +743,12 @@ export default function BulkQuestionImportModal({
 
     setSaving(true);
     try {
-      // 1. Save imported questions into the Question Bank (Offline-First + Auto Sync)
-      const result = await bulkSaveQuestions(bank.id, toSave, userRole);
+      // 1. Update bank language if changed, and save imported questions into the Question Bank
+      if (bank.language !== examLanguage) {
+        updateQuestionBank(bank.id, { language: examLanguage }).catch(() => {});
+      }
+      const draftsWithLang = toSave.map((d) => ({ ...d, language: d.language || examLanguage }));
+      const result = await bulkSaveQuestions(bank.id, draftsWithLang, userRole);
 
       // 2. If user chose to publish strictly as Exam ONLY or Competition ONLY, create that single assessment
       let publishedAssessment: Assessment | undefined = undefined;
@@ -630,7 +764,9 @@ export default function BulkQuestionImportModal({
         publishedAssessment = await createAssessment(
           {
             assessmentType: strictAssessmentType,
+            language: examLanguage,
             titleArabic: publishTitle.trim(),
+            ...(examLanguage === 'en' ? { titleEnglish: publishTitle.trim() } : {}),
             descriptionArabic:
               strictAssessmentType === 'competition'
                 ? `مسابقة طبية تنافسية مرتبطة ببنك ${bank.titleArabic}`
@@ -773,6 +909,59 @@ export default function BulkQuestionImportModal({
         <div className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-3 overscroll-contain">
           {step === 'input' ? (
             <div className="space-y-3">
+              {/* STEP 1A: Mandatory Exam / Bank Language Selector Bar */}
+              <div className="p-2.5 sm:p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-teal-950/90 border border-teal-700/60 flex items-center justify-center shrink-0">
+                    <Globe className="w-4 h-4 text-teal-400" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-white">
+                      أولاً: اختر لغة الاختبار أو بنك الأسئلة
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      يضبط اتجاه النصوص، نموذج الأسئلة، وطلب التوليد الذكي (AI Prompt) تلقائياً
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-1.5 bg-slate-900 p-1 rounded-xl border border-slate-800 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => setExamLanguage('ar')}
+                    className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center justify-center gap-1 ${
+                      examLanguage === 'ar'
+                        ? 'bg-teal-600 text-white shadow'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <span>العربية (عربي)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExamLanguage('en')}
+                    className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center justify-center gap-1 ${
+                      examLanguage === 'en'
+                        ? 'bg-sky-600 text-white shadow'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <span>English (إنجليزي)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExamLanguage('bilingual')}
+                    className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center justify-center gap-1 ${
+                      examLanguage === 'bilingual'
+                        ? 'bg-indigo-600 text-white shadow'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <span>ثنائي اللغة (Ar+En)</span>
+                  </button>
+                </div>
+              </div>
+
               {/* Compact Action Strip */}
               <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-950 p-2.5 rounded-xl border border-slate-800">
                 <div className="flex flex-wrap items-center gap-1.5">
@@ -795,31 +984,47 @@ export default function BulkQuestionImportModal({
                   <button
                     type="button"
                     onClick={() => {
-                      setRawInput(SAMPLE_BULK_TEXT_TEMPLATE);
+                      setRawInput(getSampleTemplateByLanguage(examLanguage));
                       setSourceFormat('text');
                     }}
                     className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 text-[11px] font-bold flex items-center gap-1"
                   >
                     <FileText className="w-3.5 h-3.5" />
-                    <span>إدراج نموذج جاهز</span>
+                    <span>
+                      إدراج نموذج جاهز ({examLanguage === 'en' ? 'English' : examLanguage === 'bilingual' ? 'ثنائي اللغة' : 'عربي'})
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowAiPromptStudio(!showAiPromptStudio)}
+                    className={`px-3 py-1.5 rounded-lg border text-[11px] font-bold flex items-center gap-1.5 transition-all ${
+                      showAiPromptStudio
+                        ? 'bg-indigo-600 border-indigo-400 text-white shadow-lg'
+                        : 'bg-indigo-950/90 hover:bg-indigo-900 border-indigo-500/50 text-indigo-200'
+                    }`}
+                  >
+                    <Wand2 className="w-3.5 h-3.5 text-indigo-300" />
+                    <span>استوديو واضع الاختبار الذكي (AI Prompt)</span>
+                    {showAiPromptStudio ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                   </button>
 
                   <button
                     type="button"
                     onClick={async () => {
                       try {
-                        await navigator.clipboard.writeText(UMED_AI_UNIVERSAL_PROMPT_ARABIC);
+                        await navigator.clipboard.writeText(generatedAiPrompt);
                         setFeedback({
                           type: 'success',
-                          text: 'تم نسخ تعليمات الذكاء الاصطناعي الدائمة (AI Prompt) — الصقها في ChatGPT أو Gemini أو Claude مع ملف أسئلتك ✓'
+                          text: `تم نسخ طلب التوليد الاحترافي (${examLanguage === 'en' ? 'English' : examLanguage === 'bilingual' ? 'ثنائي اللغة' : 'عربي'}) — الصقه في ChatGPT أو Gemini أو Claude ✓`
                         });
                       } catch {}
                     }}
-                    className="px-2.5 py-1.5 rounded-lg bg-indigo-950/90 hover:bg-indigo-900 border border-indigo-500/40 text-indigo-200 text-[11px] font-bold flex items-center gap-1 transition-colors"
-                    title="انسخ هذه التعليمات وأرسلها لأي برنامج ذكاء اصطناعي لتجهيز الأسئلة بصيغة UMED القياسية"
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-indigo-500/30 text-indigo-300 text-[11px] font-bold flex items-center gap-1 transition-colors"
+                    title="نسخ سريع لطلب الذكاء الاصطناعي حسب اللغة المحددة"
                   >
                     <Copy className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>نسخ تعليمات الذكاء الاصطناعي (AI Prompt)</span>
+                    <span>نسخ سريع للبرومبت</span>
                   </button>
 
                   <button
@@ -827,7 +1032,7 @@ export default function BulkQuestionImportModal({
                     onClick={() => setShowFormatOptions(!showFormatOptions)}
                     className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-[11px] flex items-center gap-1"
                   >
-                    <span>خيارات التنسيق والقوالب</span>
+                    <span>خيارات القوالب</span>
                     {showFormatOptions ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                   </button>
                 </div>
@@ -844,6 +1049,217 @@ export default function BulkQuestionImportModal({
                 )}
               </div>
 
+              {/* Interactive AI Smart Exam Prompt Builder Studio */}
+              {showAiPromptStudio && (
+                <div className="p-3.5 rounded-xl bg-indigo-950/25 border border-indigo-700/60 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-indigo-800/50 pb-2.5">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-indigo-400 shrink-0" />
+                      <div>
+                        <h4 className="text-xs font-bold text-white">
+                          مُعدّ طلب التوليد الاحترافي بالذكاء الاصطناعي (UMED Smart AI Exam Architect)
+                        </h4>
+                        <p className="text-[10px] text-indigo-200/80">
+                          خصص مواصفات الاختبار أو البنك ثم انسخ البرومبت الاحترافي لـ ChatGPT / Claude / Gemini أو ولّد الأسئلة مباشرة
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* AI Mode Switcher */}
+                    <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-indigo-800/60 text-[11px]">
+                      <button
+                        type="button"
+                        onClick={() => setAiMode('generate_new')}
+                        className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                          aiMode === 'generate_new'
+                            ? 'bg-indigo-600 text-white shadow'
+                            : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        توليد اختبار طبي جديد
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAiMode('format_existing')}
+                        className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                          aiMode === 'format_existing'
+                            ? 'bg-indigo-600 text-white shadow'
+                            : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        تحويل وتنسيق أسئلة/محاضرة خام
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Customization Grid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 text-xs">
+                    <div className="sm:col-span-2">
+                      <label className="text-[11px] text-indigo-200 block mb-1 font-semibold">
+                        الموضوع الطبي / البلوك / المحاضرة:
+                      </label>
+                      <input
+                        type="text"
+                        value={aiTopic}
+                        onChange={(e) => setAiTopic(e.target.value)}
+                        placeholder={
+                          examLanguage === 'en'
+                            ? 'e.g. Acute Coronary Syndrome & Arrhythmias'
+                            : 'مثال: متلازمة الشريان التاجي الحادة واضطرابات النظم (CVS)'
+                        }
+                        className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-indigo-800/70 text-xs text-white focus:outline-none focus:border-indigo-400"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] text-indigo-200 block mb-1 font-semibold">
+                        الأسلوب العلمي ومستوى العمق:
+                      </label>
+                      <select
+                        value={aiDifficultyMix}
+                        onChange={(e) => setAiDifficultyMix(e.target.value as any)}
+                        className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-indigo-800/70 text-xs text-white"
+                      >
+                        <option value="clinical_usmle">حالات سريرية (USMLE / Clinical Vignettes)</option>
+                        <option value="balanced">متوازن (حالات سريرية + مفاهيم أساسية)</option>
+                        <option value="foundational">مفاهيم طبية مباشرة وأساسية</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] text-indigo-200 block mb-1 font-semibold">
+                        نوع التقييم المستهدف:
+                      </label>
+                      <select
+                        value={aiAssessmentType}
+                        onChange={(e) => setAiAssessmentType(e.target.value as any)}
+                        className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-indigo-800/70 text-xs text-white"
+                      >
+                        <option value="exam">اختبار أكاديمي رسمي (Exam)</option>
+                        <option value="competition">مسابقة طبية تنافسية (Competition)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Question Type Counts Row */}
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
+                    <div>
+                      <label className="text-[10px] text-slate-300 block mb-0.5">عدد أسئلة MCQ:</label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={aiMcqCount}
+                        onChange={(e) => setAiMcqCount(Math.max(0, Number(e.target.value) || 0))}
+                        className="w-full px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-xs text-teal-300 font-mono font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-300 block mb-0.5">خيارات كل MCQ:</label>
+                      <select
+                        value={aiOptionsCount}
+                        onChange={(e) => setAiOptionsCount(Number(e.target.value) === 5 ? 5 : 4)}
+                        className="w-full px-2 py-1 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white"
+                      >
+                        <option value={4}>4 خيارات (A-D / أ-د)</option>
+                        <option value={5}>5 خيارات (A-E / أ-هـ)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-300 block mb-0.5">أسئلة صح وخطأ:</label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={50}
+                        value={aiTfCount}
+                        onChange={(e) => setAiTfCount(Math.max(0, Number(e.target.value) || 0))}
+                        className="w-full px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-xs text-amber-300 font-mono font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-300 block mb-0.5">أسئلة مقالية:</label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={20}
+                        value={aiEssayCount}
+                        onChange={(e) => setAiEssayCount(Math.max(0, Number(e.target.value) || 0))}
+                        className="w-full px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-xs text-purple-300 font-mono font-bold"
+                      />
+                    </div>
+                    <div className="col-span-2 sm:col-span-1 flex items-end">
+                      <button
+                        type="button"
+                        onClick={() => setAiIncludeOptionRationales(!aiIncludeOptionRationales)}
+                        className={`w-full py-1.5 px-2 rounded-lg border text-[11px] font-bold flex items-center justify-center gap-1 transition-colors ${
+                          aiIncludeOptionRationales
+                            ? 'bg-emerald-950/70 border-emerald-700/70 text-emerald-300'
+                            : 'bg-slate-950 border-slate-800 text-slate-400'
+                        }`}
+                      >
+                        {aiIncludeOptionRationales ? <CheckSquare className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
+                        <span>تعليل كل خيار</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Prompt Preview & Action Buttons */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="text-indigo-200 font-semibold">
+                        معاينة البرومبت الاحترافي الجاهز للنسخ ({examLanguage === 'en' ? 'English Prompt' : examLanguage === 'bilingual' ? 'برومبت ثنائي اللغة' : 'برومبت عربي'}):
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        يتضمن الترويسة وقواعد التعرف التلقائي بنسبة 100%
+                      </span>
+                    </div>
+                    <textarea
+                      readOnly
+                      dir={examLanguage === 'en' ? 'ltr' : 'rtl'}
+                      value={generatedAiPrompt}
+                      rows={5}
+                      className="w-full p-2.5 rounded-lg bg-slate-950/90 border border-indigo-900/80 text-[11px] text-slate-300 font-mono leading-relaxed focus:outline-none"
+                    />
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(generatedAiPrompt);
+                            setFeedback({
+                              type: 'success',
+                              text: 'تم نسخ طلب التوليد الاحترافي المخصص بنجاح! الصقه في ChatGPT أو Gemini أو Claude ثم الصق النتيجة بالأسفل ✓'
+                            });
+                          } catch {}
+                        }}
+                        className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 shadow"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>نسخ طلب التوليد الاحترافي (Copy AI Prompt)</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleDirectAiGenerateExam}
+                        disabled={directAiGenerating}
+                        className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5 shadow"
+                      >
+                        {directAiGenerating ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Sparkles className="w-3.5 h-3.5" />
+                        )}
+                        <span>
+                          {directAiGenerating
+                            ? 'جاري التوليد والتحليل...'
+                            : 'توليد مباشر بالذكاء الاصطناعي المدمج'}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Collapsible Format & Template Options (Hidden by default to keep screen clean) */}
               {showFormatOptions && (
                 <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
@@ -854,8 +1270,8 @@ export default function BulkQuestionImportModal({
                       onChange={(e) => setSourceFormat(e.target.value as any)}
                       className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white"
                     >
-                      <option value="auto">اكتشاف تلقائي ذكي</option>
-                      <option value="text">نص مرقم (TXT)</option>
+                      <option value="auto">اكتشاف تلقائي ذكي (يدعم مخرجات الذكاء الاصطناعي والـ Markdown)</option>
+                      <option value="text">نص مرقم (TXT / Markdown)</option>
                       <option value="csv">جدول (CSV / TSV)</option>
                       <option value="json">ملف (JSON)</option>
                     </select>
@@ -880,7 +1296,7 @@ export default function BulkQuestionImportModal({
                         className="flex-1 py-1.5 px-2 rounded-lg bg-slate-900 border border-slate-700 text-slate-300 text-[11px] flex items-center justify-center gap-1"
                       >
                         <Download className="w-3 h-3" />
-                        <span>قالب TXT</span>
+                        <span>قالب TXT ({examLanguage.toUpperCase()})</span>
                       </button>
                       <button
                         type="button"
@@ -899,29 +1315,45 @@ export default function BulkQuestionImportModal({
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-[11px]">
                   <span className="text-slate-300 font-semibold">
-                    الصق الأسئلة مع خياراتها (ضع علامة <code className="text-teal-300">*</code> بجوار الإجابة الصحيحة أو سطر <code className="text-teal-300">الإجابة: ب</code>):
+                    {examLanguage === 'en' ? (
+                      <>
+                        الصق الأسئلة باللغة الإنجليزية (يدعم مخرجات الذكاء الاصطناعي، <code className="text-sky-300">*</code> بجوار الخيار الصحيح أو سطر <code className="text-sky-300">Answer: B</code>):
+                      </>
+                    ) : (
+                      <>
+                        الصق الأسئلة مع خياراتها (ضع علامة <code className="text-teal-300">*</code> بجوار الإجابة الصحيحة أو سطر <code className="text-teal-300">الإجابة: ب</code> أو <code className="text-teal-300">Answer: B</code>):
+                      </>
+                    )}
                   </span>
                   <span className="text-slate-500 font-mono">{rawInput.length} حرف</span>
                 </div>
                 <textarea
+                  dir={examLanguage === 'en' ? 'ltr' : 'rtl'}
                   value={rawInput}
                   onChange={(e) => setRawInput(e.target.value)}
-                  placeholder={`مثال:\n1. ما هو الصمام القلبي الفاصل بين البطين الأيسر والشريان الأبهر؟\nأ) الصمام التاجي\nب) الصمام الأبهري *\nج) الصمام ثلاثي الشرف\nد) الصمام الرئوي`}
-                  className="w-full min-h-[260px] sm:min-h-[340px] p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white leading-relaxed focus:outline-none focus:border-teal-500"
+                  placeholder={
+                    examLanguage === 'en'
+                      ? `Example:\nLanguage: English\nTitle: CVS Block Exam\n\n1. Which heart valve lies between the left ventricle and the aorta?\nA) Mitral Valve\nB) Aortic Valve * (Rationale: Correct, separates LV from aorta)\nC) Tricuspid Valve\nD) Pulmonary Valve\nAnswer: B\nRationale: The aortic valve prevents regurgitation from the aorta into the left ventricle.`
+                      : `مثال:\nاللغة: ${examLanguage === 'bilingual' ? 'ثنائي اللغة' : 'عربي'}\n1. ما هو الصمام القلبي الفاصل بين البطين الأيسر والشريان الأبهر؟\nأ) الصمام التاجي\nب) الصمام الأبهري *\nج) الصمام ثلاثي الشرف\nد) الصمام الرئوي\nالإجابة: ب`
+                  }
+                  className="w-full min-h-[240px] sm:min-h-[300px] p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white leading-relaxed focus:outline-none focus:border-teal-500"
                 />
               </div>
             </div>
           ) : (
             /* STEP 2: STREAMLINED, HIGH-VISIBILITY REVIEW & EDIT SCREEN */
             <div className="space-y-3">
-              {/* Auto-Detected Assessment Header Banner (Title, Type, Level, Batch, Course, Timers) */}
-              {detectedMeta && (detectedMeta.titleArabic || detectedMeta.batchName || detectedMeta.courseName || detectedMeta.studyLevelName) && (
+              {/* Auto-Detected Assessment Header Banner (Language, Title, Type, Level, Batch, Course, Timers) */}
+              {detectedMeta && (detectedMeta.titleArabic || detectedMeta.language || detectedMeta.batchName || detectedMeta.courseName || detectedMeta.studyLevelName) && (
                 <div className="p-3 rounded-xl bg-teal-950/40 border border-teal-800/60 text-xs text-teal-200 flex flex-wrap items-center justify-between gap-2.5">
                   <div className="flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4 text-teal-400 shrink-0" />
                     <span className="font-bold">بيانات التقييم المستخرجة تلقائياً:</span>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap text-[11px] text-slate-300">
+                    <span className="bg-slate-900 px-2 py-0.5 rounded border border-slate-700 text-sky-300 font-bold">
+                      اللغة: {examLanguage === 'en' ? 'English (إنجليزي)' : examLanguage === 'bilingual' ? 'ثنائي اللغة (Ar+En)' : 'العربية'}
+                    </span>
                     {detectedMeta.titleArabic && (
                       <span className="bg-slate-900 px-2 py-0.5 rounded border border-slate-700 text-teal-300 font-semibold">
                         العنوان: {detectedMeta.titleArabic}
@@ -1064,9 +1496,12 @@ export default function BulkQuestionImportModal({
                     const hasErrors = (draft.issues || []).some((i) => i.severity === 'error');
                     const isExpanded = Boolean(expandedCards[draft.tempId]);
                     const qType: QuestionType = draft.questionType || 'mcq';
+                    const qLang: AssessmentLanguage = draft.language || examLanguage;
+                    const isEnQuestion = qLang === 'en';
+                    const LETTERS = isEnQuestion ? ENGLISH_LETTERS : ARABIC_LETTERS;
                     
                     const optIndex = (draft.options || []).findIndex((o) => o.id === draft.correctOptionId);
-                    const correctLetter = optIndex >= 0 ? ARABIC_LETTERS[optIndex] || draft.correctOptionId : null;
+                    const correctLetter = optIndex >= 0 ? LETTERS[optIndex] || draft.correctOptionId : null;
 
                     return (
                       <div
@@ -1145,7 +1580,7 @@ export default function BulkQuestionImportModal({
                                 {qType === 'essay'
                                   ? 'جاهز ✓ (مقالي)'
                                   : qType === 'true_false'
-                                  ? `جاهز ✓ (${draft.correctOptionId === 'opt-a' ? 'صح' : 'خطأ'})`
+                                  ? `جاهز ✓ (${draft.correctOptionId === 'opt-a' ? (isEnQuestion ? 'True' : 'صح') : (isEnQuestion ? 'False' : 'خطأ')})`
                                   : `جاهز ✓ (الإجابة: ${correctLetter})`}
                               </span>
                             ) : (
@@ -1212,17 +1647,36 @@ export default function BulkQuestionImportModal({
 
                         {/* Question Stem Input */}
                         <textarea
+                          dir={isEnQuestion ? 'ltr' : 'rtl'}
                           value={draft.stemArabic}
                           onChange={(e) =>
                             updateDraftItem(draft.tempId, (d) => ({
                               ...d,
-                              stemArabic: e.target.value
+                              stemArabic: e.target.value,
+                              ...(isEnQuestion ? { stemEnglish: e.target.value } : {})
                             }))
                           }
                           rows={2}
-                          placeholder="نص السؤال الطبي..."
+                          placeholder={isEnQuestion ? 'Medical question stem in English...' : 'نص السؤال الطبي...'}
                           className="w-full p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-semibold focus:outline-none focus:border-teal-500"
                         />
+
+                        {/* Bilingual Secondary English Stem (Shown directly on card if bilingual or if stemEnglish differs from stemArabic) */}
+                        {(qLang === 'bilingual' || (draft.stemEnglish && draft.stemEnglish !== draft.stemArabic)) && (
+                          <input
+                            type="text"
+                            dir="ltr"
+                            value={draft.stemEnglish || ''}
+                            onChange={(e) =>
+                              updateDraftItem(draft.tempId, (d) => ({
+                                ...d,
+                                stemEnglish: e.target.value
+                              }))
+                            }
+                            placeholder="English question stem (for bilingual mode)..."
+                            className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900/70 border border-indigo-900/60 text-xs text-indigo-200 focus:outline-none focus:border-indigo-400"
+                          />
+                        )}
 
                         {/* 1. Essay Question View: Model Answer Input */}
                         {qType === 'essay' && (
@@ -1235,6 +1689,7 @@ export default function BulkQuestionImportModal({
                               <span className="text-[10px] text-purple-400 font-mono">Model Answer</span>
                             </div>
                             <textarea
+                              dir={isEnQuestion ? 'ltr' : 'rtl'}
                               value={draft.modelAnswerArabic || ''}
                               onChange={(e) =>
                                 updateDraftItem(draft.tempId, (d) => ({
@@ -1244,7 +1699,11 @@ export default function BulkQuestionImportModal({
                                 }))
                               }
                               rows={3}
-                              placeholder="اكتب الإجابة النموذجية الكاملة أو النقاط الطبية الأساسية التي سيتم على أساسها تقييم إجابة الطالب المقالية..."
+                              placeholder={
+                                isEnQuestion
+                                  ? 'Enter the complete model answer / clinical grading rubric...'
+                                  : 'اكتب الإجابة النموذجية الكاملة أو النقاط الطبية الأساسية التي سيتم على أساسها تقييم إجابة الطالب المقالية...'
+                              }
                               className="w-full p-2.5 rounded-lg bg-slate-950 border border-purple-900 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-purple-400 leading-relaxed"
                             />
                           </div>
@@ -1293,6 +1752,7 @@ export default function BulkQuestionImportModal({
                                   </div>
                                   <input
                                     type="text"
+                                    dir={isEnQuestion ? 'ltr' : 'rtl'}
                                     value={opt.explanationArabic || ''}
                                     onChange={(e) =>
                                       updateDraftItem(draft.tempId, (d) => ({
@@ -1302,7 +1762,11 @@ export default function BulkQuestionImportModal({
                                         )
                                       }))
                                     }
-                                    placeholder={`تعليل ${isTrue ? 'الصواب' : 'الخطأ'} العلمي لهذا الخيار (اختياري)...`}
+                                    placeholder={
+                                      isEnQuestion
+                                        ? `Scientific rationale for ${isTrue ? 'True' : 'False'} (optional)...`
+                                        : `تعليل ${isTrue ? 'الصواب' : 'الخطأ'} العلمي لهذا الخيار (اختياري)...`
+                                    }
                                     className="w-full px-2 py-1 rounded bg-slate-950/80 border border-slate-800 text-[10px] text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-teal-500"
                                   />
                                 </div>
@@ -1317,7 +1781,7 @@ export default function BulkQuestionImportModal({
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                               {draft.options.map((opt, oIdx) => {
                                 const isCorrect = draft.correctOptionId === opt.id;
-                                const letterArabic = ARABIC_LETTERS[oIdx] || opt.id;
+                                const letterDisplay = LETTERS[oIdx] || opt.id;
                                 return (
                                   <div
                                     key={opt.id}
@@ -1343,21 +1807,28 @@ export default function BulkQuestionImportModal({
                                         }`}
                                         title="اضغط لاعتماد هذا الخيار كإجابة صحيحة"
                                       >
-                                        {isCorrect ? `✓ ${letterArabic}` : letterArabic}
+                                        {isCorrect ? `✓ ${letterDisplay}` : letterDisplay}
                                       </button>
 
                                       <input
                                         type="text"
+                                        dir={isEnQuestion ? 'ltr' : 'rtl'}
                                         value={opt.textArabic}
                                         onChange={(e) =>
                                           updateDraftItem(draft.tempId, (d) => ({
                                             ...d,
                                             options: d.options.map((o) =>
-                                              o.id === opt.id ? { ...o, textArabic: e.target.value } : o
+                                              o.id === opt.id
+                                                ? {
+                                                    ...o,
+                                                    textArabic: e.target.value,
+                                                    ...(isEnQuestion ? { textEnglish: e.target.value } : {})
+                                                  }
+                                                : o
                                             )
                                           }))
                                         }
-                                        placeholder={`الخيار (${letterArabic})...`}
+                                        placeholder={isEnQuestion ? `Option (${letterDisplay})...` : `الخيار (${letterDisplay})...`}
                                         className="flex-1 min-w-0 bg-transparent text-xs text-white focus:outline-none px-1"
                                       />
 
@@ -1376,6 +1847,7 @@ export default function BulkQuestionImportModal({
                                     {/* Option-Specific Explanation / Rationale */}
                                     <input
                                       type="text"
+                                      dir={isEnQuestion ? 'ltr' : 'rtl'}
                                       value={opt.explanationArabic || ''}
                                       onChange={(e) =>
                                         updateDraftItem(draft.tempId, (d) => ({
@@ -1385,7 +1857,11 @@ export default function BulkQuestionImportModal({
                                           )
                                         }))
                                       }
-                                      placeholder={`تعليل الخيار (${letterArabic}): سبب صحته أو خطئه (اختياري)...`}
+                                      placeholder={
+                                        isEnQuestion
+                                          ? `Rationale for Option (${letterDisplay}) (optional)...`
+                                          : `تعليل الخيار (${letterDisplay}): سبب صحته أو خطئه (اختياري)...`
+                                      }
                                       className="w-full px-2 py-0.5 rounded bg-slate-950/70 border border-slate-800/80 text-[10px] text-slate-300 placeholder:text-slate-600 focus:outline-none focus:border-teal-500"
                                     />
                                   </div>
@@ -1401,7 +1877,7 @@ export default function BulkQuestionImportModal({
                                 className="px-3 py-1 rounded-lg bg-slate-900 hover:bg-slate-850 border border-dashed border-slate-700 text-teal-400 text-[11px] font-semibold flex items-center gap-1.5 transition-colors"
                               >
                                 <Plus className="w-3 h-3" />
-                                <span>إضافة خيار إضافي ({ARABIC_LETTERS[draft.options.length] || ''})</span>
+                                <span>إضافة خيار إضافي ({LETTERS[draft.options.length] || ''})</span>
                               </button>
                             )}
                           </div>
@@ -1515,7 +1991,7 @@ export default function BulkQuestionImportModal({
               </button>
               <button
                 type="button"
-                onClick={handleParseInput}
+                onClick={() => handleParseInput()}
                 className="flex-1 sm:flex-initial px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold shadow-lg flex items-center justify-center gap-2 transition-colors"
               >
                 <CheckCircle2 className="w-4 h-4" />
@@ -1577,6 +2053,16 @@ export default function BulkQuestionImportModal({
                       placeholder={publishMode === 'competition_only' ? 'عنوان المسابقة الطبية...' : 'عنوان الاختبار الأكاديمي...'}
                       className="flex-1 min-w-[130px] px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-teal-500"
                     />
+                    <select
+                      value={examLanguage}
+                      onChange={(e) => setExamLanguage(e.target.value as AssessmentLanguage)}
+                      className="px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-[11px] text-sky-300 font-bold"
+                      title="لغة الاختبار"
+                    >
+                      <option value="ar">اللغة: عربي</option>
+                      <option value="en">اللغة: English</option>
+                      <option value="bilingual">ثنائي اللغة</option>
+                    </select>
                     <select
                       value={publishStudyLevelId}
                       onChange={(e) => setPublishStudyLevelId(e.target.value)}

@@ -10,7 +10,10 @@ import {
   validateAndAnnotateDrafts,
   computeQuestionFingerprint,
   SAMPLE_BULK_TEXT_TEMPLATE,
-  SAMPLE_BULK_CSV_TEMPLATE
+  SAMPLE_BULK_TEXT_TEMPLATE_EN,
+  SAMPLE_BULK_TEXT_TEMPLATE_BILINGUAL,
+  SAMPLE_BULK_CSV_TEMPLATE,
+  buildProfessionalAiPrompt
 } from '../src/services/mcqBulkParser.ts';
 import {
   sanitizePublicQuestion,
@@ -190,7 +193,96 @@ async function runVerification() {
   );
   console.log('[PASS] 7. Conflict-safe offline outbox + cloud merging & deduplication');
 
-  console.log('\nALL 7 VERIFICATION SUITES PASSED SUCCESSFULLY.');
+  // 8. Test Pure English Medical Template & Multi-Line English Clinical Vignette Parsing
+  const { drafts: enParsed, detectedMetadata: enMeta } = parseBulkQuestionsInput({
+    rawInput: SAMPLE_BULK_TEXT_TEMPLATE_EN,
+    formatHint: 'text',
+    languageHint: 'en',
+    bankId: 'qbank-cvs-default',
+    defaultPoints: 5,
+    existingBankQuestions: []
+  });
+  assert(enMeta?.language === 'en', `Expected detected language 'en', got ${enMeta?.language}`);
+  assert(enParsed.length === 3, `Expected 3 parsed English questions, got ${enParsed.length}`);
+  assert(enParsed[0].language === 'en', `Expected Q1 language 'en', got ${enParsed[0].language}`);
+  assert(enParsed[0].correctOptionId === 'opt-b', `Expected English Q1 correctOptionId opt-b, got ${enParsed[0].correctOptionId}`);
+  assert(enParsed[1].questionType === 'true_false' && enParsed[1].correctOptionId === 'opt-a', 'English Q2 should be True/False with opt-a');
+  assert(enParsed[2].questionType === 'essay' && Boolean(enParsed[2].modelAnswerArabic), 'English Q3 should be Essay with model answer');
+  assert(enParsed.every(q => q.isValid), 'All 3 English template questions should be valid');
+  console.log('[PASS] 8. Pure English medical template & multi-line clinical vignette parsing');
+
+  // 9. Test Bilingual (Arabic + English) Template Parsing
+  const { drafts: biParsed, detectedMetadata: biMeta } = parseBulkQuestionsInput({
+    rawInput: SAMPLE_BULK_TEXT_TEMPLATE_BILINGUAL,
+    formatHint: 'text',
+    languageHint: 'bilingual',
+    bankId: 'qbank-cvs-default',
+    defaultPoints: 5,
+    existingBankQuestions: []
+  });
+  assert(biMeta?.language === 'bilingual', `Expected detected language 'bilingual', got ${biMeta?.language}`);
+  assert(biParsed.length === 2, `Expected 2 bilingual questions, got ${biParsed.length}`);
+  assert(Boolean(biParsed[0].stemArabic && biParsed[0].stemEnglish), 'Bilingual Q1 must have both stemArabic and stemEnglish');
+  assert(biParsed.every(q => q.isValid), 'All bilingual template questions should be valid');
+  console.log('[PASS] 9. Bilingual (Arabic + English) template parsing');
+
+  // 10. Test Flexible AI Markdown Output Preprocessing & Professional AI Prompt Builder
+  const messyMarkdownAiOutput = `
+Sure! Here is the medical exam you requested:
+\`\`\`text
+Title: USMLE Cardiovascular Pharmacology Quiz
+Type: Exam
+Language: English
+Level: Level 4
+Subject: Cardiovascular System
+Duration: 30 minutes
+Question Timer: 60 seconds
+---
+### **Question 1:** A 64-year-old man with chronic heart failure presents with dyspnea.
+He is started on a drug that inhibits the Na+/K+-ATPase pump.
+Which of the following is the direct mechanism of this medication?
+- **A)** Beta-1 receptor blockade
+- **B)** Inhibition of Na+/K+-ATPase leading to increased intracellular calcium *
+- **C)** ACE inhibition
+- **D)** Calcium channel blockade
+**Answer:** B
+**Explanation:** Digoxin inhibits Na+/K+-ATPase, reducing Na+/Ca2+ exchanger activity and increasing cardiac contractility.
+\`\`\`
+`;
+  const { drafts: markdownParsed, detectedMetadata: mdMeta } = parseBulkQuestionsInput({
+    rawInput: messyMarkdownAiOutput,
+    formatHint: 'auto',
+    languageHint: 'en',
+    bankId: 'qbank-cvs-default',
+    defaultPoints: 5,
+    existingBankQuestions: []
+  });
+  assert(mdMeta?.titleArabic === 'USMLE Cardiovascular Pharmacology Quiz', `Metadata title mismatch: ${mdMeta?.titleArabic}`);
+  assert(mdMeta?.language === 'en', `Metadata language mismatch: ${mdMeta?.language}`);
+  assert(Boolean(markdownParsed.length === 1 && markdownParsed[0].isValid), 'Markdown-fenced AI output with bold prefixes must parse cleanly');
+  assert(
+    markdownParsed[0].stemArabic.includes('64-year-old man') &&
+      markdownParsed[0].stemArabic.includes('Which of the following is the direct mechanism'),
+    'Multi-line English clinical vignette must remain unified in stemArabic'
+  );
+  assert(markdownParsed[0].correctOptionId === 'opt-b', 'Correct option B must be detected from bold markdown options');
+
+  const generatedEnPrompt = buildProfessionalAiPrompt({
+    language: 'en',
+    mode: 'generate_new',
+    assessmentType: 'exam',
+    topic: 'Renal Pathology & Glomerulonephritis',
+    studyLevelName: 'Level 4',
+    mcqCount: 5,
+    trueFalseCount: 2,
+    essayCount: 1,
+    optionsCount: 4,
+    difficultyMix: 'clinical_usmle'
+  });
+  assert(generatedEnPrompt.includes('Language: English') && generatedEnPrompt.includes('Renal Pathology'), 'Generated English AI prompt must include language and topic');
+  console.log('[PASS] 10. Flexible AI Markdown preprocessing & Professional AI Prompt Studio generator');
+
+  console.log('\nALL 10 VERIFICATION SUITES PASSED SUCCESSFULLY.');
 }
 
 runVerification().catch((err) => {

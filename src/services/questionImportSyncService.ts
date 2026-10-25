@@ -21,6 +21,7 @@
 import { doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
 import { db, auth, cleanFirestoreData, writeAuditLogToCloud } from '../lib/firebase.ts';
 import {
+  AssessmentLanguage,
   AssessmentQuestionPublic,
   BulkImportDraftSession,
   QuestionAnswerKey,
@@ -29,7 +30,12 @@ import {
   QuestionOutboxEntry,
   QuestionSyncStatus
 } from '../types/umed.ts';
-import { computeQuestionFingerprint } from './mcqBulkParser.ts';
+import {
+  AiPromptGeneratorConfig,
+  computeQuestionFingerprint,
+  detectLanguageFromText,
+  getSampleTemplateByLanguage
+} from './mcqBulkParser.ts';
 
 const IDB_NAME = 'umed_offline_questions_db';
 const IDB_VERSION = 1;
@@ -353,6 +359,8 @@ export function sanitizePublicQuestion(q: QuestionItemFull): AssessmentQuestionP
   return cleanFirestoreData({
     id: q.id,
     bankId: q.bankId,
+    ...(q.questionType ? { questionType: q.questionType } : {}),
+    ...(q.language ? { language: q.language } : {}),
     stemArabic: q.stemArabic,
     ...(q.stemEnglish ? { stemEnglish: q.stemEnglish } : {}),
     ...(q.imageUrl ? { imageUrl: q.imageUrl } : {}),
@@ -843,6 +851,7 @@ export function startQuestionOutboxAutoSync(): void {
 
 export interface AiExplanationRequestItem {
   tempId: string;
+  language?: AssessmentLanguage;
   stemArabic: string;
   stemEnglish?: string;
   options: QuestionOption[];
@@ -856,20 +865,43 @@ export interface AiExplanationResultItem {
 }
 
 /**
- * Builds a structured, reviewable Arabic medical rationale when offline or when
- * the host server does not have an external Gemini API key configured.
+ * Builds a structured, reviewable medical rationale (in Arabic or English matching the question's language)
+ * when offline or when the host server does not have an external Gemini API key configured.
  * Strictly preserves `correctOptionId`.
  */
 export function buildStructuredMedicalExplanationFallback(
   item: AiExplanationRequestItem
 ): AiExplanationResultItem {
+  const qLang = item.language || detectLanguageFromText(item.stemArabic);
   const correctOpt = item.options.find((o) => o.id === item.correctOptionId) || item.options[0];
-  const correctText = (correctOpt?.textArabic || '').trim();
+  const correctText = (correctOpt?.textArabic || correctOpt?.textEnglish || '').trim();
   const wrongOpts = item.options
-    .filter((o) => o.id !== item.correctOptionId && (o.textArabic || '').trim())
-    .map((o) => o.textArabic.trim());
+    .filter((o) => o.id !== item.correctOptionId && (o.textArabic || o.textEnglish || '').trim())
+    .map((o) => (o.textArabic || o.textEnglish || '').trim());
 
   const optionExplanations: Record<string, string> = {};
+
+  if (qLang === 'en') {
+    for (const opt of item.options) {
+      const optLabel = opt.textArabic || opt.textEnglish || opt.id;
+      if (opt.id === item.correctOptionId) {
+        optionExplanations[opt.id] = `Correct: (${optLabel}) directly matches the clinical presentation and diagnostic findings in the stem.`;
+      } else {
+        optionExplanations[opt.id] = `Incorrect: (${optLabel}) is less consistent with the clinical picture compared to (${correctText}).`;
+      }
+    }
+
+    const explanationArabic = wrongOpts.length > 0
+      ? `The correct answer is (${correctText}) because it is the most accurate clinical choice matching the presentation, whereas the distractors (${wrongOpts.slice(0, 3).join(', ')}) are ruled out.`
+      : `The authoritative correct answer is (${correctText}) according to standard clinical guidelines.`;
+
+    return {
+      tempId: item.tempId,
+      explanationArabic,
+      optionExplanations
+    };
+  }
+
   for (const opt of item.options) {
     if (opt.id === item.correctOptionId) {
       optionExplanations[opt.id] = `إجابة صحيحة ومعتمدة طبياً: (${opt.textArabic}) يتوافق مباشرة مع المعطيات السريرية والعلمية في السؤال.`;
@@ -928,3 +960,45 @@ export async function requestOptionalAiExplanations(
 
   return items.map(buildStructuredMedicalExplanationFallback);
 }
+
+/**
+ * Calls the server-side AI Smart Exam Generator (`/api/admin/generate-smart-exam`)
+ * to generate a complete structured medical exam or standardize raw input in the selected language ('ar' | 'en' | 'bilingual').
+ * Falls back gracefully to a rich language-matched medical template if offline.
+ */
+export async function requestDirectAiSmartExamGeneration(
+  config: AiPromptGeneratorConfig & { rawContentToConvert?: string }
+): Promise<{ formattedText: string; usedFallback: boolean }> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return {
+      formattedText: getSampleTemplateByLanguage(config.language),
+      usedFallback: true
+    };
+  }
+
+  try {
+    const token = await getIdTokenSafe();
+    const res = await fetch('/api/admin/generate-smart-exam', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify(config)
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.formattedText && String(data.formattedText).trim()) {
+      return {
+        formattedText: String(data.formattedText).trim(),
+        usedFallback: Boolean(data.usedFallback)
+      };
+    }
+  } catch {}
+
+  return {
+    formattedText: getSampleTemplateByLanguage(config.language),
+    usedFallback: true
+  };
+}
+

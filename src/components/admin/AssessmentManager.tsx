@@ -38,6 +38,7 @@ import {
   AssessmentQuestionPublic,
   AssessmentType, 
   AssessmentStatus,
+  AssessmentLanguage,
   ResultReleasePolicy, 
   AssessmentResult,
   StudyLevel,
@@ -106,6 +107,7 @@ export default function AssessmentManager({
   const [showNewBankForm, setShowNewBankForm] = useState<boolean>(false);
   const [newBankTitle, setNewBankTitle] = useState<string>('');
   const [newBankDesc, setNewBankDesc] = useState<string>('');
+  const [newBankLanguage, setNewBankLanguage] = useState<AssessmentLanguage>('ar');
 
   // Edit Bank Modal State
   const [editingBank, setEditingBank] = useState<QuestionBank | null>(null);
@@ -135,6 +137,7 @@ export default function AssessmentManager({
   const [assessmentFilterType, setAssessmentFilterType] = useState<'all' | 'exam' | 'competition'>('all');
   const [showNewAssessmentForm, setShowNewAssessmentForm] = useState<boolean>(false);
   const [assessmentType, setAssessmentType] = useState<AssessmentType>('exam');
+  const [assessmentLanguage, setAssessmentLanguage] = useState<AssessmentLanguage>('ar');
   const [titleArabic, setTitleArabic] = useState<string>('');
   const [descArabic, setDescArabic] = useState<string>('');
   const [studyLevelId, setStudyLevelId] = useState<string>(assignedStudyLevelId || 'lvl-4');
@@ -291,6 +294,7 @@ export default function AssessmentManager({
       const created = await createQuestionBank({
         titleArabic: newBankTitle.trim(),
         descriptionArabic: newBankDesc.trim(),
+        language: newBankLanguage,
         universityId,
         studyLevelId: isBatchScoped ? assignedStudyLevelId : undefined,
         createdBy: userRole
@@ -301,6 +305,7 @@ export default function AssessmentManager({
       setBankQuestions([]);
       setNewBankTitle('');
       setNewBankDesc('');
+      setNewBankLanguage('ar');
       setShowNewBankForm(false);
       setStatusMsg({ type: 'success', text: 'تم إنشاء بنك الأسئلة بنجاح' });
     } catch (err: any) {
@@ -320,6 +325,7 @@ export default function AssessmentManager({
           titleArabic: editingBank.titleArabic.trim(),
           titleEnglish: editingBank.titleEnglish?.trim() || '',
           descriptionArabic: editingBank.descriptionArabic?.trim() || '',
+          language: editingBank.language || 'ar',
           studyLevelId: editingBank.studyLevelId
         },
         universityId
@@ -448,6 +454,7 @@ export default function AssessmentManager({
       const created = await createAssessment(
         {
           assessmentType,
+          language: assessmentLanguage,
           titleArabic: titleArabic.trim(),
           descriptionArabic: descArabic.trim(),
           universityId,
@@ -798,9 +805,32 @@ export default function AssessmentManager({
 
             {showNewBankForm && (
               <form onSubmit={handleCreateBank} className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-3">
+                <div>
+                  <label className="text-[11px] text-slate-400 block mb-1 font-bold">لغة بنك الأسئلة الافتراضية:</label>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {([
+                      { id: 'ar', label: 'العربية' },
+                      { id: 'en', label: 'English' },
+                      { id: 'bilingual', label: 'ثنائي اللغة' }
+                    ] as const).map((langOpt) => (
+                      <button
+                        key={langOpt.id}
+                        type="button"
+                        onClick={() => setNewBankLanguage(langOpt.id)}
+                        className={`py-1.5 px-2 rounded-lg text-[11px] font-bold border transition-all ${
+                          newBankLanguage === langOpt.id
+                            ? 'bg-teal-600 text-white border-teal-400'
+                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
+                        }`}
+                      >
+                        {langOpt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <input
                   type="text"
-                  placeholder="عنوان بنك الأسئلة (مثال: بنك أسئلة الجهاز التنفسي)"
+                  placeholder={newBankLanguage === 'en' ? 'Question Bank Title (e.g., CVS Pharmacology Bank)' : 'عنوان بنك الأسئلة (مثال: بنك أسئلة الجهاز التنفسي)'}
                   value={newBankTitle}
                   onChange={(e) => setNewBankTitle(e.target.value)}
                   className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-teal-500"
@@ -843,7 +873,12 @@ export default function AssessmentManager({
                   }`}
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <div className="font-bold text-sm text-white">{b.titleArabic}</div>
+                    <div className="space-y-1">
+                      <div className="font-bold text-sm text-white">{b.titleArabic}</div>
+                      <span className="inline-block px-2 py-0.5 rounded bg-slate-950/90 border border-slate-800 text-[10px] font-bold text-teal-300">
+                        اللغة: {b.language === 'en' ? 'English' : b.language === 'bilingual' ? 'ثنائي اللغة (Ar+En)' : 'العربية'}
+                      </span>
+                    </div>
                     <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                       <button
                         type="button"
@@ -916,7 +951,12 @@ export default function AssessmentManager({
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-5">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
                   <div>
-                    <h3 className="text-base font-bold text-white">{selectedBank.titleArabic}</h3>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-base font-bold text-white">{selectedBank.titleArabic}</h3>
+                      <span className="px-2.5 py-0.5 rounded-full bg-teal-950/80 border border-teal-700/60 text-[11px] font-bold text-teal-300">
+                        لغة البنك: {selectedBank.language === 'en' ? 'English' : selectedBank.language === 'bilingual' ? 'ثنائي اللغة (Ar+En)' : 'العربية'}
+                      </span>
+                    </div>
                     <p className="text-xs text-slate-400 mt-0.5">عدد الأسئلة المسجلة: {bankQuestions.length}</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -1235,7 +1275,7 @@ export default function AssessmentManager({
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label className="text-xs text-slate-400 block mb-1">نوع النشر (حصري ومستقل)</label>
                   <select
@@ -1245,6 +1285,19 @@ export default function AssessmentManager({
                   >
                     <option value="exam">📝 اختبار مادة أكاديمي فقط (Exam Only)</option>
                     <option value="competition">🏆 مسابقة طبية تنافسية فقط (Competition Only)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">لغة الاختبار / المسابقة</label>
+                  <select
+                    value={assessmentLanguage}
+                    onChange={(e) => setAssessmentLanguage(e.target.value as AssessmentLanguage)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-teal-300 font-bold"
+                  >
+                    <option value="ar">العربية (مع مصطلحات طبية)</option>
+                    <option value="en">English (Pure Medical English)</option>
+                    <option value="bilingual">ثنائي اللغة (عربي + إنجليزي)</option>
                   </select>
                 </div>
 
@@ -1733,7 +1786,19 @@ export default function AssessmentManager({
 
             <div className="space-y-3 text-xs">
               <div>
-                <label className="text-slate-400 block mb-1">عنوان البنك (بالعربية)</label>
+                <label className="text-slate-400 block mb-1">لغة البنك الافتراضية</label>
+                <select
+                  value={editingBank.language || 'ar'}
+                  onChange={(e) => setEditingBank({ ...editingBank, language: e.target.value as AssessmentLanguage })}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-teal-300 font-bold"
+                >
+                  <option value="ar">العربية</option>
+                  <option value="en">English</option>
+                  <option value="bilingual">ثنائي اللغة (عربي + إنجليزي)</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-slate-400 block mb-1">عنوان البنك</label>
                 <input
                   type="text"
                   value={editingBank.titleArabic}

@@ -504,6 +504,7 @@ export async function bulkSaveQuestions(
       id,
       bankId,
       questionType: qType,
+      language: raw.language,
       stemArabic,
       stemEnglish: raw.stemEnglish?.trim() || '',
       imageUrl: raw.imageUrl,

@@ -355,6 +355,7 @@ export interface BatchNotification {
 // ---------------------------------------------------------------------------
 
 export type AssessmentType = 'exam' | 'competition';
+export type AssessmentLanguage = 'ar' | 'en' | 'bilingual';
 export type ResultReleasePolicy = 'immediate' | 'after_close' | 'manual';
 export type AssessmentStatus = 'draft' | 'published' | 'closed';
 
@@ -363,6 +364,7 @@ export interface QuestionBank {
   titleArabic: string;
   titleEnglish?: string;
   descriptionArabic?: string;
+  language?: AssessmentLanguage; // 'ar' | 'en' | 'bilingual'
   universityId: string;
   programId?: string;
   studyLevelId?: string;
@@ -389,6 +391,7 @@ export interface QuestionItemFull {
   id: string;
   bankId: string;
   questionType?: QuestionType; // 'mcq' | 'true_false' | 'essay'
+  language?: AssessmentLanguage; // 'ar' | 'en' | 'bilingual'
   stemArabic: string;
   stemEnglish?: string;
   imageUrl?: string;
@@ -414,6 +417,7 @@ export interface AssessmentQuestionPublic {
   id: string;
   bankId?: string;
   questionType?: QuestionType;
+  language?: AssessmentLanguage;
   stemArabic: string;
   stemEnglish?: string;
   imageUrl?: string;
@@ -446,6 +450,7 @@ export interface DetectedAssessmentMetadata {
   titleArabic?: string;
   titleEnglish?: string;
   assessmentType?: AssessmentType; // 'exam' | 'competition'
+  language?: AssessmentLanguage; // 'ar' | 'en' | 'bilingual'
   studyLevelId?: string;
   studyLevelName?: string;
   batchName?: string;
@@ -462,6 +467,7 @@ export interface ParsedQuestionDraft {
   deterministicId?: string;
   sourceIndex: number;
   questionType?: QuestionType;
+  language?: AssessmentLanguage;
   stemArabic: string;
   stemEnglish?: string;
   imageUrl?: string;
@@ -488,6 +494,7 @@ export interface BulkImportDraftSession {
   id?: string;
   bankId: string;
   universityId?: string;
+  language?: AssessmentLanguage;
   rawInput?: string;
   rawInputText?: string;
   sourceFormat?: string;
@@ -518,6 +525,7 @@ export interface QuestionOutboxEntry {
 export interface Assessment {
   id: string;
   assessmentType: AssessmentType;
+  language?: AssessmentLanguage; // 'ar' | 'en' | 'bilingual'
   titleArabic: string;
   titleEnglish?: string;
   descriptionArabic?: string;
