@@ -45,7 +45,8 @@ import {
   parseBulkQuestionsInput,
   validateAndAnnotateDrafts,
   SAMPLE_BULK_TEXT_TEMPLATE,
-  SAMPLE_BULK_CSV_TEMPLATE
+  SAMPLE_BULK_CSV_TEMPLATE,
+  UMED_AI_UNIVERSAL_PROMPT_ARABIC
 } from '../../services/mcqBulkParser.ts';
 import {
   saveBulkImportDraftSession,
@@ -688,6 +689,24 @@ export default function BulkQuestionImportModal({
                   >
                     <FileText className="w-3.5 h-3.5" />
                     <span>إدراج نموذج جاهز</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(UMED_AI_UNIVERSAL_PROMPT_ARABIC);
+                        setFeedback({
+                          type: 'success',
+                          text: 'تم نسخ تعليمات الذكاء الاصطناعي الدائمة (AI Prompt) — الصقها في ChatGPT أو Gemini أو Claude مع ملف أسئلتك ✓'
+                        });
+                      } catch {}
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg bg-indigo-950/90 hover:bg-indigo-900 border border-indigo-500/40 text-indigo-200 text-[11px] font-bold flex items-center gap-1 transition-colors"
+                    title="انسخ هذه التعليمات وأرسلها لأي برنامج ذكاء اصطناعي لتجهيز الأسئلة بصيغة UMED القياسية"
+                  >
+                    <Copy className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>نسخ تعليمات الذكاء الاصطناعي (AI Prompt)</span>
                   </button>
 
                   <button

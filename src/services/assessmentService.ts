@@ -1431,6 +1431,7 @@ export interface SubmitAttemptExtraOptions {
   studentDisplayNamePublic?: string;
   studentUsername?: string;
   leaderboardNameMode?: LeaderboardNameMode;
+  isGuestPreview?: boolean;
 }
 
 export async function submitAttemptServer(
@@ -1445,10 +1446,11 @@ export async function submitAttemptServer(
   queuedOffline?: boolean;
 }> {
   const token = await getIdTokenSafe();
-  const uid = auth.currentUser?.uid || 'student-user';
-  const studentName = studentNameArabic || auth.currentUser?.displayName || auth.currentUser?.email || 'طالب طب بشري';
+  const isGuestPreview = Boolean(extraOptions?.isGuestPreview || !auth.currentUser);
+  const uid = isGuestPreview ? 'guest' : (auth.currentUser?.uid || 'student-user');
+  const studentName = studentNameArabic || auth.currentUser?.displayName || auth.currentUser?.email || 'زائر تجريبي';
   const assessmentId = assessmentObj?.id || 'asmnt-cvs-midterm';
-  const releasePolicy = assessmentObj?.resultReleasePolicy || 'immediate';
+  const releasePolicy = isGuestPreview ? 'immediate' : (assessmentObj?.resultReleasePolicy || 'immediate');
   const questionIds = assessmentObj?.questionIds?.length
     ? assessmentObj.questionIds
     : ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
@@ -1498,7 +1500,8 @@ export async function submitAttemptServer(
           durationSeconds: effectiveDurationSeconds,
           resultReleasePolicy: releasePolicy,
           questionIds,
-          fallbackAnswerKeys
+          fallbackAnswerKeys,
+          isGuestPreview
         })
       });
       if (res.ok) {
@@ -1506,6 +1509,7 @@ export async function submitAttemptServer(
         if (data.success && data.result) {
           finalResult = {
             ...data.result,
+            isReleased: isGuestPreview ? true : data.result.isReleased,
             studentDisplayNamePublic: data.result.studentDisplayNamePublic || effectiveDisplayNamePublic,
             studentUsername: data.result.studentUsername || effectiveUsername,
             leaderboardNameMode: data.result.leaderboardNameMode || effectiveNameMode,
@@ -1603,6 +1607,19 @@ export async function submitAttemptServer(
       gradedAt: nowIso,
       isReleased,
       releasedAt: isReleased ? nowIso : undefined
+    };
+  }
+
+  // If this is an unauthenticated guest solving the exam, return their graded score immediately
+  // without adding a fake guest entry to the official student leaderboard until they create an account.
+  if (isGuestPreview) {
+    return {
+      result: {
+        ...finalResult,
+        isReleased: true
+      },
+      isReleased: true,
+      queuedOffline: false
     };
   }
 
@@ -2498,6 +2515,7 @@ export interface PendingGuestExamSubmission {
   durationSeconds: number;
   preferredUsername?: string;
   preferredNameMode?: LeaderboardNameMode;
+  scoredResult?: AssessmentResult;
 }
 
 interface SharedAssessmentBundle {

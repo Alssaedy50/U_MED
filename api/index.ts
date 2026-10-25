@@ -1019,7 +1019,8 @@ app.post('/api/assessments/submit-attempt', optionalAuth, (req: AuthenticatedReq
     const percentage = totalPoints > 0 ? Math.round((score / totalPoints) * 100) : 0;
     const nowIso = now.toISOString();
     const policy = storedAssessment?.resultReleasePolicy || resultReleasePolicy || 'immediate';
-    const isReleased = policy === 'immediate';
+    const isGuestPreview = Boolean(req.body?.isGuestPreview || uid === 'guest');
+    const isReleased = isGuestPreview ? true : policy === 'immediate';
 
     const computedDurationSeconds =
       typeof req.body?.durationSeconds === 'number' && req.body.durationSeconds >= 0
@@ -1047,22 +1048,24 @@ app.post('/api/assessments/submit-attempt', optionalAuth, (req: AuthenticatedReq
       releasedAt: isReleased ? nowIso : undefined
     };
 
-    resultsStore[attemptId] = result;
-    saveJsonSafe(RESULTS_FILE, resultsStore);
+    if (!isGuestPreview) {
+      resultsStore[attemptId] = result;
+      saveJsonSafe(RESULTS_FILE, resultsStore);
 
-    if (attempt) {
-      attempt.status = 'scored';
-      attempt.submittedAt = nowIso;
-      attempt.durationSeconds = computedDurationSeconds;
-      saveJsonSafe(ATTEMPTS_FILE, attemptsStore);
+      if (attempt) {
+        attempt.status = 'scored';
+        attempt.submittedAt = nowIso;
+        attempt.durationSeconds = computedDurationSeconds;
+        saveJsonSafe(ATTEMPTS_FILE, attemptsStore);
+      }
+
+      addAuditLog(
+        'ASSESSMENT_SCORED',
+        studentName || uid,
+        { attemptId, assessmentId: effectiveAssessmentId, score, totalPoints, percentage },
+        uid
+      );
     }
-
-    addAuditLog(
-      'ASSESSMENT_SCORED',
-      studentName || uid,
-      { attemptId, assessmentId: effectiveAssessmentId, score, totalPoints, percentage },
-      uid
-    );
 
     res.json({
       success: true,

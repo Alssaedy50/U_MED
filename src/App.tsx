@@ -42,7 +42,9 @@ import {
   Archive,
   ShieldAlert,
   GraduationCap,
-  Bell
+  Bell,
+  Share2,
+  Check
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext.tsx';
 import { UserRole, AuditLog, StudentEnrollment } from './types/umed.ts';
@@ -57,6 +59,8 @@ import { startAcademicRealtimeSync } from './services/academicService.ts';
 import { getRoleLabelArabic } from './services/batchGovernanceService.ts';
 import { subscribeToAppNotifications } from './services/notificationService.ts';
 import {
+  getAssessments,
+  buildShareableAssessmentUrl,
   getSharedAssessmentIdFromUrl,
   clearSharedAssessmentIdFromUrl,
   fetchSharedAssessmentForGuest,
@@ -235,11 +239,23 @@ export default function App() {
   const [isSharedExamFetching, setIsSharedExamFetching] = useState<boolean>(false);
   const [sharedLinkPasteInput, setSharedLinkPasteInput] = useState<string>('');
   const [showSharedLinkPasteBox, setShowSharedLinkPasteBox] = useState<boolean>(false);
+  const [showPublicModelsBrowser, setShowPublicModelsBrowser] = useState<boolean>(false);
+  const [publicModelsList, setPublicModelsList] = useState<Assessment[]>([]);
+  const [copiedModelId, setCopiedModelId] = useState<string | null>(null);
   const [claimedGuestOutcome, setClaimedGuestOutcome] = useState<{
     result: AssessmentResult;
     assessment: Assessment;
   } | null>(null);
   const [claimedLeaderboard, setClaimedLeaderboard] = useState<AssessmentResult[]>([]);
+
+  useEffect(() => {
+    getAssessments('univ-dar-al-salam')
+      .then((list) => {
+        const published = list.filter((a) => a.status === 'published');
+        setPublicModelsList(published.length > 0 ? published : list);
+      })
+      .catch(() => {});
+  }, [isGuestExamOpen]);
 
   // Global Platform Branding, Terms/Privacy & Contact Settings (Managed strictly by Platform Owner)
   const [platformSettings, setPlatformSettings] = useState<PlatformBrandingAndPolicies>(() =>
@@ -968,63 +984,65 @@ export default function App() {
               </p>
             </div>
 
-            {/* Mandatory Account Creation Banner when Guest completed a Trial Exam and wants to reveal Result */}
+            {/* Guest Account Creation & Competition Notification Banner when Guest solved a model */}
             {pendingGuestSubmission && (
-              <div className="p-4 rounded-2xl bg-gradient-to-l from-indigo-950/90 to-teal-950/90 border border-teal-500/50 space-y-2 shadow-xl">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[11px] font-bold">
-                    إجاباتك محفوظة وجاهزة للتصحيح ✓
+              <div className="p-4 rounded-2xl bg-gradient-to-l from-amber-950/70 via-indigo-950/90 to-teal-950/90 border-2 border-amber-500/50 space-y-2.5 shadow-xl">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[11px] font-extrabold">
+                    {pendingGuestSubmission.scoredResult
+                      ? `نتيجتك في الاختبار: ${pendingGuestSubmission.scoredResult.score}/${pendingGuestSubmission.scoredResult.totalPoints} (${pendingGuestSubmission.scoredResult.percentage}%) ✓`
+                      : 'إجاباتك محفوظة وجاهزة ✓'}
                   </span>
                   <button
                     type="button"
                     onClick={() => setIsGuestExamOpen(true)}
                     className="text-[11px] text-teal-300 hover:underline font-bold"
                   >
-                    مراجعة إجاباتي
+                    عرض الاختبار والنتيجة
                   </button>
                 </div>
                 <h3 className="text-xs sm:text-sm font-extrabold text-white">
-                  أكمل إنشاء حسابك الإجباري الآن لإظهار نتيجتك في "{pendingGuestSubmission.assessment.titleArabic}" ومعرفة ترتيبك!
+                  تنبيه: أنشئ حسابك الآن للدخول في المنافسة مع باقي الطلاب في "{pendingGuestSubmission.assessment.titleArabic}" والوصول لجميع الخدمات!
                 </h3>
                 <p className="text-[11px] text-slate-300 leading-relaxed">
-                  بمجرد إتمام التسجيل أو تسجيل الدخول أدناه، سيقوم النظام بتصحيح إجاباتك المحفوظة ({Object.keys(pendingGuestSubmission.answers || {}).length} إجابة) وعرض درجتك وترتيبك التنافسي فوراً.
+                  بمجرد إتمام إنشاء الحساب أو تسجيل الدخول أدناه، سيتم تثبيت درجتك تلقائياً في لوحة الترتيب والمنافسة الرسمية مع زملائك، وفتح كافة خدمات المنصة (المكتبة الطبية، المحاضرات، الملخصات، وبنوك الأسئلة).
                 </p>
               </div>
             )}
 
-            {/* Shared Trial Exam Quick Launch Card if visitor opened a shared link */}
+            {/* Shared Model Quick Launch Card if visitor opened a shared link */}
             {sharedGuestData && !pendingGuestSubmission && (
               <div className="p-4 rounded-2xl bg-indigo-950/50 border border-indigo-500/40 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 text-[11px] font-bold">
-                    دعوة لاختبار تجريبي مشترك
+                    نموذج اختبار متاح للحل المباشر وإظهار النتيجة فوراً
                   </span>
                   <Trophy className="w-4 h-4 text-amber-400" />
                 </div>
                 <div className="text-sm font-bold text-white">{sharedGuestData.assessment.titleArabic}</div>
                 <p className="text-[11px] text-slate-300">
-                  يمكنك حل جميع أسئلة هذا الاختبار التجريبي الآن مباشرةً، وعند طلب إظهار النتيجة ستتمكن من إنشاء حسابك لحفظ درجتك وترتيبك.
+                  يمكنك حل جميع أسئلة هذا النموذج ومعرفة نتيجتك النهائية فوراً حتى بدون حساب، مع إمكانية إنشاء حساب للدخول في المنافسة مع باقي الطلاب والوصول لجميع مميزات المنصة.
                 </p>
                 <button
                   type="button"
                   onClick={() => setIsGuestExamOpen(true)}
                   className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-lg transition-colors"
                 >
-                  بدء حل الاختبار التجريبي الآن ({sharedGuestData.questions.length} أسئلة)
+                  بدء حل الاختبار وإظهار النتيجة الآن ({sharedGuestData.questions.length} أسئلة)
                 </button>
               </div>
             )}
 
             {!sharedGuestData && !pendingGuestSubmission && (
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <button
                     type="button"
-                    onClick={() => loadAndOpenSharedAssessment('asmnt-cvs-midterm', true)}
+                    onClick={() => setShowPublicModelsBrowser((prev) => !prev)}
                     className="py-2.5 px-3 rounded-xl bg-indigo-950/60 hover:bg-indigo-900/70 border border-indigo-500/40 text-indigo-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
                   >
                     <Trophy className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>حل اختبار تجريبي الآن</span>
+                    <span>حل ومشاركة النماذج المتاحة ({publicModelsList.length || 1})</span>
                   </button>
                   <button
                     type="button"
@@ -1032,14 +1050,88 @@ export default function App() {
                     className="py-2.5 px-3 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-teal-300 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
                   >
                     <ExternalLink className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-                    <span>فتح رابط اختبار مشترك</span>
+                    <span>فتح رابط نموذج مشترك</span>
                   </button>
                 </div>
+
+                {showPublicModelsBrowser && (
+                  <div className="p-3.5 rounded-2xl bg-slate-950 border border-indigo-500/40 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-indigo-300">
+                        اختر أي نموذج لحله ومعرفة نتيجتك فوراً (أو نسخ رابط مشاركته):
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowPublicModelsBrowser(false)}
+                        className="text-[11px] text-slate-400 hover:text-white"
+                      >
+                        إغلاق
+                      </button>
+                    </div>
+                    <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                      {(publicModelsList.length > 0
+                        ? publicModelsList
+                        : [
+                            {
+                              id: 'asmnt-cvs-midterm',
+                              titleArabic: 'اختبار منتصف بلوك القلبي الوعائي (CVS)',
+                              assessmentType: 'exam',
+                              durationMinutes: 30,
+                              totalPoints: 20
+                            } as Assessment
+                          ]
+                      ).map((model) => (
+                        <div
+                          key={model.id}
+                          className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between gap-2"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="text-xs font-bold text-white truncate">{model.titleArabic}</div>
+                            <div className="text-[10px] text-slate-400">
+                              {model.assessmentType === 'competition' ? 'مسابقة تنافسية' : 'نموذج اختبار'} • متاح للحل وإظهار النتيجة بدون حساب
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const shareUrl = buildShareableAssessmentUrl(model);
+                                try {
+                                  await navigator.clipboard.writeText(shareUrl);
+                                } catch {}
+                                setCopiedModelId(model.id);
+                                setTimeout(() => setCopiedModelId(null), 2200);
+                              }}
+                              className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 transition-colors"
+                              title="نسخ رابط مشاركة هذا النموذج"
+                            >
+                              {copiedModelId === model.id ? (
+                                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                              ) : (
+                                <Share2 className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowPublicModelsBrowser(false);
+                                loadAndOpenSharedAssessment(model.id, true);
+                              }}
+                              className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold transition-colors"
+                            >
+                              ابدأ الحل
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {showSharedLinkPasteBox && (
                   <div className="p-3 rounded-xl bg-slate-950 border border-indigo-500/40 space-y-2">
                     <label className="block text-[11px] text-slate-300 font-semibold">
-                      الصق رابط الاختبار المشترك أو معرف التقييم لفتحه فوراً:
+                      الصق رابط النموذج المشترك أو معرف التقييم لفتحه وحله فوراً:
                     </label>
                     <div className="flex items-center gap-2">
                       <input
@@ -1062,7 +1154,7 @@ export default function App() {
                         }}
                         className="px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shrink-0"
                       >
-                        فتح الاختبار
+                        فتح النموذج
                       </button>
                     </div>
                   </div>

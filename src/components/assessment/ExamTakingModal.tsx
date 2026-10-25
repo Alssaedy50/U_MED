@@ -143,11 +143,7 @@ export default function ExamTakingModal({
           if (currentQuestionIndex < questions.length - 1) {
             setCurrentQuestionIndex((idx) => Math.min(questions.length - 1, idx + 1));
           } else {
-            if (isGuestMode) {
-              triggerGuestAccountGate();
-            } else {
-              handleFinalSubmit();
-            }
+            handleFinalSubmit();
           }
           return 0;
         }
@@ -178,11 +174,7 @@ export default function ExamTakingModal({
 
       if (remaining === 0 && !submitting && !result) {
         clearInterval(timer);
-        if (isGuestMode) {
-          triggerGuestAccountGate();
-        } else {
-          handleFinalSubmit();
-        }
+        handleFinalSubmit();
       }
     }, 1000);
 
@@ -241,23 +233,6 @@ export default function ExamTakingModal({
     }, 450);
   };
 
-  const triggerGuestAccountGate = () => {
-    const elapsedSeconds = Math.max(1, Math.floor((Date.now() - startedAtTimestampRef.current) / 1000));
-    const pendingPayload: PendingGuestExamSubmission = {
-      assessmentId: assessment.id,
-      assessment,
-      answers,
-      startedAt: new Date(startedAtTimestampRef.current).toISOString(),
-      submittedAt: new Date().toISOString(),
-      durationSeconds: elapsedSeconds,
-      preferredUsername: customUsername,
-      preferredNameMode: nameMode
-    };
-    savePendingGuestExamSubmission(pendingPayload);
-    setShowConfirmSubmit(false);
-    setShowMandatoryGuestGate(true);
-  };
-
   const handleProceedToGuestRegistration = () => {
     const elapsedSeconds = Math.max(1, Math.floor((Date.now() - startedAtTimestampRef.current) / 1000));
     const pendingPayload: PendingGuestExamSubmission = {
@@ -268,7 +243,8 @@ export default function ExamTakingModal({
       submittedAt: new Date().toISOString(),
       durationSeconds: elapsedSeconds,
       preferredUsername: customUsername,
-      preferredNameMode: nameMode
+      preferredNameMode: nameMode,
+      scoredResult: result || undefined
     };
     savePendingGuestExamSubmission(pendingPayload);
     if (onRequireGuestAccount) {
@@ -277,16 +253,52 @@ export default function ExamTakingModal({
   };
 
   const handleFinalSubmit = async () => {
-    if (isGuestMode) {
-      triggerGuestAccountGate();
-      return;
-    }
     if (submitting) return;
     setSubmitting(true);
     setErrorMsg(null);
 
     try {
       const elapsedSeconds = Math.max(1, Math.floor((Date.now() - startedAtTimestampRef.current) / 1000));
+
+      if (isGuestMode) {
+        const guestDisplayName = formatStudentLeaderboardName({
+          uid: 'guest',
+          fullNameArabic: studentNameArabic || 'زائر',
+          username: customUsername,
+          mode: nameMode
+        });
+
+        const res = await submitAttemptServer(
+          attempt.id,
+          answers,
+          assessment,
+          studentNameArabic || 'زائر',
+          {
+            durationSeconds: elapsedSeconds,
+            studentDisplayNamePublic: guestDisplayName,
+            studentUsername: customUsername,
+            leaderboardNameMode: nameMode,
+            isGuestPreview: true
+          }
+        );
+
+        const pendingPayload: PendingGuestExamSubmission = {
+          assessmentId: assessment.id,
+          assessment,
+          answers,
+          startedAt: new Date(startedAtTimestampRef.current).toISOString(),
+          submittedAt: new Date().toISOString(),
+          durationSeconds: elapsedSeconds,
+          preferredUsername: customUsername,
+          preferredNameMode: nameMode,
+          scoredResult: res.result
+        };
+        savePendingGuestExamSubmission(pendingPayload);
+        setQueuedOfflineSubmit(false);
+        setResult(res.result);
+        return;
+      }
+
       const publicDisplayName = await saveStudentLeaderboardIdentity(
         uid,
         { username: customUsername, leaderboardNameMode: nameMode },
@@ -322,6 +334,41 @@ export default function ExamTakingModal({
     setCustomUsername(newUsername);
     setSavingIdentity(true);
     try {
+      if (isGuestMode) {
+        const updatedGuestName = formatStudentLeaderboardName({
+          uid: 'guest',
+          fullNameArabic: studentNameArabic || 'طالب طب بشري',
+          username: newUsername,
+          mode: newMode
+        });
+        const updatedResult = result
+          ? {
+              ...result,
+              studentDisplayNamePublic: updatedGuestName,
+              studentUsername: newUsername,
+              leaderboardNameMode: newMode
+            }
+          : null;
+        if (updatedResult) {
+          setResult(updatedResult);
+        }
+        const elapsedSeconds = Math.max(1, Math.floor((Date.now() - startedAtTimestampRef.current) / 1000));
+        savePendingGuestExamSubmission({
+          assessmentId: assessment.id,
+          assessment,
+          answers,
+          startedAt: new Date(startedAtTimestampRef.current).toISOString(),
+          submittedAt: new Date().toISOString(),
+          durationSeconds: elapsedSeconds,
+          preferredUsername: newUsername,
+          preferredNameMode: newMode,
+          scoredResult: updatedResult || undefined
+        });
+        setIdentitySavedToast(true);
+        setTimeout(() => setIdentitySavedToast(false), 2500);
+        return;
+      }
+
       const updatedPublicName = await saveStudentLeaderboardIdentity(
         uid,
         { username: newUsername, leaderboardNameMode: newMode },
@@ -345,7 +392,7 @@ export default function ExamTakingModal({
   };
 
   const handleCopyShareUrl = async () => {
-    const shareUrl = buildShareableAssessmentUrl(assessment.id);
+    const shareUrl = buildShareableAssessmentUrl(assessment, questions);
     try {
       await navigator.clipboard.writeText(shareUrl);
       setCopiedShareLink(true);
@@ -412,7 +459,7 @@ export default function ExamTakingModal({
           </span>
           {isGuestMode && (
             <span className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">
-              وضع الاختبار التجريبي المشترك
+              متاح للحل المباشر (بدون حساب)
             </span>
           )}
           <h2 className="text-sm md:text-base font-bold text-white line-clamp-1">
@@ -432,7 +479,7 @@ export default function ExamTakingModal({
             {isGuestMode ? (
               <>
                 <CheckCircle2 className="w-3.5 h-3.5 text-indigo-400" />
-                <span className="text-indigo-300">حفظ إجاباتك التجريبية تلقائياً ✓</span>
+                <span className="text-indigo-300">حفظ إجاباتك تلقائياً ✓</span>
               </>
             ) : syncStatus === 'saving' ? (
               <>
@@ -501,92 +548,8 @@ export default function ExamTakingModal({
       {/* 2. Main Content Area */}
       <main className="flex-1 overflow-y-auto p-4 md:p-6 max-w-4xl w-full mx-auto space-y-6">
         
-        {/* A) Mandatory Account Creation Gate for Guest Trial Exam */}
-        {showMandatoryGuestGate ? (
-          <div className="bg-slate-900 border border-indigo-500/40 rounded-2xl p-6 md:p-8 shadow-2xl space-y-6 max-w-2xl mx-auto my-4">
-            <div className="w-16 h-16 rounded-2xl bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 mx-auto flex items-center justify-center">
-              <UserPlus className="w-8 h-8" />
-            </div>
-
-            <div className="text-center space-y-2">
-              <span className="inline-block px-3 py-1 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-bold">
-                تم حفظ جميع إجاباتك ({answeredCount} من {questions.length} سؤال) بنجاح ✓
-              </span>
-              <h3 className="text-xl md:text-2xl font-extrabold text-white">
-                إنشاء حساب إجباري لإظهار نتيجتك ومعرفة ترتيبك
-              </h3>
-              <p className="text-xs md:text-sm text-slate-300 leading-relaxed max-w-lg mx-auto">
-                لقد أتممت حل الأسئلة في الاختبار التجريبي! لإظهار درجتك النهائية وتصحيح إجاباتك وإدراج اسمك في قائمة الترتيب التنافسية مع زملائك، يجب تسجيل حساب مجاني أو تسجيل الدخول الآن.
-              </p>
-            </div>
-
-            {/* Choose Display Name Mode before registering */}
-            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-bold text-teal-300 flex items-center gap-1.5">
-                  <UserCheck className="w-4 h-4" />
-                  <span>اختر كيف يظهر اسمك أمام باقي الطلاب في لوحة الترتيب:</span>
-                </label>
-                <span className="text-[11px] text-slate-400">يمكنك تغييره لاحقاً</span>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {[
-                  { id: 'full_name', label: 'الاسم الكامل الرسمي', desc: 'مثال: د. أحمد محمد الصعدي' },
-                  { id: 'custom_username', label: 'اسم مستخدم مخصص (لقب)', desc: 'مثال: @Dr_Cardio' },
-                  { id: 'abbreviated', label: 'الاسم الأول + حرف اللقب', desc: 'مثال: د. أحمد ص.' },
-                  { id: 'anonymous_code', label: 'لقب طبي مشفر (خصوصية)', desc: 'مثال: طبيب متميز #A4F2' }
-                ].map((opt) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => setNameMode(opt.id as LeaderboardNameMode)}
-                    className={`p-2.5 rounded-xl border text-right transition-all ${
-                      nameMode === opt.id
-                        ? 'bg-teal-950/70 border-teal-500 text-teal-200 ring-1 ring-teal-500/40'
-                        : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="text-xs font-bold">{opt.label}</div>
-                    <div className="text-[10px] text-slate-400 mt-0.5">{opt.desc}</div>
-                  </button>
-                ))}
-              </div>
-
-              {nameMode === 'custom_username' && (
-                <div className="pt-2">
-                  <label className="block text-[11px] text-slate-300 mb-1">
-                    اكتب اسم المستخدم أو اللقب التنافسي الذي ترغب بظهوره:
-                  </label>
-                  <input
-                    type="text"
-                    value={customUsername}
-                    onChange={(e) => setCustomUsername(e.target.value)}
-                    placeholder="مثال: Dr_Ahmed_Yemen"
-                    className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:border-teal-500 focus:outline-none"
-                  />
-                </div>
-              )}
-            </div>
-
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
-              <button
-                onClick={handleProceedToGuestRegistration}
-                className="w-full sm:w-auto px-6 py-3 rounded-xl bg-gradient-to-l from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white text-sm font-extrabold flex items-center justify-center gap-2 shadow-xl shadow-teal-950/60 transition-all"
-              >
-                <UserPlus className="w-4 h-4" />
-                <span>إنشاء حساب الآن وإظهار نتيجتي فوراً</span>
-              </button>
-              <button
-                onClick={() => setShowMandatoryGuestGate(false)}
-                className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors"
-              >
-                مراجعة إجاباتي قبل التسجيل
-              </button>
-            </div>
-          </div>
-        ) : result ? (
-          /* B) Official Result & Ranked Leaderboard Screen */
+        {/* A) Official Result & Ranked Leaderboard Screen (Shown immediately for both Guests and Registered Users) */}
+        {result ? (
           <div className="space-y-6">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl text-center space-y-5">
               <div className="w-16 h-16 rounded-full bg-teal-500/20 text-teal-400 mx-auto flex items-center justify-center border border-teal-500/30">
@@ -595,10 +558,12 @@ export default function ExamTakingModal({
 
               <div>
                 <h3 className="text-xl md:text-2xl font-bold text-white mb-1">
-                  {assessment.assessmentType === 'competition' ? 'تمت المشاركة في المسابقة بنجاح!' : 'تم تسليم الاختبار بنجاح!'}
+                  {assessment.assessmentType === 'competition' ? 'تمت المشاركة وإظهار نتيجتك بنجاح!' : 'تم تصحيح الاختبار وإظهار نتيجتك فوراً!'}
                 </h3>
                 <p className="text-slate-400 text-xs md:text-sm">
-                  {queuedOfflineSubmit
+                  {isGuestMode
+                    ? 'تم تصحيح إجاباتك وإظهار درجتك النهائية مباشرةً. أنشئ حسابك أدناه لحفظ نتيجتك ودخول المنافسة الرسمية مع باقي الطلاب!'
+                    : queuedOfflineSubmit
                     ? 'تم حفظ إجاباتك النهائية بأمان على جهازك (وضع أوفلاين)، وسيتم رفعها وتصحيحها تلقائياً فور عودة الاتصال بالإنترنت.'
                     : 'تم حفظ وتصحيح محاولتك سحابياً وإدراج نتيجتك في لوحة الترتيب التنافسية.'}
                 </p>
@@ -612,7 +577,7 @@ export default function ExamTakingModal({
                     بمجرد اتصال هاتفك بالإنترنت ستقوم المنصة بمزامنة إجاباتك ورصد درجتك المعتمدة تلقائياً.
                   </p>
                 </div>
-              ) : result.isReleased ? (
+              ) : result.isReleased || isGuestMode ? (
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-xl mx-auto">
                   <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
                     <div className="text-slate-400 text-[11px]">الدرجة النهائية</div>
@@ -627,9 +592,15 @@ export default function ExamTakingModal({
                     </div>
                   </div>
                   <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
-                    <div className="text-slate-400 text-[11px]">ترتيبك بين الطلاب</div>
-                    <div className="text-2xl font-extrabold text-amber-400 font-mono">
-                      {myRankIndex >= 0 ? `#${myRankIndex + 1}` : '#1'}
+                    <div className="text-slate-400 text-[11px]">
+                      {isGuestMode ? 'حالة الترتيب التنافسي' : 'ترتيبك بين الطلاب'}
+                    </div>
+                    <div className="text-base sm:text-xl font-extrabold text-amber-400 font-mono">
+                      {isGuestMode
+                        ? 'بانتظار الحساب'
+                        : myRankIndex >= 0
+                        ? `#${myRankIndex + 1}`
+                        : '#1'}
                     </div>
                   </div>
                 </div>
@@ -643,61 +614,153 @@ export default function ExamTakingModal({
                 </div>
               )}
 
-              {/* Student Display Name Customization Card right inside Result */}
-              <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-4 text-right max-w-xl mx-auto space-y-3">
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <div className="text-xs font-bold text-teal-300 flex items-center gap-1.5">
-                    <Sparkles className="w-4 h-4 text-amber-400" />
-                    <span>اسمك الظاهر أمام الطلاب في لوحة الشرف: <strong className="text-white">{previewDisplayName}</strong></span>
+              {/* PROMINENT GUEST NOTIFICATION: Prompt unauthenticated users to create an account to join competition & unlock all services */}
+              {isGuestMode && (
+                <div className="bg-gradient-to-br from-amber-950/60 via-indigo-950/70 to-slate-950 border-2 border-amber-500/50 rounded-2xl p-5 text-right max-w-2xl mx-auto space-y-4 shadow-2xl">
+                  <div className="flex items-start gap-3">
+                    <div className="w-11 h-11 rounded-xl bg-amber-500/20 border border-amber-400/40 text-amber-300 flex items-center justify-center shrink-0 mt-0.5">
+                      <AlertTriangle className="w-6 h-6" />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[11px] font-extrabold">
+                        تنبيه هام للزوار غير المسجلين
+                      </div>
+                      <h4 className="text-sm sm:text-base font-extrabold text-white">
+                        يرجى إنشاء حساب في المنصة للدخول في المنافسة مع باقي الطلاب والوصول لجميع الخدمات والمميزات!
+                      </h4>
+                      <p className="text-xs text-slate-300 leading-relaxed">
+                        لقد أتممت حل النموذج وحصلت على <strong className="text-teal-300 font-mono">{result.score}/{result.totalPoints} ({result.percentage}%)</strong>. لأنك لم تقم بإنشاء حساب بعد، فإن نتيجتك الحالية معروضة لك فقط ولم تُدرج بعد في لوحة الشرف والمنافسة الرسمية.
+                      </p>
+                    </div>
                   </div>
-                  {identitySavedToast && (
-                    <span className="text-[11px] text-emerald-400 font-bold">تم تحديث اسمك في الترتيب ✓</span>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+                    <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800/90 flex items-start gap-2.5">
+                      <Trophy className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                      <div>
+                        <div className="font-bold text-amber-200">الدخول في منافسة مع باقي الطلاب</div>
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          تثبيت درجتك المحفوظة فوراً في لوحة الترتيب التنافسية ومقارنة مركزك مع زملائك في الدفعة.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800/90 flex items-start gap-2.5">
+                      <Sparkles className="w-4 h-4 text-teal-400 shrink-0 mt-0.5" />
+                      <div>
+                        <div className="font-bold text-teal-200">الوصول لجميع الخدمات والمميزات</div>
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          فتح المكتبة الطبية الرقمية، محاضرات البلوكات، الملخصات، بنوك الأسئلة، وسجل نتائجك السحابي.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Choose Display Name before registering */}
+                  <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-3.5 space-y-2.5">
+                    <div className="text-xs font-bold text-teal-300 flex items-center gap-1.5">
+                      <UserCheck className="w-4 h-4 text-teal-400" />
+                      <span>اختر كيف سيظهر اسمك في المنافسة فور إنشاء الحساب: <strong className="text-white">{previewDisplayName}</strong></span>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {[
+                        { id: 'full_name', label: 'الاسم الكامل' },
+                        { id: 'custom_username', label: 'اسم مستخدم @' },
+                        { id: 'abbreviated', label: 'اسم مختصر' },
+                        { id: 'anonymous_code', label: 'لقب مشفر' }
+                      ].map((m) => (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => handleUpdateDisplayNameOnResult(m.id as LeaderboardNameMode, customUsername)}
+                          className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-all ${
+                            nameMode === m.id
+                              ? 'bg-teal-600 text-white border-teal-500'
+                              : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                          }`}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
+                    {nameMode === 'custom_username' && (
+                      <input
+                        type="text"
+                        value={customUsername}
+                        onChange={(e) => setCustomUsername(e.target.value)}
+                        placeholder="اكتب اسم المستخدم أو اللقب التنافسي (مثال: Dr_Ahmed)"
+                        className="w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:border-teal-500 focus:outline-none"
+                      />
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleProceedToGuestRegistration}
+                    className="w-full py-3 px-5 rounded-xl bg-gradient-to-l from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white text-xs sm:text-sm font-extrabold flex items-center justify-center gap-2 shadow-xl shadow-teal-950/60 transition-all"
+                  >
+                    <UserPlus className="w-4 h-4" />
+                    <span>إنشاء حساب الآن للدخول في المنافسة والوصول لجميع المميزات (نتيجتك محفوظة تلقائياً)</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Student Display Name Customization Card for Logged-in Users */}
+              {!isGuestMode && (
+                <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-4 text-right max-w-xl mx-auto space-y-3">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="text-xs font-bold text-teal-300 flex items-center gap-1.5">
+                      <Sparkles className="w-4 h-4 text-amber-400" />
+                      <span>اسمك الظاهر أمام الطلاب في لوحة الشرف: <strong className="text-white">{previewDisplayName}</strong></span>
+                    </div>
+                    {identitySavedToast && (
+                      <span className="text-[11px] text-emerald-400 font-bold">تم تحديث اسمك في الترتيب ✓</span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {[
+                      { id: 'full_name', label: 'الاسم الكامل' },
+                      { id: 'custom_username', label: 'اسم مستخدم @' },
+                      { id: 'abbreviated', label: 'اسم مختصر' },
+                      { id: 'anonymous_code', label: 'لقب مشفر' }
+                    ].map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        disabled={savingIdentity}
+                        onClick={() => handleUpdateDisplayNameOnResult(m.id as LeaderboardNameMode, customUsername)}
+                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-all ${
+                          nameMode === m.id
+                            ? 'bg-teal-600 text-white border-teal-500'
+                            : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                        }`}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {nameMode === 'custom_username' && (
+                    <div className="flex items-center gap-2 pt-1">
+                      <input
+                        type="text"
+                        value={customUsername}
+                        onChange={(e) => setCustomUsername(e.target.value)}
+                        placeholder="اكتب اسم المستخدم المفضل (مثال: Dr_Osama)"
+                        className="flex-1 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:border-teal-500 focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        disabled={savingIdentity}
+                        onClick={() => handleUpdateDisplayNameOnResult('custom_username', customUsername)}
+                        className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold"
+                      >
+                        حفظ الاسم
+                      </button>
+                    </div>
                   )}
                 </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  {[
-                    { id: 'full_name', label: 'الاسم الكامل' },
-                    { id: 'custom_username', label: 'اسم مستخدم @' },
-                    { id: 'abbreviated', label: 'اسم مختصر' },
-                    { id: 'anonymous_code', label: 'لقب مشفر' }
-                  ].map((m) => (
-                    <button
-                      key={m.id}
-                      type="button"
-                      disabled={savingIdentity}
-                      onClick={() => handleUpdateDisplayNameOnResult(m.id as LeaderboardNameMode, customUsername)}
-                      className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-all ${
-                        nameMode === m.id
-                          ? 'bg-teal-600 text-white border-teal-500'
-                          : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
-                      }`}
-                    >
-                      {m.label}
-                    </button>
-                  ))}
-                </div>
-
-                {nameMode === 'custom_username' && (
-                  <div className="flex items-center gap-2 pt-1">
-                    <input
-                      type="text"
-                      value={customUsername}
-                      onChange={(e) => setCustomUsername(e.target.value)}
-                      placeholder="اكتب اسم المستخدم المفضل (مثال: Dr_Osama)"
-                      className="flex-1 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:border-teal-500 focus:outline-none"
-                    />
-                    <button
-                      type="button"
-                      disabled={savingIdentity}
-                      onClick={() => handleUpdateDisplayNameOnResult('custom_username', customUsername)}
-                      className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold"
-                    >
-                      حفظ الاسم
-                    </button>
-                  </div>
-                )}
-              </div>
+              )}
 
               <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
                 <button
@@ -705,25 +768,34 @@ export default function ExamTakingModal({
                   className="px-4 py-2.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 text-indigo-200 text-xs font-bold flex items-center gap-2 transition-colors"
                 >
                   {copiedShareLink ? <Check className="w-4 h-4 text-emerald-400" /> : <Share2 className="w-4 h-4" />}
-                  <span>{copiedShareLink ? 'تم نسخ رابط مشاركة الاختبار التجريبي ✓' : 'مشاركة الاختبار التجريبي مع زملائك'}</span>
+                  <span>{copiedShareLink ? 'تم نسخ رابط مشاركة النموذج ✓' : 'مشاركة رابط النموذج مع زملائك'}</span>
                 </button>
+                {isGuestMode && (
+                  <button
+                    type="button"
+                    onClick={() => setResult(null)}
+                    className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-teal-300 text-xs font-bold transition-colors"
+                  >
+                    مراجعة الأسئلة / تعديل الإجابات
+                  </button>
+                )}
                 <button
                   onClick={onClose}
-                  className="px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold transition-colors shadow-lg shadow-teal-900/30"
+                  className="px-6 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-colors"
                 >
-                  العودة إلى قائمة التقييمات
+                  {isGuestMode ? 'إغلاق والعودة للصفحة الرئيسية' : 'العودة إلى قائمة التقييمات'}
                 </button>
               </div>
             </div>
 
             {/* Ordered Leaderboard Section */}
-            {result.isReleased && (
+            {(result.isReleased || isGuestMode) && (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
                 <div className="flex items-center justify-between flex-wrap gap-2 border-b border-slate-800 pb-3">
                   <div className="flex items-center gap-2">
                     <Trophy className="w-5 h-5 text-amber-400" />
                     <h4 className="text-sm md:text-base font-bold text-white">
-                      ترتيب نتائج الطلاب ولوحة الشرف ({leaderboard.length} مشارك)
+                      ترتيب نتائج الطلاب ولوحة الشرف ({leaderboard.length} مشارك مسجل)
                     </h4>
                   </div>
                   <span className="text-[11px] text-slate-400">
@@ -737,13 +809,15 @@ export default function ExamTakingModal({
                   </div>
                 ) : leaderboard.length === 0 ? (
                   <div className="p-6 text-center text-xs text-slate-400">
-                    أنت أول المتقدمين في لوحة الترتيب لهذا التقييم!
+                    {isGuestMode
+                      ? 'أنشئ حسابك الآن لتكون أول المتصدرين في لوحة الشرف لهذا النموذج!'
+                      : 'أنت أول المتقدمين في لوحة الترتيب لهذا التقييم!'}
                   </div>
                 ) : (
                   <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
                     {leaderboard.map((item, idx) => {
                       const rank = idx + 1;
-                      const isMe = (uid && item.uid === uid) || item.id === result.id;
+                      const isMe = !isGuestMode && ((uid && item.uid === uid) || item.id === result.id);
                       const displayName = resolveResultPublicDisplayName(item);
 
                       return (
@@ -949,17 +1023,11 @@ export default function ExamTakingModal({
           </button>
 
           <button
-            onClick={() => {
-              if (isGuestMode) {
-                triggerGuestAccountGate();
-              } else {
-                setShowConfirmSubmit(true);
-              }
-            }}
+            onClick={() => setShowConfirmSubmit(true)}
             className="px-5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-2 transition-colors shadow-lg shadow-teal-900/40"
           >
             <Send className="w-4 h-4" />
-            <span>{isGuestMode ? 'إظهار النتيجة وتسليم الاختبار' : 'تسليم الاختبار النهائي'}</span>
+            <span>إظهار النتيجة وتسليم الاختبار</span>
           </button>
 
           <button
@@ -978,7 +1046,7 @@ export default function ExamTakingModal({
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 max-w-md w-full max-h-[calc(100dvh-1.5rem)] sm:max-h-[90dvh] overflow-y-auto my-auto space-y-5 shadow-2xl">
             <div className="flex items-center gap-3 text-amber-400">
               <AlertTriangle className="w-6 h-6" />
-              <h3 className="text-base font-bold text-white">تأكيد التسليم النهائي للاختبار</h3>
+              <h3 className="text-base font-bold text-white">تأكيد التسليم وإظهار النتيجة</h3>
             </div>
 
             <div className="space-y-2 text-xs text-slate-300 leading-relaxed bg-slate-950 p-4 rounded-xl border border-slate-800">
@@ -991,7 +1059,9 @@ export default function ExamTakingModal({
                 </p>
               )}
               <p className="text-slate-400 pt-1">
-                بمجرد التسليم، سيتم تصحيح الإجابات سحابياً وإدراج نتيجتك في قائمة الترتيب بالاسم الذي اخترته ({previewDisplayName}).
+                {isGuestMode
+                  ? 'بمجرد التأكيد، سيتم تصحيح إجاباتك وإظهار نتيجتك النهائية فوراً، مع إمكانية إنشاء حسابك للدخول في المنافسة مع الطلاب.'
+                  : `بمجرد التسليم، سيتم تصحيح الإجابات سحابياً وإدراج نتيجتك في قائمة الترتيب بالاسم الذي اخترته (${previewDisplayName}).`}
               </p>
             </div>
 
