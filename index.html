@@ -23,7 +23,7 @@
           if ('caches' in window) {
             caches.keys().then(function (names) {
               names.forEach(function (name) {
-                if (name !== 'umed-v2.1.0') {
+                if (name !== 'umed-v2.2.0') {
                   caches.delete(name);
                 }
               });
@@ -52,6 +52,9 @@
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function () {
           navigator.serviceWorker.register('/sw.js', { scope: '/' })
+            .then(function (reg) {
+              try { reg.update(); } catch (e) {}
+            })
             .catch(function () {});
         });
       }

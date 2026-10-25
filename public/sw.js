@@ -4,7 +4,7 @@
  * UMED PWA Service Worker - Network-First with Offline Fallback
  */
 
-const CACHE_NAME = 'umed-v2.1.0';
+const CACHE_NAME = 'umed-v2.2.0';
 const STATIC_SHELL = [
   '/',
   '/index.html',
