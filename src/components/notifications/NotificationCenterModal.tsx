@@ -104,28 +104,8 @@ export default function NotificationCenterModal({
 
   const handleNotificationClick = (notif: AppNotification) => {
     markNotificationAsRead(notif.id);
-    const targetTab =
-      notif.actionTab ||
-      (notif.category === 'exam' || notif.category === 'competition'
-        ? 'student_assessments'
-        : notif.category === 'data'
-        ? 'student_library'
-        : 'student_dashboard');
-
-    const enrichedPayload: Record<string, unknown> = {
-      ...(notif.actionPayload || {}),
-      category: notif.category,
-      assessmentType:
-        (notif.actionPayload?.assessmentType as string) ||
-        (notif.category === 'competition'
-          ? 'competition'
-          : notif.category === 'exam'
-          ? 'exam'
-          : undefined)
-    };
-
-    if (onNavigateTab) {
-      onNavigateTab(targetTab, enrichedPayload);
+    if (notif.actionTab && onNavigateTab) {
+      onNavigateTab(notif.actionTab, notif.actionPayload);
       onClose();
     }
   };

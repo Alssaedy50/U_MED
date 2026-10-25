@@ -51,32 +51,25 @@ import {
   EnrollmentStatus
 } from '../types/umed.ts';
 
-const viteEnv = (import.meta as any)?.env || {};
-
 // Dynamic Firebase Configuration supporting Cloudflare/Vercel Environment Variables
 export const firebaseConfig = {
-  apiKey: viteEnv.VITE_FIREBASE_API_KEY || firebaseAppletConfig.apiKey,
-  authDomain: viteEnv.VITE_FIREBASE_AUTH_DOMAIN || firebaseAppletConfig.authDomain,
-  projectId: viteEnv.VITE_FIREBASE_PROJECT_ID || firebaseAppletConfig.projectId,
-  storageBucket: viteEnv.VITE_FIREBASE_STORAGE_BUCKET || firebaseAppletConfig.storageBucket,
-  messagingSenderId: viteEnv.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseAppletConfig.messagingSenderId,
-  appId: viteEnv.VITE_FIREBASE_APP_ID || firebaseAppletConfig.appId,
-  measurementId: viteEnv.VITE_FIREBASE_MEASUREMENT_ID || firebaseAppletConfig.measurementId,
-  firestoreDatabaseId: viteEnv.VITE_FIREBASE_DATABASE_ID || firebaseAppletConfig.firestoreDatabaseId,
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || firebaseAppletConfig.apiKey,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || firebaseAppletConfig.authDomain,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || firebaseAppletConfig.projectId,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || firebaseAppletConfig.storageBucket,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseAppletConfig.messagingSenderId,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || firebaseAppletConfig.appId,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || firebaseAppletConfig.measurementId,
+  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_DATABASE_ID || firebaseAppletConfig.firestoreDatabaseId,
 };
 
 // Primary Platform Owner Official Details (Non-duplicable & Strictly Reserved)
-const parsedEnvOwnerEmails = (viteEnv.VITE_INITIAL_OWNER_EMAIL || '')
-  .split(',')
-  .map((e: string) => e.trim().toLowerCase())
-  .filter(Boolean);
-
-export const INITIAL_OWNER_EMAILS = Array.from(new Set([
+export const INITIAL_OWNER_EMAILS = [
   'alssaedy50@gmail.com',
   'alssaedy500@gmail.com',
   'doctoshi50@gmail.com',
-  ...parsedEnvOwnerEmails
-])).filter(Boolean);
+  (import.meta.env.VITE_INITIAL_OWNER_EMAIL || '').trim().toLowerCase()
+].filter(Boolean);
 
 export const INITIAL_OWNER_EMAIL = INITIAL_OWNER_EMAILS[0];
 export const DEFAULT_OWNER_PHONE = '+967770000001';

@@ -42,9 +42,7 @@ import {
   Archive,
   ShieldAlert,
   GraduationCap,
-  Bell,
-  Share2,
-  Check
+  Bell
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext.tsx';
 import { UserRole, AuditLog, StudentEnrollment } from './types/umed.ts';
@@ -55,44 +53,12 @@ import {
   isPrimaryOwnerEmail
 } from './lib/firebase.ts';
 import { fetchStudentEnrollment, subscribeToStudentEnrollment } from './services/enrollmentService.ts';
-import { startAcademicRealtimeSync } from './services/academicService.ts';
 import { getRoleLabelArabic } from './services/batchGovernanceService.ts';
 import { subscribeToAppNotifications } from './services/notificationService.ts';
-import {
-  getAssessments,
-  buildShareableAssessmentUrl,
-  getSharedAssessmentIdFromUrl,
-  clearSharedAssessmentIdFromUrl,
-  fetchSharedAssessmentForGuest,
-  getCachedSharedAssessmentSync,
-  parseSharedAssessmentInput,
-  getPendingGuestExamSubmission,
-  claimAndGradePendingGuestSubmission,
-  getAssessmentLeaderboard,
-  resolveResultPublicDisplayName,
-  PendingGuestExamSubmission
-} from './services/assessmentService.ts';
-import { Assessment, AssessmentQuestionPublic, AssessmentResult } from './types/umed.ts';
-import ExamTakingModal from './components/assessment/ExamTakingModal.tsx';
 import StudentDashboard from './components/student/StudentDashboard.tsx';
 import StudentProfile from './components/student/StudentProfile.tsx';
 import GlobalNotificationWatcher from './components/notifications/GlobalNotificationWatcher.tsx';
 import NotificationCenterModal from './components/notifications/NotificationCenterModal.tsx';
-import {
-  PWAHeaderControls,
-  PWASidebarInstallCard,
-  PWASettingsCard
-} from './components/pwa/PWAInstallModalAndBanner.tsx';
-import {
-  PlatformBrandingAndPolicies,
-  getCachedPlatformSettings,
-  subscribeToPlatformSettings
-} from './services/platformSettingsService.ts';
-import {
-  PlatformLogoBadge,
-  PlatformOwnerSettingsCard,
-  PlatformLegalAndContactModal
-} from './components/settings/PlatformOwnerSettingsModalAndCard.tsx';
 
 // Code-splitting admin heavy modules to minimize student initial bundle size
 const AcademicStructureManager = React.lazy(() => import('./components/admin/AcademicStructureManager.tsx'));
@@ -211,67 +177,6 @@ export default function App() {
   const [studentEnrollment, setStudentEnrollment] = useState<StudentEnrollment | null>(null);
   const [isNotificationModalOpen, setIsNotificationModalOpen] = useState<boolean>(false);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState<number>(0);
-  const [targetAssessmentNav, setTargetAssessmentNav] = useState<{
-    assessmentType?: 'exam' | 'competition';
-    assessmentId?: string;
-    timestamp?: number;
-  } | null>(null);
-
-  // Shared Trial Exam & Guest Mandatory Account Gate States (Hydrated synchronously in 0ms on mount)
-  const [pendingGuestSubmission, setPendingGuestSubmission] = useState<PendingGuestExamSubmission | null>(() =>
-    getPendingGuestExamSubmission()
-  );
-  const [sharedGuestData, setSharedGuestData] = useState<{
-    assessment: Assessment;
-    questions: AssessmentQuestionPublic[];
-  } | null>(() => {
-    const initialSharedId = getSharedAssessmentIdFromUrl() || getPendingGuestExamSubmission()?.assessmentId;
-    return initialSharedId ? getCachedSharedAssessmentSync(initialSharedId) : null;
-  });
-  const [isGuestExamOpen, setIsGuestExamOpen] = useState<boolean>(() => {
-    const urlId = getSharedAssessmentIdFromUrl();
-    if (!urlId) return false;
-    const existingSub = getPendingGuestExamSubmission();
-    // If guest already submitted this assessment and is waiting to register, show registration form
-    if (existingSub && existingSub.assessmentId === urlId) return false;
-    return true;
-  });
-  const [isSharedExamFetching, setIsSharedExamFetching] = useState<boolean>(false);
-  const [sharedLinkPasteInput, setSharedLinkPasteInput] = useState<string>('');
-  const [showSharedLinkPasteBox, setShowSharedLinkPasteBox] = useState<boolean>(false);
-  const [showPublicModelsBrowser, setShowPublicModelsBrowser] = useState<boolean>(false);
-  const [publicModelsList, setPublicModelsList] = useState<Assessment[]>([]);
-  const [copiedModelId, setCopiedModelId] = useState<string | null>(null);
-  const [claimedGuestOutcome, setClaimedGuestOutcome] = useState<{
-    result: AssessmentResult;
-    assessment: Assessment;
-  } | null>(null);
-  const [claimedLeaderboard, setClaimedLeaderboard] = useState<AssessmentResult[]>([]);
-
-  useEffect(() => {
-    getAssessments('univ-dar-al-salam')
-      .then((list) => {
-        const published = list.filter((a) => a.status === 'published');
-        setPublicModelsList(published.length > 0 ? published : list);
-      })
-      .catch(() => {});
-  }, [isGuestExamOpen]);
-
-  // Global Platform Branding, Terms/Privacy & Contact Settings (Managed strictly by Platform Owner)
-  const [platformSettings, setPlatformSettings] = useState<PlatformBrandingAndPolicies>(() =>
-    getCachedPlatformSettings()
-  );
-  const [legalContactModalState, setLegalContactModalState] = useState<{
-    isOpen: boolean;
-    initialTab: 'terms' | 'privacy' | 'contact';
-  }>({ isOpen: false, initialTab: 'contact' });
-
-  useEffect(() => {
-    const unsub = subscribeToPlatformSettings((updated) => {
-      setPlatformSettings(updated);
-    });
-    return () => unsub();
-  }, []);
 
   useEffect(() => {
     const unsub = subscribeToAppNotifications((list) => {
@@ -280,91 +185,6 @@ export default function App() {
     });
     return () => unsub();
   }, []);
-
-  // Load and open shared assessment link (?sharedAssessmentId=... or #sharedAssessmentId=...) for both guests & logged-in users
-  const loadAndOpenSharedAssessment = async (targetId: string, forceOpenModal = true) => {
-    if (!targetId) return;
-    const syncCached = getCachedSharedAssessmentSync(targetId);
-    if (syncCached) {
-      setSharedGuestData(syncCached);
-    } else {
-      setIsSharedExamFetching(true);
-    }
-    if (forceOpenModal) {
-      setIsGuestExamOpen(true);
-    }
-
-    try {
-      const loaded = await fetchSharedAssessmentForGuest(targetId);
-      if (loaded) {
-        setSharedGuestData(loaded);
-        const existingSub = getPendingGuestExamSubmission();
-        if (!user && existingSub && existingSub.assessmentId === targetId && !forceOpenModal) {
-          setPendingGuestSubmission(existingSub);
-          setAuthTab('register');
-        } else if (forceOpenModal) {
-          setIsGuestExamOpen(true);
-        }
-      }
-    } catch {} finally {
-      setIsSharedExamFetching(false);
-    }
-  };
-
-  useEffect(() => {
-    const urlId = getSharedAssessmentIdFromUrl();
-    const fallbackId = pendingGuestSubmission?.assessmentId;
-    const sharedId = urlId || fallbackId;
-    if (!sharedId) return;
-
-    const existingSub = getPendingGuestExamSubmission();
-    const shouldAutoOpen = Boolean(urlId) && (!existingSub || existingSub.assessmentId !== urlId || Boolean(user));
-    loadAndOpenSharedAssessment(sharedId, shouldAutoOpen);
-  }, [user?.uid]);
-
-  // Also listen for URL hashchange / popstate so clicking a shared link while app is open triggers immediately
-  useEffect(() => {
-    const handleUrlChange = () => {
-      const urlId = getSharedAssessmentIdFromUrl();
-      if (urlId) {
-        loadAndOpenSharedAssessment(urlId, true);
-      }
-    };
-    window.addEventListener('hashchange', handleUrlChange);
-    window.addEventListener('popstate', handleUrlChange);
-    return () => {
-      window.removeEventListener('hashchange', handleUrlChange);
-      window.removeEventListener('popstate', handleUrlChange);
-    };
-  }, []);
-
-  // Automatically grade pending guest trial submission as soon as the user creates an account or logs in
-  useEffect(() => {
-    if (!user?.uid) return;
-    const pending = getPendingGuestExamSubmission();
-    if (!pending) return;
-
-    const studentName =
-      userProfile?.displayNameArabic ||
-      user.displayName ||
-      displayNameInput.trim() ||
-      'طالب طب بشري';
-
-    claimAndGradePendingGuestSubmission(user.uid, studentName).then((claimed) => {
-      if (claimed) {
-        setPendingGuestSubmission(null);
-        setClaimedGuestOutcome(claimed);
-        getAssessmentLeaderboard(claimed.assessment.id)
-          .then((lb) => setClaimedLeaderboard(lb))
-          .catch(() => {});
-        setTargetAssessmentNav({
-          assessmentType: claimed.assessment.assessmentType === 'competition' ? 'competition' : 'exam',
-          assessmentId: claimed.assessment.id,
-          timestamp: Date.now()
-        });
-      }
-    });
-  }, [user?.uid, userProfile?.displayNameArabic]);
 
   const [activeTab, setActiveTabState] = useState<ActiveTabType>(() => {
     try {
@@ -386,13 +206,6 @@ export default function App() {
   const isAdminMode = Boolean(
     isAuthorizedAdmin && activeRole !== 'student'
   );
-  const isStrictPlatformOwner = Boolean(
-    isAuthorizedAdmin &&
-      (realRole === 'platform_owner' ||
-        roleDoc?.role === 'platform_owner' ||
-        isPrimaryOwnerEmail(user?.email) ||
-        userProfile?.isPrimaryOwner)
-  );
   const isOwnerMode = Boolean(isAuthorizedAdmin && activeRole === 'platform_owner' && realRole === 'platform_owner');
   const isUniversityAdminOrOwner = Boolean(
     isAuthorizedAdmin && (activeRole === 'platform_owner' || activeRole === 'university_admin')
@@ -411,24 +224,15 @@ export default function App() {
   useEffect(() => {
     if (isAuthorizedAdmin) {
       refreshAdminData();
-      // Background preload admin chunks so switching tabs is instantaneous (0ms)
-      import('./components/admin/AcademicStructureManager.tsx').catch(() => {});
-      import('./components/admin/EnrollmentApprovalManager.tsx').catch(() => {});
-      import('./components/admin/EducationalContentManager.tsx').catch(() => {});
-      import('./components/admin/AssessmentManager.tsx').catch(() => {});
-      import('./components/admin/HierarchyGovernanceConsole.tsx').catch(() => {});
-      import('./components/admin/PlatformUsersManager.tsx').catch(() => {});
-      import('./components/admin/BackupRestoreConsole.tsx').catch(() => {});
     }
   }, [isAuthorizedAdmin, activeTab]);
 
-  // Load and subscribe in real-time to current user's student enrollment status & academic structure
+  // Load and subscribe in real-time to current user's student enrollment status
   useEffect(() => {
     if (!user) {
       setStudentEnrollment(null);
       return;
     }
-    startAcademicRealtimeSync();
     fetchStudentEnrollment(user.uid).then(enr => {
       setStudentEnrollment(enr);
     });
@@ -438,7 +242,7 @@ export default function App() {
     return () => unsub();
   }, [user?.uid]);
 
-  const isStudentApproved = studentEnrollment?.status === 'approved' || isAuthorizedAdmin;
+  const isStudentApproved = studentEnrollment?.status === 'approved';
 
   // Strict Workspace Isolation:
   // 1) When in Student Mode (!isAdminMode), block access to all admin tabs
@@ -457,7 +261,6 @@ export default function App() {
         setActiveTab('student_dashboard');
       } else if (
         (activeTab === 'student_profile' || activeTab === 'student_library' || activeTab === 'student_assessments') &&
-        !isAuthorizedAdmin &&
         studentEnrollment &&
         studentEnrollment.status !== 'approved'
       ) {
@@ -732,35 +535,6 @@ export default function App() {
     }
   };
 
-  const handleNotificationNavigation = (tab: string, payload?: Record<string, unknown>) => {
-    const studentTabsList: ActiveTabType[] = [
-      'student_dashboard',
-      'student_library',
-      'student_assessments',
-      'student_profile'
-    ];
-    const targetTab = (tab as ActiveTabType) || 'student_dashboard';
-
-    if (studentTabsList.includes(targetTab) && activeRole !== 'student') {
-      setActiveRole('student');
-    }
-
-    if (targetTab === 'student_assessments') {
-      const requestedType =
-        payload?.assessmentType === 'competition' || payload?.category === 'competition'
-          ? 'competition'
-          : 'exam';
-      setTargetAssessmentNav({
-        assessmentType: requestedType,
-        assessmentId: typeof payload?.assessmentId === 'string' ? payload.assessmentId : undefined,
-        timestamp: Date.now()
-      });
-    }
-
-    setActiveTab(targetTab);
-    setIsNotificationModalOpen(false);
-  };
-
   const pageInfo = getPageTitleInfo();
 
   return (
@@ -772,200 +546,13 @@ export default function App() {
       } transition-colors duration-200`}
       dir="rtl"
     >
-      <GlobalNotificationWatcher
-        onNavigateTab={handleNotificationNavigation}
-        studentUniversityId={
-          !isAuthorizedAdmin && studentEnrollment?.status === 'approved'
-            ? studentEnrollment.universityId
-            : undefined
-        }
-        studentStudyLevelId={
-          !isAuthorizedAdmin && studentEnrollment?.status === 'approved'
-            ? studentEnrollment.currentStudyLevelId
-            : undefined
-        }
-      />
-      {/* TOP-LEVEL SHARED EXAM LOADING OVERLAY (Opens immediately before Auth or Registration screen) */}
-      {isGuestExamOpen && !sharedGuestData && !pendingGuestSubmission && isSharedExamFetching && (
-        <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex items-center justify-center p-4" dir="rtl">
-          <div className="max-w-md w-full bg-slate-900 border border-indigo-500/40 rounded-2xl p-8 text-center space-y-4 shadow-2xl">
-            <RefreshCw className="w-10 h-10 animate-spin text-indigo-400 mx-auto" />
-            <h2 className="text-base font-bold text-white">جارٍ فتح الاختبار الطبي المشترك...</h2>
-            <p className="text-xs text-slate-300">
-              يتم الآن تجهيز الأسئلة والمؤقت لبدء الحل المباشر
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* TOP-LEVEL SHARED / GUEST EXAM TAKING MODAL (Works for both Guests & Authenticated Users regardless of Enrollment) */}
-      {isGuestExamOpen && (sharedGuestData || pendingGuestSubmission) && (
-        <ExamTakingModal
-          assessment={(sharedGuestData?.assessment || pendingGuestSubmission?.assessment)!}
-          attempt={{
-            id: user
-              ? `att-shared-${user.uid}-${Date.now()}`
-              : `guest-attempt-${sharedGuestData?.assessment.id || pendingGuestSubmission?.assessmentId}`,
-            assessmentId: (sharedGuestData?.assessment.id || pendingGuestSubmission?.assessmentId)!,
-            uid: user?.uid || 'guest',
-            attemptNumber: 1,
-            startedAt: pendingGuestSubmission?.startedAt || new Date().toISOString(),
-            expiresAt: new Date(
-              Date.now() +
-                Number(
-                  sharedGuestData?.assessment.durationMinutes ||
-                    pendingGuestSubmission?.assessment.durationMinutes ||
-                    30
-                ) *
-                  60000
-            ).toISOString(),
-            answers: pendingGuestSubmission?.answers || {},
-            lastSavedAt: new Date().toISOString(),
-            status: 'in_progress'
-          }}
-          questions={sharedGuestData?.questions || []}
-          studentNameArabic={userProfile?.displayNameArabic || user?.displayName || undefined}
-          uid={user?.uid}
-          isGuestMode={!user}
-          onRequireGuestAccount={(sub) => {
-            setPendingGuestSubmission(sub);
-            setIsGuestExamOpen(false);
-            clearSharedAssessmentIdFromUrl();
-            setAuthTab('register');
-          }}
-          onClose={() => {
-            setIsGuestExamOpen(false);
-            clearSharedAssessmentIdFromUrl();
-          }}
-          onSubmitted={(res) => {
-            clearSharedAssessmentIdFromUrl();
-            if (sharedGuestData?.assessment) {
-              setClaimedGuestOutcome({
-                result: res,
-                assessment: sharedGuestData.assessment
-              });
-              getAssessmentLeaderboard(sharedGuestData.assessment.id)
-                .then((lb) => setClaimedLeaderboard(lb))
-                .catch(() => {});
-            }
-          }}
-        />
-      )}
-
-      {/* TOP-LEVEL CLAIMED GUEST RESULT & LIVE RANKED LEADERBOARD MODAL (Shown immediately after Account Registration) */}
-      {claimedGuestOutcome && (
-        <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto" dir="rtl">
-          <div className="bg-slate-900 border border-teal-500/50 rounded-2xl p-5 sm:p-6 max-w-xl w-full my-auto space-y-5 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2">
-                <Trophy className="w-6 h-6 text-amber-400" />
-                <div>
-                  <h3 className="text-sm sm:text-base font-extrabold text-white">
-                    نتيجتك المعتمدة وترتيبك في الاختبار المشترك
-                  </h3>
-                  <p className="text-[11px] text-teal-300 font-semibold">
-                    {claimedGuestOutcome.assessment.titleArabic}
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setClaimedGuestOutcome(null)}
-                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-5 rounded-2xl bg-gradient-to-b from-teal-950/70 to-slate-950 border border-teal-500/40 text-center space-y-2">
-              <span className="px-3 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold">
-                تم إنشاء حسابك وتصحيح إجاباتك بنجاح ✓
-              </span>
-              <div className="text-3xl font-black text-teal-400 font-mono pt-1">
-                {claimedGuestOutcome.result.percentage}%
-              </div>
-              <div className="text-xs text-slate-200 font-semibold">
-                الدرجة المكتسبة: <span className="font-mono text-white">{claimedGuestOutcome.result.score}</span> من{' '}
-                <span className="font-mono text-white">{claimedGuestOutcome.result.totalPoints}</span> نقطة
-              </div>
-              <div className="text-[11px] text-slate-400">
-                اسمك المعروض للطلاب في لوحة الترتيب:{' '}
-                <strong className="text-amber-300">
-                  {resolveResultPublicDisplayName(claimedGuestOutcome.result)}
-                </strong>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs font-bold text-amber-300">
-                <span>🏆 ترتيب الطلاب في هذا الاختبار (الأعلى درجة والأسرع حلاً):</span>
-                <span className="text-[11px] text-slate-400 font-mono">{claimedLeaderboard.length} مشارك</span>
-              </div>
-              <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
-                {claimedLeaderboard.length === 0 ? (
-                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-teal-300 text-center font-bold">
-                    أنت في المركز الأول (#1) حالياً في هذا الاختبار! 🎉
-                  </div>
-                ) : (
-                  claimedLeaderboard.slice(0, 15).map((item, idx) => {
-                    const isMe = item.uid === user?.uid || item.id === claimedGuestOutcome.result.id;
-                    return (
-                      <div
-                        key={item.id || idx}
-                        className={`flex items-center justify-between p-2.5 rounded-xl border text-xs ${
-                          isMe
-                            ? 'bg-teal-950/70 border-teal-500/60 text-white font-bold'
-                            : 'bg-slate-950 border-slate-800 text-slate-300'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2.5">
-                          <span className={`w-6 h-6 rounded-lg font-mono text-[11px] font-extrabold flex items-center justify-center ${
-                            idx === 0
-                              ? 'bg-amber-400 text-slate-950'
-                              : idx === 1
-                              ? 'bg-slate-300 text-slate-950'
-                              : idx === 2
-                              ? 'bg-amber-700 text-white'
-                              : 'bg-slate-800 text-slate-400'
-                          }`}>
-                            #{idx + 1}
-                          </span>
-                          <span>{resolveResultPublicDisplayName(item)}</span>
-                          {isMe && (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] bg-teal-500/20 text-teal-300">
-                              أنت
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2 font-mono">
-                          <span className="text-slate-400 text-[11px]">{item.score}/{item.totalPoints}</span>
-                          <span className="px-2 py-0.5 rounded bg-teal-500/15 text-teal-300 font-bold">
-                            {item.percentage}%
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setClaimedGuestOutcome(null)}
-              className="w-full py-3 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold shadow-lg transition-colors"
-            >
-              متابعة إلى المنصة الأكاديمية
-            </button>
-          </div>
-        </div>
-      )}
-
+      <GlobalNotificationWatcher />
       {/* IF INITIALIZING AUTH SESSION ON RELOAD: DO NOT FLASH LOGIN FORM */}
       {loading ? (
         <div className="min-h-[100dvh] flex items-center justify-center p-4 overflow-y-auto">
           <div className="max-w-md w-full my-auto bg-slate-900/80 border border-slate-800 rounded-2xl p-8 sm:p-10 text-center space-y-3 shadow-2xl">
             <RefreshCw className="w-8 h-8 animate-spin text-teal-400 mx-auto" />
-            <h2 className="text-sm font-bold text-white">جارٍ استعادة جلستك النشطة في {platformSettings.platformNameArabic}</h2>
+            <h2 className="text-sm font-bold text-white">جارٍ استعادة جلستك النشطة في منصة UMED</h2>
             <p className="text-xs text-slate-400">يرجى الانتظار لحظة ريثما يتم التحقق من بيانات الحساب والقيد الأكاديمي</p>
           </div>
         </div>
@@ -974,193 +561,14 @@ export default function App() {
         <div className="min-h-[100dvh] flex flex-col justify-start sm:justify-center py-6 sm:py-10 px-3.5 sm:px-6 overflow-y-auto">
           <div className="max-w-md w-full mx-auto my-auto bg-slate-900/90 border border-slate-800 rounded-2xl p-5 sm:p-8 shadow-2xl space-y-5">
             <div className="text-center space-y-2">
-              <div className="flex justify-center">
-                <PlatformLogoBadge settings={platformSettings} size="lg" />
+              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center mx-auto text-white font-black text-2xl shadow-lg shadow-teal-500/20">
+                U
               </div>
-              <h1 className="text-lg font-bold text-white">{platformSettings.platformNameArabic}</h1>
+              <h1 className="text-lg font-bold text-white">UMED — منصة التعليم الطبي اليمنية</h1>
               <p className="text-xs text-slate-400">
-                {platformSettings.platformTaglineArabic ||
-                  'سجّل دخولك أو أنشئ حسابك الأكاديمي للوصول إلى محاضرات البلوكات والاختبارات والمسابقات الطبية'}
+                سجّل دخولك أو أنشئ حسابك الأكاديمي للوصول إلى محاضرات البلوكات والاختبارات والمسابقات الطبية
               </p>
             </div>
-
-            {/* Guest Account Creation & Competition Notification Banner when Guest solved a model */}
-            {pendingGuestSubmission && (
-              <div className="p-4 rounded-2xl bg-gradient-to-l from-amber-950/70 via-indigo-950/90 to-teal-950/90 border-2 border-amber-500/50 space-y-2.5 shadow-xl">
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[11px] font-extrabold">
-                    {pendingGuestSubmission.scoredResult
-                      ? `نتيجتك في الاختبار: ${pendingGuestSubmission.scoredResult.score}/${pendingGuestSubmission.scoredResult.totalPoints} (${pendingGuestSubmission.scoredResult.percentage}%) ✓`
-                      : 'إجاباتك محفوظة وجاهزة ✓'}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setIsGuestExamOpen(true)}
-                    className="text-[11px] text-teal-300 hover:underline font-bold"
-                  >
-                    عرض الاختبار والنتيجة
-                  </button>
-                </div>
-                <h3 className="text-xs sm:text-sm font-extrabold text-white">
-                  تنبيه: أنشئ حسابك الآن للدخول في المنافسة مع باقي الطلاب في "{pendingGuestSubmission.assessment.titleArabic}" والوصول لجميع الخدمات!
-                </h3>
-                <p className="text-[11px] text-slate-300 leading-relaxed">
-                  بمجرد إتمام إنشاء الحساب أو تسجيل الدخول أدناه، سيتم تثبيت درجتك تلقائياً في لوحة الترتيب والمنافسة الرسمية مع زملائك، وفتح كافة خدمات المنصة (المكتبة الطبية، المحاضرات، الملخصات، وبنوك الأسئلة).
-                </p>
-              </div>
-            )}
-
-            {/* Shared Model Quick Launch Card if visitor opened a shared link */}
-            {sharedGuestData && !pendingGuestSubmission && (
-              <div className="p-4 rounded-2xl bg-indigo-950/50 border border-indigo-500/40 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 text-[11px] font-bold">
-                    نموذج اختبار متاح للحل المباشر وإظهار النتيجة فوراً
-                  </span>
-                  <Trophy className="w-4 h-4 text-amber-400" />
-                </div>
-                <div className="text-sm font-bold text-white">{sharedGuestData.assessment.titleArabic}</div>
-                <p className="text-[11px] text-slate-300">
-                  يمكنك حل جميع أسئلة هذا النموذج ومعرفة نتيجتك النهائية فوراً حتى بدون حساب، مع إمكانية إنشاء حساب للدخول في المنافسة مع باقي الطلاب والوصول لجميع مميزات المنصة.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setIsGuestExamOpen(true)}
-                  className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-lg transition-colors"
-                >
-                  بدء حل الاختبار وإظهار النتيجة الآن ({sharedGuestData.questions.length} أسئلة)
-                </button>
-              </div>
-            )}
-
-            {!sharedGuestData && !pendingGuestSubmission && (
-              <div className="space-y-2.5">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowPublicModelsBrowser((prev) => !prev)}
-                    className="py-2.5 px-3 rounded-xl bg-indigo-950/60 hover:bg-indigo-900/70 border border-indigo-500/40 text-indigo-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
-                  >
-                    <Trophy className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>حل ومشاركة النماذج المتاحة ({publicModelsList.length || 1})</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowSharedLinkPasteBox((prev) => !prev)}
-                    className="py-2.5 px-3 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-teal-300 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-                    <span>فتح رابط نموذج مشترك</span>
-                  </button>
-                </div>
-
-                {showPublicModelsBrowser && (
-                  <div className="p-3.5 rounded-2xl bg-slate-950 border border-indigo-500/40 space-y-2.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold text-indigo-300">
-                        اختر أي نموذج لحله ومعرفة نتيجتك فوراً (أو نسخ رابط مشاركته):
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setShowPublicModelsBrowser(false)}
-                        className="text-[11px] text-slate-400 hover:text-white"
-                      >
-                        إغلاق
-                      </button>
-                    </div>
-                    <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
-                      {(publicModelsList.length > 0
-                        ? publicModelsList
-                        : [
-                            {
-                              id: 'asmnt-cvs-midterm',
-                              titleArabic: 'اختبار منتصف بلوك القلبي الوعائي (CVS)',
-                              assessmentType: 'exam',
-                              durationMinutes: 30,
-                              totalPoints: 20
-                            } as Assessment
-                          ]
-                      ).map((model) => (
-                        <div
-                          key={model.id}
-                          className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between gap-2"
-                        >
-                          <div className="min-w-0 flex-1">
-                            <div className="text-xs font-bold text-white truncate">{model.titleArabic}</div>
-                            <div className="text-[10px] text-slate-400">
-                              {model.assessmentType === 'competition' ? 'مسابقة تنافسية' : 'نموذج اختبار'} • متاح للحل وإظهار النتيجة بدون حساب
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                const shareUrl = buildShareableAssessmentUrl(model);
-                                try {
-                                  await navigator.clipboard.writeText(shareUrl);
-                                } catch {}
-                                setCopiedModelId(model.id);
-                                setTimeout(() => setCopiedModelId(null), 2200);
-                              }}
-                              className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 transition-colors"
-                              title="نسخ رابط مشاركة هذا النموذج"
-                            >
-                              {copiedModelId === model.id ? (
-                                <Check className="w-3.5 h-3.5 text-emerald-400" />
-                              ) : (
-                                <Share2 className="w-3.5 h-3.5" />
-                              )}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setShowPublicModelsBrowser(false);
-                                loadAndOpenSharedAssessment(model.id, true);
-                              }}
-                              className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold transition-colors"
-                            >
-                              ابدأ الحل
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {showSharedLinkPasteBox && (
-                  <div className="p-3 rounded-xl bg-slate-950 border border-indigo-500/40 space-y-2">
-                    <label className="block text-[11px] text-slate-300 font-semibold">
-                      الصق رابط النموذج المشترك أو معرف التقييم لفتحه وحله فوراً:
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={sharedLinkPasteInput}
-                        onChange={(e) => setSharedLinkPasteInput(e.target.value)}
-                        placeholder="https://.../?sharedAssessmentId=..."
-                        dir="ltr"
-                        className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono focus:outline-none focus:border-indigo-500"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const parsedId = parseSharedAssessmentInput(sharedLinkPasteInput);
-                          if (parsedId) {
-                            setShowSharedLinkPasteBox(false);
-                            setSharedLinkPasteInput('');
-                            loadAndOpenSharedAssessment(parsedId, true);
-                          }
-                        }}
-                        className="px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shrink-0"
-                      >
-                        فتح النموذج
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
 
             <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
               <button
@@ -1385,33 +793,6 @@ export default function App() {
               </svg>
               <span>الدخول بحساب Google</span>
             </button>
-
-            {/* Footer Legal & Contact Links for Visitors */}
-            <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-center gap-2 text-[11px] text-slate-400">
-              <button
-                type="button"
-                onClick={() => setLegalContactModalState({ isOpen: true, initialTab: 'terms' })}
-                className="hover:text-teal-300 transition-colors underline underline-offset-4"
-              >
-                شروط الاستخدام
-              </button>
-              <span className="text-slate-700">•</span>
-              <button
-                type="button"
-                onClick={() => setLegalContactModalState({ isOpen: true, initialTab: 'privacy' })}
-                className="hover:text-teal-300 transition-colors underline underline-offset-4"
-              >
-                سياسة الخصوصية
-              </button>
-              <span className="text-slate-700">•</span>
-              <button
-                type="button"
-                onClick={() => setLegalContactModalState({ isOpen: true, initialTab: 'contact' })}
-                className="hover:text-amber-300 font-bold transition-colors underline underline-offset-4"
-              >
-                تواصل مع المنصة
-              </button>
-            </div>
           </div>
         </div>
       ) : isAccountArchived ? (
@@ -1657,13 +1038,13 @@ export default function App() {
           >
             {/* Top Brand Header inside Sidebar */}
             <div className="p-4 border-b border-slate-800 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-3 min-w-0">
-                <PlatformLogoBadge settings={platformSettings} size="md" />
-                <div className="min-w-0">
-                  <div className="font-bold text-sm text-white leading-tight truncate">
-                    {platformSettings.platformNameArabic}
-                  </div>
-                  <div className="text-[11px] text-teal-400 font-semibold mt-0.5 truncate">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center shadow-lg shadow-teal-500/20 text-white font-black text-xl shrink-0">
+                  U
+                </div>
+                <div>
+                  <div className="font-bold text-sm text-white leading-tight">منصة UMED الطبية</div>
+                  <div className="text-[11px] text-teal-400 font-semibold mt-0.5">
                     {activeRole === 'platform_owner'
                       ? 'بوابة مالك المنصة'
                       : activeRole === 'university_admin'
@@ -1893,19 +1274,7 @@ export default function App() {
                   <Settings className="w-4 h-4 shrink-0" />
                   <span>الإعدادات والحساب</span>
                 </button>
-                <button
-                  onClick={() => {
-                    setLegalContactModalState({ isOpen: true, initialTab: 'contact' });
-                    setSidebarOpen(false);
-                  }}
-                  className="w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-teal-300 hover:bg-slate-800/60 transition-all"
-                >
-                  <Phone className="w-4 h-4 text-teal-400 shrink-0" />
-                  <span>التواصل والشروط والخصوصية</span>
-                </button>
               </div>
-
-              <PWASidebarInstallCard />
             </div>
 
             {/* Sidebar User Card Footer */}
@@ -1995,8 +1364,6 @@ export default function App() {
                     </button>
                   )}
 
-                  <PWAHeaderControls />
-
                   <button
                     onClick={() => setIsNotificationModalOpen(true)}
                     className="relative p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
@@ -2026,56 +1393,8 @@ export default function App() {
             </header>
 
             {/* Page Content Viewport */}
-            <main className="flex-1 max-w-6xl w-full mx-auto px-3.5 py-4 sm:px-6 sm:py-6 space-y-4">
+            <main className="flex-1 max-w-6xl w-full mx-auto px-3.5 py-4 sm:px-6 sm:py-6">
               
-              {/* Claimed Guest Trial Exam Result Celebration Banner (shown right after mandatory account creation) */}
-              {claimedGuestOutcome && (
-                <div className="bg-gradient-to-l from-teal-950/90 via-slate-900 to-indigo-950/90 border border-teal-500/50 rounded-2xl p-5 shadow-2xl flex flex-wrap items-center justify-between gap-4">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold">
-                        تم تصحيح اختبارك التجريبي ورصد ترتيبك تلقائياً ✓
-                      </span>
-                    </div>
-                    <h3 className="text-base font-extrabold text-white">
-                      نتيجتك في "{claimedGuestOutcome.assessment.titleArabic}":{' '}
-                      <span className="text-teal-400 font-mono">
-                        {claimedGuestOutcome.result.score} / {claimedGuestOutcome.result.totalPoints} ({claimedGuestOutcome.result.percentage}%)
-                      </span>
-                    </h3>
-                    <p className="text-xs text-slate-300">
-                      اسمك المعروض في لوحة الترتيب أمام الطلاب:{' '}
-                      <strong className="text-amber-300">
-                        {claimedGuestOutcome.result.studentDisplayNamePublic || claimedGuestOutcome.result.studentNameArabic}
-                      </strong>
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        setActiveRole('student');
-                        setTargetAssessmentNav({
-                          assessmentType: claimedGuestOutcome.assessment.assessmentType === 'competition' ? 'competition' : 'exam',
-                          assessmentId: claimedGuestOutcome.assessment.id,
-                          timestamp: Date.now()
-                        });
-                        setActiveTab('student_assessments');
-                      }}
-                      className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold shadow-lg"
-                    >
-                      عرض لوحة الترتيب والنتائج
-                    </button>
-                    <button
-                      onClick={() => setClaimedGuestOutcome(null)}
-                      className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white"
-                      title="إغلاق"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              )}
-
               {/* STUDENT WORKSPACE VIEWS */}
               {!isAdminMode && (activeTab === 'student_dashboard' || activeTab === 'student_library' || activeTab === 'student_assessments') && (
                 <StudentDashboard
@@ -2096,10 +1415,6 @@ export default function App() {
                     else setActiveTab('student_dashboard');
                   }}
                   onEnrollmentStatusChange={(enr) => setStudentEnrollment(enr)}
-                  isAdminPreview={isAuthorizedAdmin}
-                  previewUniversityId={roleDoc?.assignedUniversityId || 'univ-dar-al-salam'}
-                  previewStudyLevelId={roleDoc?.assignedStudyLevelId || 'lvl-4'}
-                  assessmentNavTarget={targetAssessmentNav}
                 />
               )}
 
@@ -2244,56 +1559,6 @@ export default function App() {
               {/* TAB: SETTINGS, APPEARANCE, SYSTEM STATUS & ACCOUNT (الإعدادات والحساب) */}
               {activeTab === 'auth' && (
                 <div className="max-w-3xl mx-auto space-y-6">
-
-                  {/* EXCLUSIVE PLATFORM OWNER BRANDING, TERMS/PRIVACY & CONTACT CHANNELS CONSOLE */}
-                  {isStrictPlatformOwner && (
-                    <PlatformOwnerSettingsCard
-                      ownerEmail={user.email || user.uid}
-                      settings={platformSettings}
-                      onOpenPreviewModal={(tab) =>
-                        setLegalContactModalState({ isOpen: true, initialTab: tab })
-                      }
-                    />
-                  )}
-
-                  {/* Quick Legal & Contact Channels Access Card for All Users */}
-                  <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <PlatformLogoBadge settings={platformSettings} size="md" />
-                      <div>
-                        <h3 className="text-sm font-bold text-white">{platformSettings.platformNameArabic}</h3>
-                        <p className="text-[11px] text-slate-400">
-                          {platformSettings.platformTaglineArabic}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 text-xs">
-                      <button
-                        type="button"
-                        onClick={() => setLegalContactModalState({ isOpen: true, initialTab: 'terms' })}
-                        className="px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-200 font-semibold transition-colors"
-                      >
-                        شروط الاستخدام
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setLegalContactModalState({ isOpen: true, initialTab: 'privacy' })}
-                        className="px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-200 font-semibold transition-colors"
-                      >
-                        سياسة الخصوصية
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setLegalContactModalState({ isOpen: true, initialTab: 'contact' })}
-                        className="px-3 py-1.5 rounded-xl bg-teal-600/20 hover:bg-teal-600/30 border border-teal-500/40 text-teal-300 font-bold transition-colors"
-                      >
-                        تواصل مع المنصة
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* 0. Installable App (PWA) & Offline Auto-Sync Panel */}
-                  <PWASettingsCard />
                   
                   {/* 1. Theme & Appearance Settings (الوضع الليلي والنهاري) */}
                   <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
@@ -2651,16 +1916,11 @@ export default function App() {
       <NotificationCenterModal
         isOpen={isNotificationModalOpen}
         onClose={() => setIsNotificationModalOpen(false)}
-        onNavigateTab={handleNotificationNavigation}
+        onNavigateTab={(tab) => {
+          setActiveTab(tab as ActiveTabType);
+          setIsNotificationModalOpen(false);
+        }}
         isDarkMode={isDarkMode}
-      />
-
-      {/* Platform Terms of Use, Privacy Policy & Contact Channels Modal */}
-      <PlatformLegalAndContactModal
-        isOpen={legalContactModalState.isOpen}
-        initialTab={legalContactModalState.initialTab}
-        settings={platformSettings}
-        onClose={() => setLegalContactModalState((prev) => ({ ...prev, isOpen: false }))}
       />
     </div>
   );

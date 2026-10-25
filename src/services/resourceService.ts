@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  * 
  * UMED Educational Resource Service
- * Manages low-bandwidth educational materials (PDFs, Histology Slides, Videos, Audio, Links)
- * High-Speed Parallel Chunk Upload/Download + Real-Time Firestore Sync + Instant Memory Cache
+ * Manages low-bandwidth educational materials (PDFs, Histology Slides, Links)
+ * Full Dynamic CRUD with Hybrid Firestore + LocalStorage Synchronization
  */
 
 import { 
@@ -15,8 +15,6 @@ import {
   setDoc, 
   updateDoc, 
   deleteDoc,
-  query,
-  where,
   onSnapshot
 } from 'firebase/firestore';
 import { db, cleanFirestoreData } from '../lib/firebase.ts';
@@ -30,13 +28,9 @@ const IDB_NAME = 'umed_cloud_files_db';
 const IDB_STORE = 'files';
 const CHUNK_CHAR_SIZE = 480 * 1024; // ~480 KB per Firestore doc (safe under 1 MiB limit)
 
-let resourcesMemoryCache: EducationalResource[] | null = null;
-let idbPromise: Promise<IDBDatabase> | null = null;
-
-// IndexedDB Helpers for Instant Offline File Caching (Singleton connection)
+// IndexedDB Helpers for Instant Offline File Caching
 function openFilesDB(): Promise<IDBDatabase> {
-  if (idbPromise) return idbPromise;
-  idbPromise = new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     const req = indexedDB.open(IDB_NAME, 1);
     req.onupgradeneeded = () => {
       const dbInstance = req.result;
@@ -45,12 +39,8 @@ function openFilesDB(): Promise<IDBDatabase> {
       }
     };
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => {
-      idbPromise = null;
-      reject(req.error);
-    };
+    req.onerror = () => reject(req.error);
   });
-  return idbPromise;
 }
 
 async function saveFileToIDB(fileId: string, dataUrl: string): Promise<void> {
@@ -118,21 +108,9 @@ function dataUrlToBlob(dataUrl: string): Blob {
   return new Blob([array], { type: mimeType });
 }
 
-function parseCloudUrl(rawUrl: string): { fileId: string; chunksFromUrl?: number } {
-  const withoutScheme = rawUrl.replace('umed-cloud://', '').trim();
-  const [idPart, queryPart] = withoutScheme.split('?');
-  let chunksFromUrl: number | undefined;
-  if (queryPart) {
-    const params = new URLSearchParams(queryPart);
-    const c = Number(params.get('chunks'));
-    if (c > 0) chunksFromUrl = c;
-  }
-  return { fileId: idPart.trim(), chunksFromUrl };
-}
-
 /**
- * Uploads any file (PDF, Image, Video, Audio Recording) directly into Cloud Firestore (uploadedFileChunks)
- * using parallel batch uploads (4x faster) + caches locally in IndexedDB.
+ * Uploads any file (PDF, Image, Audio Recording) directly into Cloud Firestore (uploadedFileChunks)
+ * + caches locally in IndexedDB. Works 100% on the free Firebase Spark tier with zero extra config.
  */
 export async function uploadFileToCloudFirestore(
   file: File | Blob,
@@ -168,44 +146,29 @@ export async function uploadFileToCloudFirestore(
   await saveFileToIDB(fileId, dataUrl);
   onProgress?.(20);
 
-  // Upload chunks to Cloud Firestore `uploadedFileChunks/{fileId}_chunk_{index}` in parallel batches of 4
-  const BATCH_SIZE = 4;
-  let completedChunks = 0;
-  const nowIso = new Date().toISOString();
-
-  for (let startIdx = 0; startIdx < chunkCount; startIdx += BATCH_SIZE) {
-    const batchIndices = [];
-    for (let idx = startIdx; idx < Math.min(startIdx + BATCH_SIZE, chunkCount); idx++) {
-      batchIndices.push(idx);
+  // Upload chunks to Cloud Firestore `uploadedFileChunks/{fileId}_chunk_{index}`
+  for (let idx = 0; idx < chunkCount; idx++) {
+    const chunkDocId = `${fileId}_chunk_${idx}`;
+    try {
+      await setDoc(doc(db, 'uploadedFileChunks', chunkDocId), {
+        fileId,
+        chunkIndex: idx,
+        totalChunks: chunkCount,
+        mimeType,
+        fileName,
+        data: chunks[idx],
+        createdAt: new Date().toISOString()
+      });
+    } catch (err) {
+      console.warn(`Chunk ${idx} upload warning (cached locally in IndexedDB):`, err);
     }
-
-    await Promise.all(
-      batchIndices.map(async (idx) => {
-        const chunkDocId = `${fileId}_chunk_${idx}`;
-        try {
-          await setDoc(doc(db, 'uploadedFileChunks', chunkDocId), {
-            fileId,
-            chunkIndex: idx,
-            totalChunks: chunkCount,
-            mimeType,
-            fileName,
-            data: chunks[idx],
-            createdAt: nowIso
-          });
-        } catch (err) {
-          console.warn(`Chunk ${idx} upload warning (cached locally in IndexedDB):`, err);
-        } finally {
-          completedChunks++;
-          const pct = 20 + Math.round((completedChunks / chunkCount) * 80);
-          onProgress?.(pct);
-        }
-      })
-    );
+    const pct = 20 + Math.round(((idx + 1) / chunkCount) * 80);
+    onProgress?.(pct);
   }
 
   return {
     fileId,
-    url: `umed-cloud://${fileId}?chunks=${chunkCount}`,
+    url: `umed-cloud://${fileId}`,
     fileSizeLabel,
     mimeType,
     chunkCount,
@@ -215,7 +178,7 @@ export async function uploadFileToCloudFirestore(
 
 /**
  * Resolves a resource URL (either `umed-cloud://...`, `data:...`, or external Google Drive / direct URL)
- * into a browser-ready playable/viewable URL and downloadable Blob URL using fast parallel chunk downloads.
+ * into a browser-ready playable/viewable URL and downloadable Blob URL.
  */
 export async function resolveResourceFileUrl(
   resource: EducationalResource,
@@ -236,7 +199,7 @@ export async function resolveResourceFileUrl(
 
   // Case 2: Cloud Firestore Chunked File (`umed-cloud://<fileId>`)
   if (rawUrl.startsWith('umed-cloud://')) {
-    const { fileId, chunksFromUrl } = parseCloudUrl(rawUrl);
+    const fileId = rawUrl.replace('umed-cloud://', '').trim();
     onProgress?.(10);
 
     // 1. Check local IndexedDB cache first (0 bytes network usage if already downloaded!)
@@ -248,40 +211,17 @@ export async function resolveResourceFileUrl(
       return { viewUrl: blobUrl, downloadUrl: blobUrl, isCloudFile: true };
     }
 
-    // 2. Fetch chunk 0 first to verify existence and read authoritative totalChunks
-    const firstSnap = await getDoc(doc(db, 'uploadedFileChunks', `${fileId}_chunk_0`));
-    if (!firstSnap.exists()) {
-      throw new Error('لم يتم العثور على أجزاء الملف في السحابة أو لم تكتمل مزامنته بعد.');
-    }
-    const firstData = firstSnap.data();
-    const totalChunks = Math.max(
-      1,
-      Number(firstData.totalChunks) || Number(resource.chunkCount) || Number(chunksFromUrl) || 1
-    );
-
-    const parts: string[] = new Array(totalChunks).fill('');
-    parts[0] = firstData.data || '';
-    let downloadedCount = 1;
-    onProgress?.(10 + Math.round((downloadedCount / totalChunks) * 90));
-
-    // 3. Download all remaining chunks in parallel for 5x-10x faster loading!
-    if (totalChunks > 1) {
-      const remainingIndices: number[] = [];
-      for (let idx = 1; idx < totalChunks; idx++) {
-        remainingIndices.push(idx);
+    // 2. Fetch chunks from Cloud Firestore `uploadedFileChunks`
+    const expectedChunks = resource.chunkCount || 1;
+    const parts: string[] = [];
+    for (let idx = 0; idx < expectedChunks; idx++) {
+      const snap = await getDoc(doc(db, 'uploadedFileChunks', `${fileId}_chunk_${idx}`));
+      if (!snap.exists()) {
+        throw new Error('لم يتم العثور على أجزاء الملف في السحابة أو لم تكتمل مزامنته بعد.');
       }
-
-      await Promise.all(
-        remainingIndices.map(async (idx) => {
-          const snap = await getDoc(doc(db, 'uploadedFileChunks', `${fileId}_chunk_${idx}`));
-          if (!snap.exists()) {
-            throw new Error(`تعذر تحميل الجزء (${idx + 1}/${totalChunks}) من الملف السحابي.`);
-          }
-          parts[idx] = snap.data().data || '';
-          downloadedCount++;
-          onProgress?.(10 + Math.round((downloadedCount / totalChunks) * 90));
-        })
-      );
+      const chunkData = snap.data();
+      parts.push(chunkData.data || '');
+      onProgress?.(10 + Math.round(((idx + 1) / expectedChunks) * 90));
     }
 
     const fullDataUrl = parts.join('');
@@ -405,50 +345,36 @@ function unmarkResourceDeleted(id: string): void {
   } catch (e) {}
 }
 
-function mergeResourcesWithDefaults(cloudOrLocal: EducationalResource[]): EducationalResource[] {
+async function ensureResourcesInitialized(): Promise<EducationalResource[]> {
   const deleted = getDeletedResourceIds();
-  const map = new Map<string, EducationalResource>();
-  for (const def of SAMPLE_EDUCATIONAL_RESOURCES) {
-    if (!deleted.has(def.id)) {
-      map.set(def.id, def);
-    }
-  }
-  for (const item of cloudOrLocal) {
-    if (item && item.id && !deleted.has(item.id)) {
-      map.set(item.id, item);
-    }
-  }
-  return Array.from(map.values()).sort(
-    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-  );
-}
 
-function readLocalResources(): EducationalResource[] {
-  if (resourcesMemoryCache) {
-    const deleted = getDeletedResourceIds();
-    return resourcesMemoryCache.filter(r => !deleted.has(r.id));
-  }
   try {
-    const raw = localStorage.getItem(RESOURCES_STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as EducationalResource[];
-      const merged = mergeResourcesWithDefaults(parsed);
-      resourcesMemoryCache = merged;
-      return merged;
+    const snap = await getDocs(collection(db, 'educationalResources'));
+    if (!snap.empty) {
+      const list: EducationalResource[] = [];
+      snap.forEach(d => {
+        const data = d.data() as EducationalResource;
+        if (data && data.id && !deleted.has(data.id)) {
+          list.push(data);
+        }
+      });
+      localStorage.setItem(RESOURCES_STORAGE_KEY, JSON.stringify(list));
+      localStorage.setItem(RESOURCES_INIT_KEY, 'true');
+      return list;
     }
   } catch (e) {}
-  const defaults = mergeResourcesWithDefaults([]);
-  resourcesMemoryCache = defaults;
-  return defaults;
-}
 
-function writeLocalResources(list: EducationalResource[]): void {
-  const merged = mergeResourcesWithDefaults(list);
-  resourcesMemoryCache = merged;
+  // If Firestore is empty, seed defaults
+  const defaults = SAMPLE_EDUCATIONAL_RESOURCES.filter(item => !deleted.has(item.id));
   try {
-    localStorage.setItem(RESOURCES_STORAGE_KEY, JSON.stringify(merged));
+    localStorage.setItem(RESOURCES_STORAGE_KEY, JSON.stringify(defaults));
     localStorage.setItem(RESOURCES_INIT_KEY, 'true');
+    for (const item of defaults) {
+      setDoc(doc(db, 'educationalResources', item.id), cleanFirestoreData(item), { merge: true }).catch(() => {});
+    }
   } catch (e) {}
+
+  return defaults;
 }
 
 export interface ResourceFilters {
@@ -461,113 +387,68 @@ export interface ResourceFilters {
   status?: 'published' | 'draft' | 'archived';
 }
 
-/**
- * Synchronous 0ms cache reader for instant tab switching without loading spinners
- */
-export function getCachedEducationalResources(filters: ResourceFilters = {}): EducationalResource[] {
-  return applyLocalFilters(readLocalResources(), filters);
-}
-
-async function queryResourcesFromFirestore(statusFilter?: string): Promise<EducationalResource[]> {
+export async function fetchEducationalResources(filters: ResourceFilters = {}): Promise<EducationalResource[]> {
   const deleted = getDeletedResourceIds();
-  const items: EducationalResource[] = [];
 
-  if (statusFilter === 'published') {
-    // Student-safe query that 100% satisfies `resource.data.status == 'published'` in Firestore security rules
-    const q = query(collection(db, 'educationalResources'), where('status', '==', 'published'));
-    const snap = await getDocs(q);
-    snap.forEach((d) => {
-      const data = { ...d.data(), id: d.data().id || d.id } as EducationalResource;
-      if (data && data.id && !deleted.has(data.id)) {
-        items.push(data);
-      }
-    });
-    return items;
-  }
-
-  // Admin query: try full collection first, fallback to published query if caller is student
   try {
     const snap = await getDocs(collection(db, 'educationalResources'));
-    snap.forEach((d) => {
-      const data = { ...d.data(), id: d.data().id || d.id } as EducationalResource;
-      if (data && data.id && !deleted.has(data.id)) {
-        items.push(data);
-      }
-    });
-    return items;
-  } catch {
-    const q = query(collection(db, 'educationalResources'), where('status', '==', 'published'));
-    const snap = await getDocs(q);
-    snap.forEach((d) => {
-      const data = { ...d.data(), id: d.data().id || d.id } as EducationalResource;
-      if (data && data.id && !deleted.has(data.id)) {
-        items.push(data);
-      }
-    });
-    return items;
-  }
-}
+    if (!snap.empty) {
+      // Cloud Firestore is the authoritative source of truth across devices!
+      const cloudItems: EducationalResource[] = [];
+      snap.forEach((d) => {
+        const data = d.data() as EducationalResource;
+        if (data && data.id && !deleted.has(data.id)) {
+          cloudItems.push(data);
+        }
+      });
 
-async function ensureResourcesInitialized(): Promise<EducationalResource[]> {
-  try {
-    const cloudItems = await queryResourcesFromFirestore();
-    const merged = mergeResourcesWithDefaults(cloudItems);
-    writeLocalResources(merged);
-    return merged;
-  } catch (e) {
-    return readLocalResources();
-  }
-}
+      const finalItems = cloudItems.sort(
+        (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+      );
 
-export async function fetchEducationalResources(filters: ResourceFilters = {}): Promise<EducationalResource[]> {
-  try {
-    const cloudItems = await queryResourcesFromFirestore(filters.status);
-    // Preserve any draft items in local cache if we only queried published items
-    const existingLocal = readLocalResources();
-    const draftsToKeep = filters.status === 'published'
-      ? existingLocal.filter(r => r.status !== 'published')
-      : [];
-    const merged = mergeResourcesWithDefaults([...draftsToKeep, ...cloudItems]);
-    writeLocalResources(merged);
-    return applyLocalFilters(merged, filters);
+      try {
+        localStorage.setItem(RESOURCES_STORAGE_KEY, JSON.stringify(finalItems));
+        localStorage.setItem(RESOURCES_INIT_KEY, 'true');
+      } catch (e) {}
+
+      return applyLocalFilters(finalItems, filters);
+    }
   } catch (err) {
     console.warn('Firestore fetchEducationalResources fallback to local cache:', err);
-    return applyLocalFilters(readLocalResources(), filters);
   }
+
+  // Fallback to local storage if Firestore is unreachable
+  const localList = await ensureResourcesInitialized();
+  return applyLocalFilters(localList, filters);
 }
 
 export function subscribeToEducationalResources(
   filters: ResourceFilters = {},
   onUpdate: (resources: EducationalResource[]) => void
 ): () => void {
+  const deleted = getDeletedResourceIds();
   try {
-    // Use `where('status', '==', 'published')` when status is 'published' so student listeners
-    // 100% comply with Firestore security rules on `umed-yemen`.
-    const targetQuery =
-      filters.status === 'published'
-        ? query(collection(db, 'educationalResources'), where('status', '==', 'published'))
-        : collection(db, 'educationalResources');
-
     const unsub = onSnapshot(
-      targetQuery,
+      collection(db, 'educationalResources'),
       (snap) => {
-        const deleted = getDeletedResourceIds();
         const cloudItems: EducationalResource[] = [];
         snap.forEach((d) => {
-          const data = { ...d.data(), id: d.data().id || d.id } as EducationalResource;
+          const data = d.data() as EducationalResource;
           if (data && data.id && !deleted.has(data.id)) {
             cloudItems.push(data);
           }
         });
 
-        const existingLocal = readLocalResources();
-        const draftsToKeep =
-          filters.status === 'published'
-            ? existingLocal.filter(r => r.status !== 'published')
-            : [];
-        const merged = mergeResourcesWithDefaults([...draftsToKeep, ...cloudItems]);
-        writeLocalResources(merged);
-        onUpdate(applyLocalFilters(merged, filters));
+        const sorted = cloudItems.sort(
+          (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+        );
+
+        try {
+          localStorage.setItem(RESOURCES_STORAGE_KEY, JSON.stringify(sorted));
+          localStorage.setItem(RESOURCES_INIT_KEY, 'true');
+        } catch (e) {}
+
+        onUpdate(applyLocalFilters(sorted, filters));
       },
       (err) => {
         console.warn('subscribeToEducationalResources error:', err);
@@ -582,8 +463,8 @@ export function subscribeToEducationalResources(
 function applyLocalFilters(list: EducationalResource[], filters: ResourceFilters): EducationalResource[] {
   return list.filter(r => {
     if (filters.universityId && r.universityId !== filters.universityId) return false;
-    if (filters.programId && r.programId && r.programId !== filters.programId && !filters.programId.startsWith('prog-mbbs')) return false;
-    if (filters.studyLevelId && r.studyLevelId !== filters.studyLevelId && r.studyLevelId !== 'ALL') return false;
+    if (filters.programId && r.programId !== filters.programId) return false;
+    if (filters.studyLevelId && r.studyLevelId !== filters.studyLevelId) return false;
     if (filters.studyPeriodId && r.studyPeriodId && r.studyPeriodId !== filters.studyPeriodId) return false;
     if (filters.courseOfferingId && r.courseOfferingId && r.courseOfferingId !== filters.courseOfferingId) return false;
     if (filters.sectionType && r.sectionType !== filters.sectionType) return false;
@@ -594,10 +475,10 @@ function applyLocalFilters(list: EducationalResource[], filters: ResourceFilters
 
 export async function deleteCloudFileChunks(cloudUrl?: string, chunkCount?: number): Promise<void> {
   if (!cloudUrl || !cloudUrl.startsWith('umed-cloud://')) return;
-  const { fileId, chunksFromUrl } = parseCloudUrl(cloudUrl);
+  const fileId = cloudUrl.replace('umed-cloud://', '').trim();
   if (!fileId) return;
   await deleteFileFromIDB(fileId);
-  const count = Math.max(1, chunkCount || chunksFromUrl || 1);
+  const count = Math.max(1, chunkCount || 1);
   const deletions: Promise<any>[] = [];
   for (let i = 0; i < count; i++) {
     deletions.push(deleteDoc(doc(db, 'uploadedFileChunks', `${fileId}_chunk_${i}`)).catch(() => {}));
@@ -607,12 +488,9 @@ export async function deleteCloudFileChunks(cloudUrl?: string, chunkCount?: numb
 
 export async function saveEducationalResource(resource: EducationalResource): Promise<void> {
   unmarkResourceDeleted(resource.id);
-  const current = readLocalResources();
+  const current = await ensureResourcesInitialized();
   const updatedResource: EducationalResource = cleanFirestoreData({
     ...resource,
-    universityId: resource.universityId || 'univ-dar-al-salam',
-    studyLevelId: resource.studyLevelId || 'lvl-4',
-    status: resource.status || 'published',
     updatedAt: new Date().toISOString()
   });
 
@@ -629,14 +507,16 @@ export async function saveEducationalResource(resource: EducationalResource): Pr
     deleteCloudFileChunks(previousResource.url, previousResource.chunkCount).catch(() => {});
   }
 
-  const nextList = [...current];
   if (index >= 0) {
-    nextList[index] = updatedResource;
+    current[index] = updatedResource;
   } else {
-    nextList.unshift(updatedResource);
+    current.unshift(updatedResource);
   }
 
-  writeLocalResources(nextList);
+  try {
+    localStorage.setItem(RESOURCES_STORAGE_KEY, JSON.stringify(current));
+    localStorage.setItem(RESOURCES_INIT_KEY, 'true');
+  } catch (e) {}
 
   try {
     await setDoc(doc(db, 'educationalResources', resource.id), cleanFirestoreData(updatedResource), { merge: true });
@@ -652,19 +532,11 @@ export async function toggleResourceStatus(resourceId: string, newStatus: 'publi
   const nowIso = new Date().toISOString();
   const target = current.find(r => r.id === resourceId);
   if (target) {
-    const updatedTarget: EducationalResource = {
-      ...target,
-      status: newStatus,
-      updatedAt: nowIso
-    };
-    const nextList = current.map(r => r.id === resourceId ? updatedTarget : r);
-    writeLocalResources(nextList);
+    target.status = newStatus;
+    target.updatedAt = nowIso;
     try {
-      await setDoc(doc(db, 'educationalResources', resourceId), cleanFirestoreData(updatedTarget), { merge: true });
-      return;
-    } catch (err) {
-      console.warn('Firestore toggleResourceStatus setDoc fallback:', err);
-    }
+      localStorage.setItem(RESOURCES_STORAGE_KEY, JSON.stringify(current));
+    } catch (e) {}
   }
 
   try {
@@ -678,11 +550,14 @@ export async function toggleResourceStatus(resourceId: string, newStatus: 'publi
 }
 
 export async function deleteEducationalResource(resourceId: string): Promise<void> {
-  const current = readLocalResources();
+  const current = await ensureResourcesInitialized();
   const target = current.find(r => r.id === resourceId);
   markResourceDeleted(resourceId);
   const filtered = current.filter(r => r.id !== resourceId);
-  writeLocalResources(filtered);
+
+  try {
+    localStorage.setItem(RESOURCES_STORAGE_KEY, JSON.stringify(filtered));
+  } catch (e) {}
 
   try {
     await deleteDoc(doc(db, 'educationalResources', resourceId));

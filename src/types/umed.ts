@@ -33,19 +33,11 @@ export interface UserRoleDoc {
   assignedByRole?: UserRole;
 }
 
-export type LeaderboardNameMode =
-  | 'full_name'
-  | 'custom_username'
-  | 'abbreviated'
-  | 'anonymous_code';
-
 export interface UserProfile {
   uid: string;
   email: string;
   displayNameArabic: string;
   displayNameEnglish?: string;
-  username?: string;
-  leaderboardNameMode?: LeaderboardNameMode;
   phone?: string;
   academicStudentNumber?: string;
   avatarUrl?: string;
@@ -378,8 +370,6 @@ export interface QuestionOption {
   textEnglish?: string;
 }
 
-export type QuestionSyncStatus = 'synced' | 'pending_sync' | 'sync_error';
-
 export interface QuestionItemFull {
   id: string;
   bankId: string;
@@ -390,77 +380,9 @@ export interface QuestionItemFull {
   correctOptionId: string;
   explanationArabic?: string;
   explanationEnglish?: string;
-  optionExplanations?: Record<string, string>; // Optional per-option breakdown (opt-a -> why right/wrong)
   points: number;
   createdBy: string;
   createdAt: string;
-  updatedAt?: string;
-  contentHash?: string; // Deterministic fingerprint for deduplication
-  syncStatus?: QuestionSyncStatus;
-}
-
-export interface QuestionValidationIssue {
-  code:
-    | 'MISSING_STEM'
-    | 'INSUFFICIENT_OPTIONS'
-    | 'EMPTY_OPTION'
-    | 'MISSING_CORRECT_ANSWER'
-    | 'INVALID_CORRECT_OPTION'
-    | 'DUPLICATE_IN_BATCH'
-    | 'DUPLICATE_IN_BANK'
-    | 'IDENTICAL_OPTIONS';
-  severity: 'error' | 'warning';
-  messageArabic: string;
-}
-
-export interface ParsedQuestionDraft {
-  tempId: string;
-  deterministicId: string;
-  sourceIndex: number;
-  stemArabic: string;
-  stemEnglish?: string;
-  options: QuestionOption[];
-  correctOptionId: string; // '' if not detected
-  explanationArabic?: string;
-  explanationEnglish?: string;
-  optionExplanations?: Record<string, string>;
-  aiGeneratedExplanation?: string;
-  originalExplanationBeforeAi?: string;
-  points: number;
-  contentHash: string;
-  issues: QuestionValidationIssue[];
-  isValid: boolean;
-  isDuplicateInBatch: boolean;
-  isDuplicateInBank: boolean;
-  existingQuestionId?: string;
-  selectedForImport: boolean;
-}
-
-export interface BulkImportDraftSession {
-  id: string; // e.g. `draft_${bankId}`
-  bankId: string;
-  universityId: string;
-  rawInputText: string;
-  sourceFormat: 'text' | 'csv' | 'json';
-  fileName?: string;
-  defaultPoints: number;
-  draftQuestions: ParsedQuestionDraft[];
-  updatedAt: string;
-}
-
-export interface QuestionOutboxEntry {
-  id: string; // Outbox entry key (e.g. `outbox_upsert_${questionId}`)
-  operation: 'upsert' | 'delete';
-  questionId: string;
-  bankId: string;
-  universityId?: string;
-  question?: QuestionItemFull;
-  idempotencyKey: string;
-  status: 'pending' | 'syncing' | 'failed';
-  retryCount: number;
-  lastError?: string;
-  createdAt: string;
-  updatedAt: string;
 }
 
 /**
@@ -498,12 +420,7 @@ export interface Assessment {
   programId: string;
   studyLevelId: string;
   courseOfferingId?: string;
-  durationMinutes: number; // e.g. 45 (0 = untimed/open)
-  enableExamTimer?: boolean; // true = timed full exam, false = untimed/open
-  questionDurationSeconds?: number; // optional timer per question in seconds (0 = disabled)
-  availabilityDurationHours?: number; // optional availability duration before closing
-  allowTrialSharing?: boolean; // allow shareable trial link where guests solve & register to see score
-  showLeaderboard?: boolean; // display ranked results leaderboard to students
+  durationMinutes: number; // e.g. 45
   maxAttempts: number; // usually 1 for exams, 1 or more for competitions
   opensAt: string; // ISO 8601
   closesAt: string; // ISO 8601
@@ -529,7 +446,6 @@ export interface AssessmentAttempt {
   answers: Record<string, string>; // questionId -> selectedOptionId (progressively saved)
   lastSavedAt: string;
   attemptNumber: number;
-  durationSeconds?: number;
 }
 
 export interface AssessmentResult {
@@ -538,10 +454,6 @@ export interface AssessmentResult {
   assessmentId: string;
   uid: string;
   studentNameArabic: string;
-  studentDisplayNamePublic?: string;
-  studentUsername?: string;
-  leaderboardNameMode?: LeaderboardNameMode;
-  durationSeconds?: number;
   academicStudentNumber?: string;
   score: number;
   totalPoints: number;
@@ -577,8 +489,7 @@ export type AuditAction =
   | 'USER_ARCHIVED'
   | 'USER_UNARCHIVED'
   | 'USER_VERIFIED'
-  | 'USERS_EXPORTED'
-  | 'QUESTIONS_BULK_IMPORTED';
+  | 'USERS_EXPORTED';
 
 export interface AuditLog {
   id: string;

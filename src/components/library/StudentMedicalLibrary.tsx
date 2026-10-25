@@ -24,15 +24,7 @@ import {
   Video
 } from 'lucide-react';
 import { EducationalResource, ResourceType } from '../../types/umed.ts';
-import {
-  fetchEducationalResources,
-  getCachedEducationalResources,
-  subscribeToEducationalResources
-} from '../../services/resourceService.ts';
-import {
-  getActiveNotificationUser,
-  syncNotificationsForResources
-} from '../../services/notificationService.ts';
+import { fetchEducationalResources, subscribeToEducationalResources } from '../../services/resourceService.ts';
 import ResourcePreviewModal from './ResourcePreviewModal.tsx';
 
 interface StudentMedicalLibraryProps {
@@ -48,22 +40,15 @@ export default function StudentMedicalLibrary({
   studyLevelId,
   studentNameArabic
 }: StudentMedicalLibraryProps) {
-  const [resources, setResources] = useState<EducationalResource[]>(() =>
-    getCachedEducationalResources({
-      universityId,
-      programId,
-      studyLevelId,
-      status: 'published'
-    })
-  );
-  const [loading, setLoading] = useState<boolean>(false);
+  const [resources, setResources] = useState<EducationalResource[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedType, setSelectedType] = useState<ResourceType | 'all'>('all');
   const [selectedSection, setSelectedSection] = useState<'all' | 'theoretical' | 'practical'>('all');
   const [activePreviewResource, setActivePreviewResource] = useState<EducationalResource | null>(null);
 
-  const loadResources = async (showSpinner = false) => {
-    if (showSpinner) setLoading(true);
+  const loadResources = async () => {
+    setLoading(true);
     try {
       const list = await fetchEducationalResources({
         universityId,
@@ -72,10 +57,6 @@ export default function StudentMedicalLibrary({
         status: 'published' // Students strictly see published content
       });
       setResources(list);
-      const activeUid = getActiveNotificationUser();
-      if (activeUid && activeUid !== 'guest') {
-        syncNotificationsForResources(activeUid, list, universityId, studyLevelId);
-      }
     } catch (err) {
       console.warn('Failed to load educational resources:', err);
     } finally {
@@ -84,16 +65,7 @@ export default function StudentMedicalLibrary({
   };
 
   useEffect(() => {
-    const cached = getCachedEducationalResources({
-      universityId,
-      programId,
-      studyLevelId,
-      status: 'published'
-    });
-    if (cached.length > 0) {
-      setResources(cached);
-    }
-    loadResources(cached.length === 0);
+    loadResources();
     const unsub = subscribeToEducationalResources(
       {
         universityId,
@@ -104,10 +76,6 @@ export default function StudentMedicalLibrary({
       (liveList) => {
         setResources(liveList);
         setLoading(false);
-        const activeUid = getActiveNotificationUser();
-        if (activeUid && activeUid !== 'guest') {
-          syncNotificationsForResources(activeUid, liveList, universityId, studyLevelId);
-        }
       }
     );
     return () => unsub();
@@ -145,7 +113,7 @@ export default function StudentMedicalLibrary({
         </div>
 
         <button
-          onClick={() => loadResources(true)}
+          onClick={loadResources}
           disabled={loading}
           className="py-2 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition-colors border border-slate-700"
         >

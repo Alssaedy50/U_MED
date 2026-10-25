@@ -37,8 +37,6 @@ import {
 } from '../../types/umed.ts';
 import { 
   fetchEducationalResources, 
-  getCachedEducationalResources,
-  subscribeToEducationalResources,
   saveEducationalResource, 
   toggleResourceStatus, 
   deleteEducationalResource,
@@ -67,17 +65,8 @@ export default function EducationalContentManager({
   assignedStudyLevelId,
   assignedCourseId
 }: EducationalContentManagerProps) {
-  const isBatchScoped = userRole === 'batch_rep' || userRole === 'department_head';
-  const isUnivScoped = userRole !== 'platform_owner';
-
-  const [resources, setResources] = useState<EducationalResource[]>(() =>
-    getCachedEducationalResources({
-      universityId: isUnivScoped ? assignedUniversityId : undefined,
-      studyLevelId: isBatchScoped && assignedStudyLevelId ? assignedStudyLevelId : undefined,
-      courseOfferingId: userRole === 'department_head' && assignedCourseId ? assignedCourseId : undefined
-    })
-  );
-  const [loading, setLoading] = useState<boolean>(false);
+  const [resources, setResources] = useState<EducationalResource[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
   const [statusFilter, setStatusFilter] = useState<'all' | 'published' | 'draft' | 'archived'>('all');
   const [typeFilter, setTypeFilter] = useState<ResourceType | 'all'>('all');
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
@@ -127,6 +116,9 @@ export default function EducationalContentManager({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<BlobPart[]>([]);
   const recordingTimerRef = useRef<number | null>(null);
+
+  const isBatchScoped = userRole === 'batch_rep' || userRole === 'department_head';
+  const isUnivScoped = userRole !== 'platform_owner';
 
   const loadAcademicHierarchy = async () => {
     try {
@@ -198,18 +190,6 @@ export default function EducationalContentManager({
   useEffect(() => {
     loadAcademicHierarchy();
     loadResources();
-    const unsub = subscribeToEducationalResources(
-      {
-        universityId: isUnivScoped ? assignedUniversityId : undefined,
-        studyLevelId: isBatchScoped && assignedStudyLevelId ? assignedStudyLevelId : undefined,
-        courseOfferingId: userRole === 'department_head' && assignedCourseId ? assignedCourseId : undefined
-      },
-      (liveList) => {
-        setResources(liveList);
-        setLoading(false);
-      }
-    );
-    return () => unsub();
   }, [assignedUniversityId, assignedStudyLevelId, assignedCourseId, userRole]);
 
   // Cascade Periods when Add Form StudyLevel changes
