@@ -1071,80 +1071,84 @@ export default function AcademicStructureManager({
           {/* 2. Main Title Cards for Academic Hierarchy (Click any card to open its Standalone Popup Selector/Manager) */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
             {/* Main Card 1: Active University */}
-            <div className="bg-slate-900/90 border border-slate-800 hover:border-teal-500/50 rounded-2xl p-4 flex flex-col justify-between shadow-lg transition-all">
+            <div className="bg-slate-900/90 border border-slate-800 hover:border-teal-500/50 rounded-2xl p-4 sm:p-5 flex flex-col justify-between shadow-lg transition-all">
               <div>
-                <div className="flex items-center justify-between pb-2.5 border-b border-slate-800 mb-3">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-teal-400">
-                    <Building2 className="w-4 h-4" />
+                <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
+                  <div className="flex items-center gap-2 text-xs font-bold text-teal-400">
+                    <Building2 className="w-4 h-4 shrink-0" />
                     <span>الجامعة النشطة ({universities.length})</span>
                   </div>
                   <button
                     type="button"
                     onClick={() => setShowAddUnivModal(true)}
-                    className="px-2 py-1 rounded-lg bg-teal-500/20 text-teal-300 hover:bg-teal-500/30 text-[11px] font-bold flex items-center gap-0.5"
+                    className="px-3 py-1.5 min-h-[36px] rounded-xl bg-teal-500/20 text-teal-300 hover:bg-teal-500/30 text-xs font-bold flex items-center gap-1 transition-colors"
                   >
-                    <Plus className="w-3 h-3" />
-                    <span>إضافة</span>
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>إضافة جامعة</span>
                   </button>
                 </div>
 
                 {selectedUniversity ? (
                   <div
                     onClick={() => setActivePopupList('university')}
-                    className="p-3.5 rounded-xl bg-teal-950/30 border border-teal-500/50 cursor-pointer hover:bg-teal-950/50 transition-all space-y-1.5"
+                    className="p-4 rounded-xl bg-teal-950/30 border border-teal-500/50 cursor-pointer hover:bg-teal-950/50 hover:border-teal-400 transition-all space-y-2 group"
                     title="اضغط لفتح نافذة جميع الجامعات"
                   >
                     <div className="flex items-center justify-between">
-                      <span className="text-[10px] px-2 py-0.5 rounded bg-slate-900 text-teal-300 font-bold">
+                      <span className="text-[11px] px-2.5 py-0.5 rounded-lg bg-slate-900 text-teal-300 font-bold border border-teal-500/30">
                         {selectedUniversity.type === 'private' ? 'جامعة خاصة' : 'جامعة حكومية'}
                       </span>
-                      <span className="text-[10px] text-emerald-400 font-bold">● نشط</span>
+                      <span className="text-[11px] text-emerald-400 font-bold flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                        نشط
+                      </span>
                     </div>
-                    <div className="text-sm font-black text-white">{selectedUniversity.nameArabic}</div>
-                    <div className="text-[11px] text-slate-400 truncate" dir="ltr">{selectedUniversity.nameEnglish}</div>
+                    <div className="text-base font-black text-white group-hover:text-teal-200 transition-colors">{selectedUniversity.nameArabic}</div>
+                    <div className="text-xs text-slate-400 truncate" dir="ltr">{selectedUniversity.nameEnglish}</div>
                   </div>
                 ) : (
-                  <div className="text-slate-500 text-xs text-center py-4">لا توجد جامعة محددة</div>
+                  <div className="text-slate-500 text-xs text-center py-6">لا توجد جامعة محددة</div>
                 )}
               </div>
 
-              <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between gap-2">
+              <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between gap-2">
                 <button
                   type="button"
                   onClick={() => setActivePopupList('university')}
-                  className="flex-1 py-2 px-3 rounded-xl bg-slate-800 hover:bg-teal-600 text-teal-300 hover:text-white text-xs font-bold transition-colors text-center"
+                  className="flex-1 py-2.5 px-3 min-h-[42px] rounded-xl bg-slate-800 hover:bg-teal-600 text-teal-300 hover:text-white text-xs font-bold transition-colors text-center flex items-center justify-center gap-1.5"
                 >
-                  تبديل / إدارة الجامعات ({universities.length}) ▾
+                  <span>تبديل / إدارة الجامعات ({universities.length})</span>
+                  <span>▾</span>
                 </button>
                 {selectedUniversity && (
                   <button
                     type="button"
                     onClick={() => setEditingUniv(selectedUniversity)}
-                    className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
+                    className="p-2.5 min-h-[42px] min-w-[42px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition-colors"
                     title="تعديل الجامعة الحالية"
                   >
-                    <Edit2 className="w-3.5 h-3.5" />
+                    <Edit2 className="w-4 h-4" />
                   </button>
                 )}
               </div>
             </div>
 
             {/* Main Card 2: Active College */}
-            <div className="bg-slate-900/90 border border-slate-800 hover:border-indigo-500/50 rounded-2xl p-4 flex flex-col justify-between shadow-lg transition-all">
+            <div className="bg-slate-900/90 border border-slate-800 hover:border-indigo-500/50 rounded-2xl p-4 sm:p-5 flex flex-col justify-between shadow-lg transition-all">
               <div>
-                <div className="flex items-center justify-between pb-2.5 border-b border-slate-800 mb-3">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-400">
-                    <GraduationCap className="w-4 h-4" />
+                <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
+                  <div className="flex items-center gap-2 text-xs font-bold text-indigo-400">
+                    <GraduationCap className="w-4 h-4 shrink-0" />
                     <span>الكلية النشطة ({colleges.length})</span>
                   </div>
                   {selectedUniversity && (
                     <button
                       type="button"
                       onClick={() => setShowAddCollegeModal(true)}
-                      className="px-2 py-1 rounded-lg bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 text-[11px] font-bold flex items-center gap-0.5"
+                      className="px-3 py-1.5 min-h-[36px] rounded-xl bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 text-xs font-bold flex items-center gap-1 transition-colors"
                     >
-                      <Plus className="w-3 h-3" />
-                      <span>إضافة</span>
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>إضافة كلية</span>
                     </button>
                   )}
                 </div>
@@ -1152,60 +1156,64 @@ export default function AcademicStructureManager({
                 {selectedCollege ? (
                   <div
                     onClick={() => setActivePopupList('college')}
-                    className="p-3.5 rounded-xl bg-indigo-950/30 border border-indigo-500/50 cursor-pointer hover:bg-indigo-950/50 transition-all space-y-1.5"
+                    className="p-4 rounded-xl bg-indigo-950/30 border border-indigo-500/50 cursor-pointer hover:bg-indigo-950/50 hover:border-indigo-400 transition-all space-y-2 group"
                     title="اضغط لفتح نافذة الكليات"
                   >
                     <div className="flex items-center justify-between">
-                      <span className="text-[10px] px-2 py-0.5 rounded bg-slate-900 text-indigo-300 font-mono">
+                      <span className="text-[11px] px-2.5 py-0.5 rounded-lg bg-slate-900 text-indigo-300 font-mono font-bold border border-indigo-500/30">
                         {selectedCollege.code || 'MED'}
                       </span>
-                      <span className="text-[10px] text-emerald-400 font-bold">● نشط</span>
+                      <span className="text-[11px] text-emerald-400 font-bold flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                        نشط
+                      </span>
                     </div>
-                    <div className="text-sm font-black text-white">{selectedCollege.nameArabic}</div>
-                    <div className="text-[11px] text-slate-400 truncate" dir="ltr">{selectedCollege.nameEnglish}</div>
+                    <div className="text-base font-black text-white group-hover:text-indigo-200 transition-colors">{selectedCollege.nameArabic}</div>
+                    <div className="text-xs text-slate-400 truncate" dir="ltr">{selectedCollege.nameEnglish}</div>
                   </div>
                 ) : (
-                  <div className="text-slate-500 text-xs text-center py-4">لا توجد كلية مسجلة</div>
+                  <div className="text-slate-500 text-xs text-center py-6">لا توجد كلية مسجلة</div>
                 )}
               </div>
 
-              <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between gap-2">
+              <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between gap-2">
                 <button
                   type="button"
                   onClick={() => setActivePopupList('college')}
-                  className="flex-1 py-2 px-3 rounded-xl bg-slate-800 hover:bg-indigo-600 text-indigo-300 hover:text-white text-xs font-bold transition-colors text-center"
+                  className="flex-1 py-2.5 px-3 min-h-[42px] rounded-xl bg-slate-800 hover:bg-indigo-600 text-indigo-300 hover:text-white text-xs font-bold transition-colors text-center flex items-center justify-center gap-1.5"
                 >
-                  تبديل / إدارة الكليات ({colleges.length}) ▾
+                  <span>تبديل / إدارة الكليات ({colleges.length})</span>
+                  <span>▾</span>
                 </button>
                 {selectedCollege && (
                   <button
                     type="button"
                     onClick={() => setEditingCollege(selectedCollege)}
-                    className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
+                    className="p-2.5 min-h-[42px] min-w-[42px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition-colors"
                     title="تعديل الكلية الحالية"
                   >
-                    <Edit2 className="w-3.5 h-3.5" />
+                    <Edit2 className="w-4 h-4" />
                   </button>
                 )}
               </div>
             </div>
 
             {/* Main Card 3: Active Program / Specialty */}
-            <div className="bg-slate-900/90 border border-slate-800 hover:border-emerald-500/50 rounded-2xl p-4 flex flex-col justify-between shadow-lg transition-all">
+            <div className="bg-slate-900/90 border border-slate-800 hover:border-emerald-500/50 rounded-2xl p-4 sm:p-5 flex flex-col justify-between shadow-lg transition-all">
               <div>
-                <div className="flex items-center justify-between pb-2.5 border-b border-slate-800 mb-3">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-400">
-                    <BookOpen className="w-4 h-4" />
+                <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
+                  <div className="flex items-center gap-2 text-xs font-bold text-emerald-400">
+                    <BookOpen className="w-4 h-4 shrink-0" />
                     <span>التخصص / البرنامج ({programs.length})</span>
                   </div>
                   {selectedCollege && (
                     <button
                       type="button"
                       onClick={() => setShowAddProgramModal(true)}
-                      className="px-2 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 text-[11px] font-bold flex items-center gap-0.5"
+                      className="px-3 py-1.5 min-h-[36px] rounded-xl bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 text-xs font-bold flex items-center gap-1 transition-colors"
                     >
-                      <Plus className="w-3 h-3" />
-                      <span>إضافة</span>
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>إضافة برنامج</span>
                     </button>
                   )}
                 </div>
@@ -1213,50 +1221,51 @@ export default function AcademicStructureManager({
                 {selectedProgram ? (
                   <div
                     onClick={() => setActivePopupList('program')}
-                    className="p-3.5 rounded-xl bg-emerald-950/30 border border-emerald-500/50 cursor-pointer hover:bg-emerald-950/50 transition-all space-y-1.5"
+                    className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/50 cursor-pointer hover:bg-emerald-950/50 hover:border-emerald-400 transition-all space-y-2 group"
                     title="اضغط لفتح نافذة البرامج والتخصصات"
                   >
                     <div className="flex items-center justify-between">
-                      <span className="text-[10px] px-2 py-0.5 rounded bg-slate-900 text-emerald-300 font-bold">
+                      <span className="text-[11px] px-2.5 py-0.5 rounded-lg bg-slate-900 text-emerald-300 font-bold border border-emerald-500/30">
                         {selectedProgram.studySystem === 'block' ? 'نظام البلوكات' : 'نظام الفصول'}
                       </span>
-                      <span className="text-[10px] text-amber-300 font-bold">{selectedProgram.totalRegularLevels} سنوات</span>
+                      <span className="text-[11px] text-amber-300 font-bold">{selectedProgram.totalRegularLevels} سنوات</span>
                     </div>
-                    <div className="text-sm font-black text-white">{selectedProgram.nameArabic}</div>
-                    <div className="text-[11px] text-slate-400 truncate" dir="ltr">{selectedProgram.nameEnglish}</div>
+                    <div className="text-base font-black text-white group-hover:text-emerald-200 transition-colors">{selectedProgram.nameArabic}</div>
+                    <div className="text-xs text-slate-400 truncate" dir="ltr">{selectedProgram.nameEnglish}</div>
                   </div>
                 ) : (
-                  <div className="text-slate-500 text-xs text-center py-4">لا يوجد تخصص محدد</div>
+                  <div className="text-slate-500 text-xs text-center py-6">لا يوجد تخصص محدد</div>
                 )}
               </div>
 
-              <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between gap-2">
+              <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between gap-2">
                 <button
                   type="button"
                   onClick={() => setActivePopupList('program')}
-                  className="flex-1 py-2 px-3 rounded-xl bg-slate-800 hover:bg-emerald-600 text-emerald-300 hover:text-white text-xs font-bold transition-colors text-center"
+                  className="flex-1 py-2.5 px-3 min-h-[42px] rounded-xl bg-slate-800 hover:bg-emerald-600 text-emerald-300 hover:text-white text-xs font-bold transition-colors text-center flex items-center justify-center gap-1.5"
                 >
-                  تبديل / إدارة التخصصات ({programs.length}) ▾
+                  <span>تبديل / إدارة التخصصات ({programs.length})</span>
+                  <span>▾</span>
                 </button>
                 {selectedProgram && (
                   <button
                     type="button"
                     onClick={() => setEditingProgram(selectedProgram)}
-                    className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
+                    className="p-2.5 min-h-[42px] min-w-[42px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition-colors"
                     title="تعديل البرنامج الحالي"
                   >
-                    <Edit2 className="w-3.5 h-3.5" />
+                    <Edit2 className="w-4 h-4" />
                   </button>
                 )}
               </div>
             </div>
 
             {/* Main Card 4: Active Study Level / Year */}
-            <div className="bg-slate-900/90 border border-slate-800 hover:border-amber-500/50 rounded-2xl p-4 flex flex-col justify-between shadow-lg transition-all">
+            <div className="bg-slate-900/90 border border-slate-800 hover:border-amber-500/50 rounded-2xl p-4 sm:p-5 flex flex-col justify-between shadow-lg transition-all">
               <div>
-                <div className="flex items-center justify-between pb-2.5 border-b border-slate-800 mb-3">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-amber-400">
-                    <Layers className="w-4 h-4" />
+                <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
+                  <div className="flex items-center gap-2 text-xs font-bold text-amber-400">
+                    <Layers className="w-4 h-4 shrink-0" />
                     <span>المستوى الدراسي النشط ({studyLevels.length})</span>
                   </div>
                   {selectedProgram && (
@@ -1272,10 +1281,10 @@ export default function AcademicStructureManager({
                         });
                         setShowAddLevelModal(true);
                       }}
-                      className="px-2 py-1 rounded-lg bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 text-[11px] font-bold flex items-center gap-0.5"
+                      className="px-3 py-1.5 min-h-[36px] rounded-xl bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 text-xs font-bold flex items-center gap-1 transition-colors"
                     >
-                      <Plus className="w-3 h-3" />
-                      <span>إضافة</span>
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>إضافة مستوى</span>
                     </button>
                   )}
                 </div>
@@ -1283,39 +1292,43 @@ export default function AcademicStructureManager({
                 {selectedLevel ? (
                   <div
                     onClick={() => setActivePopupList('level')}
-                    className="p-3.5 rounded-xl bg-amber-950/30 border border-amber-500/50 cursor-pointer hover:bg-amber-950/50 transition-all space-y-1.5"
+                    className="p-4 rounded-xl bg-amber-950/30 border border-amber-500/50 cursor-pointer hover:bg-amber-950/50 hover:border-amber-400 transition-all space-y-2 group"
                     title="اضغط لفتح نافذة جميع المستويات والسنوات الدراسية"
                   >
                     <div className="flex items-center justify-between">
-                      <span className="text-[10px] px-2 py-0.5 rounded bg-slate-900 text-amber-300 font-bold">
+                      <span className="text-[11px] px-2.5 py-0.5 rounded-lg bg-slate-900 text-amber-300 font-bold border border-amber-500/30">
                         {selectedLevel.stageType === 'internship' ? 'سنة الامتياز السريري' : `المستوى ${selectedLevel.order}`}
                       </span>
-                      <span className="text-[10px] text-emerald-400 font-bold">● نشط</span>
+                      <span className="text-[11px] text-emerald-400 font-bold flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                        نشط
+                      </span>
                     </div>
-                    <div className="text-sm font-black text-white">{selectedLevel.titleArabic}</div>
-                    <div className="text-[11px] text-slate-400 truncate" dir="ltr">{selectedLevel.titleEnglish}</div>
+                    <div className="text-base font-black text-white group-hover:text-amber-200 transition-colors">{selectedLevel.titleArabic}</div>
+                    <div className="text-xs text-slate-400 truncate" dir="ltr">{selectedLevel.titleEnglish}</div>
                   </div>
                 ) : (
-                  <div className="text-slate-500 text-xs text-center py-4">لا يوجد مستوى محدد</div>
+                  <div className="text-slate-500 text-xs text-center py-6">لا يوجد مستوى محدد</div>
                 )}
               </div>
 
-              <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between gap-2">
+              <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between gap-2">
                 <button
                   type="button"
                   onClick={() => setActivePopupList('level')}
-                  className="flex-1 py-2 px-3 rounded-xl bg-slate-800 hover:bg-amber-600 text-amber-300 hover:text-white text-xs font-bold transition-colors text-center"
+                  className="flex-1 py-2.5 px-3 min-h-[42px] rounded-xl bg-slate-800 hover:bg-amber-600 text-amber-300 hover:text-white text-xs font-bold transition-colors text-center flex items-center justify-center gap-1.5"
                 >
-                  تبديل / إدارة المستويات ({studyLevels.length}) ▾
+                  <span>تبديل / إدارة المستويات ({studyLevels.length})</span>
+                  <span>▾</span>
                 </button>
                 {selectedLevel && (
                   <button
                     type="button"
                     onClick={() => setEditingLevel(selectedLevel)}
-                    className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
+                    className="p-2.5 min-h-[42px] min-w-[42px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition-colors"
                     title="تعديل المستوى الحالي"
                   >
-                    <Edit2 className="w-3.5 h-3.5" />
+                    <Edit2 className="w-4 h-4" />
                   </button>
                 )}
               </div>
@@ -1326,17 +1339,17 @@ export default function AcademicStructureManager({
           {selectedLevel && (
             <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-5">
               {/* Active Block Main Header Bar */}
-              <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-800">
-                <div className="space-y-1">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+                <div className="space-y-1.5">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold">
+                    <span className="text-xs px-3 py-1.5 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold">
                       {selectedLevel.titleArabic}
                     </span>
-                    <span className="text-slate-500">←</span>
+                    <span className="text-slate-500 font-bold">←</span>
                     <button
                       type="button"
                       onClick={() => setActivePopupList('period')}
-                      className="text-sm sm:text-base font-black text-white hover:text-teal-300 flex items-center gap-2 transition-colors"
+                      className="text-sm sm:text-base font-black text-white hover:text-teal-300 flex items-center gap-2 transition-colors flex-wrap"
                     >
                       <span>{selectedPeriod ? `البلوك النشط: ${selectedPeriod.titleArabic} (${selectedPeriod.code})` : 'اختر البلوك الدراسي من النافذة المنبثقة'}</span>
                       <span className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-teal-600 text-teal-300 hover:text-white text-xs font-bold transition-colors">
@@ -1349,13 +1362,13 @@ export default function AcademicStructureManager({
                   </p>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2">
                   <button
                     type="button"
                     onClick={() => setActivePopupList('period')}
-                    className="py-2 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-teal-300 text-xs font-bold border border-slate-700"
+                    className="py-2.5 px-3.5 min-h-[42px] rounded-xl bg-slate-800 hover:bg-slate-700 text-teal-300 text-xs font-bold border border-slate-700 flex items-center justify-center gap-1.5 transition-colors"
                   >
-                    قائمة البلوكات ({studyPeriods.length})
+                    <span>قائمة البلوكات ({studyPeriods.length})</span>
                   </button>
                   <button
                     type="button"
@@ -1368,29 +1381,29 @@ export default function AcademicStructureManager({
                       });
                       setShowAddPeriodModal(true);
                     }}
-                    className="py-2 px-3.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md"
+                    className="py-2.5 px-3.5 min-h-[42px] rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-md transition-colors"
                   >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>{selectedLevel.stageType === 'internship' ? 'إضافة روتيشن سريري' : 'إضافة بلوك دراسي'}</span>
+                    <Plus className="w-4 h-4 shrink-0" />
+                    <span>{selectedLevel.stageType === 'internship' ? 'إضافة روتيشن' : 'إضافة بلوك'}</span>
                   </button>
                   {selectedPeriod && (
                     <>
                       <button
                         type="button"
                         onClick={() => setShowAddCourseModal(true)}
-                        className="py-2 px-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md"
+                        className="py-2.5 px-3.5 min-h-[42px] rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-md transition-colors"
                       >
-                        <Plus className="w-3.5 h-3.5" />
-                        <span>إضافة مقرر للبلوك</span>
+                        <Plus className="w-4 h-4 shrink-0" />
+                        <span>إضافة مقرر</span>
                       </button>
 
                       <button
                         type="button"
                         onClick={() => handleArchivePeriod(selectedPeriod.id, true)}
-                        className="py-2 px-3 rounded-xl bg-amber-950/50 hover:bg-amber-900/70 text-amber-300 text-xs font-bold flex items-center gap-1.5 border border-amber-800/50 transition-colors"
+                        className="py-2.5 px-3.5 min-h-[42px] rounded-xl bg-amber-950/50 hover:bg-amber-900/70 text-amber-300 text-xs font-bold flex items-center justify-center gap-1.5 border border-amber-800/50 transition-colors"
                         title="أرشفة البلوك وإخفاؤه من العمليات النشطة"
                       >
-                        <Archive className="w-3.5 h-3.5" />
+                        <Archive className="w-4 h-4 shrink-0" />
                         <span>أرشفة البلوك</span>
                       </button>
                     </>
@@ -1408,50 +1421,55 @@ export default function AcademicStructureManager({
                   لا توجد مقررات مضافة في ({selectedPeriod.titleArabic}) حتى الآن. اضغط "+ إضافة مقرر للبلوك".
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
                   {courses.map((course) => (
-                    <div key={course.id} className="p-4 bg-slate-950 rounded-xl border border-slate-800 text-xs flex flex-col justify-between gap-3">
+                    <div key={course.id} className="p-4 sm:p-5 bg-slate-950 rounded-2xl border border-slate-800 text-xs flex flex-col justify-between gap-3.5 hover:border-slate-700 transition-all">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-teal-300 font-mono font-bold">
+                          <span className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-teal-300 font-mono font-bold text-xs">
                             {course.code}
                           </span>
-                          <span className="font-bold text-white text-sm">{course.titleArabic}</span>
+                          <span className="font-bold text-white text-sm sm:text-base">{course.titleArabic}</span>
                           {course.titleEnglish && (
                             <span className="text-slate-400 text-xs" dir="ltr">({course.titleEnglish})</span>
                           )}
                         </div>
-                        <span className="text-slate-400 font-mono text-[11px]">{course.creditHours ?? 3} ساعات</span>
+                        <span className="text-slate-400 font-mono text-xs px-2 py-0.5 rounded bg-slate-900 border border-slate-800">{course.creditHours ?? 3} ساعات</span>
                       </div>
 
-                      <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2">
-                        <span className={`text-[10px] font-bold ${course.isActive ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {course.isActive ? '● مقرر نشط' : '○ مقرر معطل'}
+                      <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2.5">
+                        <span className={`text-xs font-bold flex items-center gap-1.5 ${course.isActive ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          <span className={`w-2 h-2 rounded-full ${course.isActive ? 'bg-emerald-400' : 'bg-rose-400'}`}></span>
+                          {course.isActive ? 'مقرر نشط' : 'مقرر معطل'}
                         </span>
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <button
+                            type="button"
                             onClick={() => setEditingCourse(course)}
-                            className="text-slate-300 hover:text-indigo-300 px-2 py-1 rounded bg-slate-900 hover:bg-slate-800 flex items-center gap-1"
+                            className="text-slate-200 hover:text-white px-3 py-1.5 min-h-[38px] rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 font-bold flex items-center gap-1.5 transition-colors"
                           >
-                            <Edit2 className="w-3 h-3" />
+                            <Edit2 className="w-3.5 h-3.5 text-indigo-400" />
                             <span>تعديل</span>
                           </button>
                           <button
+                            type="button"
                             onClick={() => {
                               toggleCourseOfferingActive(course.id, course.isActive).then(() => {
                                 setCourses(courses.map(c => c.id === course.id ? { ...c, isActive: !c.isActive } : c));
                               });
                             }}
-                            className="text-slate-300 hover:text-white px-2 py-1 rounded bg-slate-900 hover:bg-slate-800 flex items-center gap-1"
+                            className="text-slate-200 hover:text-white px-3 py-1.5 min-h-[38px] rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 font-bold flex items-center gap-1.5 transition-colors"
                           >
-                            {course.isActive ? <ToggleRight className="w-3.5 h-3.5 text-emerald-400" /> : <ToggleLeft className="w-3.5 h-3.5 text-slate-500" />}
+                            {course.isActive ? <ToggleRight className="w-4 h-4 text-emerald-400" /> : <ToggleLeft className="w-4 h-4 text-slate-500" />}
                             <span>{course.isActive ? 'تعطيل' : 'تفعيل'}</span>
                           </button>
                           <button
+                            type="button"
                             onClick={() => handleAttemptDelete('course', course.id, course.titleArabic, course.isActive)}
-                            className="text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-rose-950/30"
+                            className="text-rose-400 hover:text-rose-200 px-3 py-1.5 min-h-[38px] rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-900/50 font-bold flex items-center gap-1.5 transition-colors"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
+                            <span>حذف</span>
                           </button>
                         </div>
                       </div>
@@ -1514,29 +1532,32 @@ export default function AcademicStructureManager({
                         setSelectedUniversity(u);
                         setActivePopupList(null);
                       }}
-                      className={`p-3.5 rounded-xl border cursor-pointer transition-all text-xs flex items-center justify-between gap-3 ${
+                      className={`p-4 rounded-xl border cursor-pointer transition-all text-xs flex flex-wrap items-center justify-between gap-3 ${
                         selectedUniversity?.id === u.id
                           ? 'bg-teal-500/20 border-teal-500 text-white shadow-md'
                           : 'bg-slate-950/80 border-slate-800 text-slate-300 hover:border-slate-700'
                       }`}
                     >
                       <div>
-                        <div className="font-bold text-sm">{u.nameArabic}</div>
-                        <div className="text-[11px] text-slate-400" dir="ltr">{u.nameEnglish}</div>
+                        <div className="font-bold text-sm sm:text-base">{u.nameArabic}</div>
+                        <div className="text-xs text-slate-400 mt-0.5" dir="ltr">{u.nameEnglish}</div>
                       </div>
-                      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                         <button
+                          type="button"
                           onClick={() => { setActivePopupList(null); setEditingUniv(u); }}
-                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1"
+                          className="px-3 py-2 min-h-[38px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold flex items-center gap-1.5 transition-colors"
                         >
-                          <Edit2 className="w-3 h-3" />
+                          <Edit2 className="w-3.5 h-3.5 text-teal-400" />
                           <span>تعديل</span>
                         </button>
                         <button
+                          type="button"
                           onClick={() => handleAttemptDelete('university', u.id, u.nameArabic, u.isActive)}
-                          className="p-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-400"
+                          className="px-3 py-2 min-h-[38px] rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-900/50 text-rose-300 font-bold flex items-center gap-1.5 transition-colors"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
+                          <span>حذف</span>
                         </button>
                       </div>
                     </div>
@@ -1549,29 +1570,32 @@ export default function AcademicStructureManager({
                         setSelectedCollege(c);
                         setActivePopupList(null);
                       }}
-                      className={`p-3.5 rounded-xl border cursor-pointer transition-all text-xs flex items-center justify-between gap-3 ${
+                      className={`p-4 rounded-xl border cursor-pointer transition-all text-xs flex flex-wrap items-center justify-between gap-3 ${
                         selectedCollege?.id === c.id
                           ? 'bg-indigo-500/20 border-indigo-500 text-white shadow-md'
                           : 'bg-slate-950/80 border-slate-800 text-slate-300 hover:border-slate-700'
                       }`}
                     >
                       <div>
-                        <div className="font-bold text-sm">{c.nameArabic} ({c.code})</div>
-                        <div className="text-[11px] text-slate-400" dir="ltr">{c.nameEnglish}</div>
+                        <div className="font-bold text-sm sm:text-base">{c.nameArabic} ({c.code})</div>
+                        <div className="text-xs text-slate-400 mt-0.5" dir="ltr">{c.nameEnglish}</div>
                       </div>
-                      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                         <button
+                          type="button"
                           onClick={() => { setActivePopupList(null); setEditingCollege(c); }}
-                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1"
+                          className="px-3 py-2 min-h-[38px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold flex items-center gap-1.5 transition-colors"
                         >
-                          <Edit2 className="w-3 h-3" />
+                          <Edit2 className="w-3.5 h-3.5 text-indigo-400" />
                           <span>تعديل</span>
                         </button>
                         <button
+                          type="button"
                           onClick={() => handleAttemptDelete('college', c.id, c.nameArabic, c.isActive)}
-                          className="p-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-400"
+                          className="px-3 py-2 min-h-[38px] rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-900/50 text-rose-300 font-bold flex items-center gap-1.5 transition-colors"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
+                          <span>حذف</span>
                         </button>
                       </div>
                     </div>
@@ -1584,29 +1608,32 @@ export default function AcademicStructureManager({
                         setSelectedProgram(p);
                         setActivePopupList(null);
                       }}
-                      className={`p-3.5 rounded-xl border cursor-pointer transition-all text-xs flex items-center justify-between gap-3 ${
+                      className={`p-4 rounded-xl border cursor-pointer transition-all text-xs flex flex-wrap items-center justify-between gap-3 ${
                         selectedProgram?.id === p.id
                           ? 'bg-emerald-500/20 border-emerald-500 text-white shadow-md'
                           : 'bg-slate-950/80 border-slate-800 text-slate-300 hover:border-slate-700'
                       }`}
                     >
                       <div>
-                        <div className="font-bold text-sm">{p.nameArabic}</div>
-                        <div className="text-[11px] text-slate-400" dir="ltr">{p.nameEnglish}</div>
+                        <div className="font-bold text-sm sm:text-base">{p.nameArabic}</div>
+                        <div className="text-xs text-slate-400 mt-0.5" dir="ltr">{p.nameEnglish}</div>
                       </div>
-                      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                         <button
+                          type="button"
                           onClick={() => { setActivePopupList(null); setEditingProgram(p); }}
-                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1"
+                          className="px-3 py-2 min-h-[38px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold flex items-center gap-1.5 transition-colors"
                         >
-                          <Edit2 className="w-3 h-3" />
+                          <Edit2 className="w-3.5 h-3.5 text-emerald-400" />
                           <span>تعديل</span>
                         </button>
                         <button
+                          type="button"
                           onClick={() => handleAttemptDelete('program', p.id, p.nameArabic, p.isActive)}
-                          className="p-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-400"
+                          className="px-3 py-2 min-h-[38px] rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-900/50 text-rose-300 font-bold flex items-center gap-1.5 transition-colors"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
+                          <span>حذف</span>
                         </button>
                       </div>
                     </div>
@@ -1619,34 +1646,37 @@ export default function AcademicStructureManager({
                         setSelectedLevel(lvl);
                         setActivePopupList(null);
                       }}
-                      className={`p-3.5 rounded-xl border cursor-pointer transition-all text-xs flex items-center justify-between gap-3 ${
+                      className={`p-4 rounded-xl border cursor-pointer transition-all text-xs flex flex-wrap items-center justify-between gap-3 ${
                         selectedLevel?.id === lvl.id
                           ? 'bg-amber-500/20 border-amber-400 text-white shadow-md'
                           : 'bg-slate-950/80 border-slate-800 text-slate-300 hover:border-slate-700'
                       }`}
                     >
                       <div>
-                        <div className="font-bold text-sm flex items-center gap-2">
-                          <span className="px-2 py-0.5 rounded bg-slate-900 text-amber-300 text-[10px]">
+                        <div className="font-bold text-sm sm:text-base flex items-center gap-2">
+                          <span className="px-2 py-0.5 rounded-lg bg-slate-900 text-amber-300 text-xs font-bold border border-amber-500/30">
                             {lvl.stageType === 'internship' ? 'امتياز' : `م ${lvl.order}`}
                           </span>
                           <span>{lvl.titleArabic}</span>
                         </div>
-                        <div className="text-[11px] text-slate-400 mt-0.5" dir="ltr">{lvl.titleEnglish}</div>
+                        <div className="text-xs text-slate-400 mt-1" dir="ltr">{lvl.titleEnglish}</div>
                       </div>
-                      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                         <button
+                          type="button"
                           onClick={() => { setActivePopupList(null); setEditingLevel(lvl); }}
-                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1"
+                          className="px-3 py-2 min-h-[38px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold flex items-center gap-1.5 transition-colors"
                         >
-                          <Edit2 className="w-3 h-3" />
+                          <Edit2 className="w-3.5 h-3.5 text-amber-400" />
                           <span>تعديل</span>
                         </button>
                         <button
+                          type="button"
                           onClick={() => handleAttemptDelete('level', lvl.id, lvl.titleArabic, lvl.isActive)}
-                          className="p-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-400"
+                          className="px-3 py-2 min-h-[38px] rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-900/50 text-rose-300 font-bold flex items-center gap-1.5 transition-colors"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
+                          <span>حذف</span>
                         </button>
                       </div>
                     </div>
@@ -1659,42 +1689,47 @@ export default function AcademicStructureManager({
                         setSelectedPeriod(period);
                         setActivePopupList(null);
                       }}
-                      className={`p-3.5 rounded-xl border cursor-pointer transition-all text-xs flex items-center justify-between gap-3 ${
+                      className={`p-4 rounded-xl border cursor-pointer transition-all text-xs flex flex-wrap items-center justify-between gap-3 ${
                         selectedPeriod?.id === period.id
                           ? 'bg-teal-500/20 border-teal-400 text-white shadow-md'
                           : 'bg-slate-950/80 border-slate-800 text-slate-300 hover:border-slate-700'
                       }`}
                     >
                       <div>
-                        <div className="font-bold text-sm flex items-center gap-2">
-                          <span className="px-2 py-0.5 rounded bg-slate-900 text-teal-300 font-mono text-[10px]">{period.code}</span>
+                        <div className="font-bold text-sm sm:text-base flex items-center gap-2">
+                          <span className="px-2 py-0.5 rounded-lg bg-slate-900 text-teal-300 font-mono text-xs font-bold border border-teal-500/30">{period.code}</span>
                           <span>{period.titleArabic}</span>
                         </div>
-                        <div className="text-[11px] text-slate-400 mt-0.5" dir="ltr">{period.titleEnglish}</div>
+                        <div className="text-xs text-slate-400 mt-1" dir="ltr">{period.titleEnglish}</div>
                       </div>
-                      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                         <button
+                          type="button"
                           onClick={() => { setActivePopupList(null); setEditingPeriod(period); }}
-                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1"
+                          className="px-3 py-2 min-h-[38px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold flex items-center gap-1.5 transition-colors"
                         >
-                          <Edit2 className="w-3 h-3" />
+                          <Edit2 className="w-3.5 h-3.5 text-teal-400" />
                           <span>تعديل</span>
                         </button>
                         <button
+                          type="button"
                           title="نقل البلوك إلى الأرشيف الأكاديمي"
                           onClick={() => {
                             setActivePopupList(null);
                             handleArchivePeriod(period.id, true);
                           }}
-                          className="p-1.5 rounded-lg bg-amber-950/40 hover:bg-amber-900/60 text-amber-300"
+                          className="px-3 py-2 min-h-[38px] rounded-xl bg-amber-950/40 hover:bg-amber-900/60 border border-amber-900/50 text-amber-300 font-bold flex items-center gap-1.5 transition-colors"
                         >
                           <Archive className="w-3.5 h-3.5" />
+                          <span>أرشفة</span>
                         </button>
                         <button
+                          type="button"
                           onClick={() => handleAttemptDelete('period', period.id, period.titleArabic, period.isActive)}
-                          className="p-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-400"
+                          className="px-3 py-2 min-h-[38px] rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-900/50 text-rose-300 font-bold flex items-center gap-1.5 transition-colors"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
+                          <span>حذف</span>
                         </button>
                       </div>
                     </div>

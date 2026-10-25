@@ -630,34 +630,34 @@ export default function StudentAssessmentList({
                   </button>
 
                   {/* Secondary Action Toolbar: 3 Clean Equal Buttons */}
-                  <div className="grid grid-cols-3 gap-1.5 pt-0.5">
+                  <div className="grid grid-cols-3 gap-2 pt-1">
                     <button
                       type="button"
                       onClick={() => setLeaderboardAssessment(assessment)}
-                      className="py-2 px-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-amber-300 text-[11px] font-bold flex items-center justify-center gap-1 transition-colors"
+                      className="py-2.5 px-2 min-h-[40px] rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-amber-300 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
                       title="عرض لوحة الترتيب وقائمة المتصدرين"
                     >
-                      <Trophy className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <Trophy className="w-4 h-4 text-amber-400 shrink-0" />
                       <span className="truncate">الترتيب</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => setDownloadModalAssessment({ assessment, result: userResult })}
-                      className="py-2 px-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-teal-500/30 text-teal-300 text-[11px] font-bold flex items-center justify-center gap-1 transition-colors"
+                      className="py-2.5 px-2 min-h-[40px] rounded-xl bg-slate-950 hover:bg-slate-800 border border-teal-500/30 text-teal-300 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
                       title="تحميل ملف الاختبار للمذاكرة والمراجعة الذاتية"
                     >
-                      <Download className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                      <Download className="w-4 h-4 text-teal-400 shrink-0" />
                       <span className="truncate">تحميل الملف</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => setSharingAssessment(assessment)}
-                      className="py-2 px-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-indigo-500/30 text-indigo-200 text-[11px] font-bold flex items-center justify-center gap-1 transition-colors"
+                      className="py-2.5 px-2 min-h-[40px] rounded-xl bg-slate-950 hover:bg-slate-800 border border-indigo-500/30 text-indigo-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
                       title="مشاركة رابط الاختبار مع الزملاء"
                     >
-                      <Share2 className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                      <Share2 className="w-4 h-4 text-indigo-400 shrink-0" />
                       <span className="truncate">مشاركة</span>
                     </button>
                   </div>

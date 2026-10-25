@@ -1059,22 +1059,22 @@ export default function AssessmentManager({
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+            <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
               <button
                 type="button"
                 onClick={() => setShowBankSelectorModal(true)}
-                className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                className="flex-1 sm:flex-initial py-2.5 px-4 min-h-[42px] rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-bold flex items-center justify-center gap-2 transition-colors"
               >
-                <BookOpen className="w-3.5 h-3.5 text-teal-400" />
+                <BookOpen className="w-4 h-4 text-teal-400 shrink-0" />
                 <span>قائمة بنوك الأسئلة ({banks.length})</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setShowNewBankForm(!showNewBankForm)}
-                className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-md"
+                className="flex-1 sm:flex-initial py-2.5 px-4 min-h-[42px] rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center justify-center gap-2 transition-colors shadow-md"
               >
-                <Plus className="w-3.5 h-3.5" />
+                <Plus className="w-4 h-4 shrink-0" />
                 <span>بنك أسئلة جديد</span>
               </button>
 
@@ -1083,25 +1083,25 @@ export default function AssessmentManager({
                   <button
                     type="button"
                     onClick={() => setEditingBank(selectedBank)}
-                    className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                    className="py-2.5 px-3.5 min-h-[42px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
                   >
-                    <Edit2 className="w-3.5 h-3.5" />
+                    <Edit2 className="w-3.5 h-3.5 text-teal-400" />
                     <span>تعديل البنك</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setShowBulkImportModal(true)}
-                    className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-lg"
+                    className="py-2.5 px-4 min-h-[42px] rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center justify-center gap-2 transition-colors shadow-lg"
                   >
-                    <Upload className="w-4 h-4" />
-                    <span>واضع الاختبار الذكي / استيراد دفعة</span>
+                    <Upload className="w-4 h-4 shrink-0" />
+                    <span>استيراد دفعة أسئلة</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setShowNewQuestionForm(!showNewQuestionForm)}
-                    className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-md"
+                    className="py-2.5 px-4 min-h-[42px] rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center justify-center gap-2 transition-colors shadow-md"
                   >
-                    <Plus className="w-4 h-4" />
+                    <Plus className="w-4 h-4 shrink-0" />
                     <span>سؤال يدوي</span>
                   </button>
                 </>
@@ -1328,67 +1328,90 @@ export default function AssessmentManager({
                   </form>
                 )}
 
-                <div className="space-y-3">
+                <div className="space-y-4">
                   {bankQuestions.map((q, idx) => (
-                    <div key={q.id} className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="space-y-1">
+                    <div key={q.id} className="p-4 sm:p-5 rounded-2xl bg-slate-950 border border-slate-800 space-y-3.5 hover:border-slate-700 transition-all">
+                      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                        <div className="space-y-1.5 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-[11px] font-bold text-teal-400">سؤال {idx + 1} ({q.points} نقاط)</span>
+                            <span className="text-xs font-extrabold px-2.5 py-1 rounded-lg bg-teal-500/15 border border-teal-500/30 text-teal-300">
+                              سؤال #{idx + 1} ({q.points} نقاط)
+                            </span>
                             {q.syncStatus === 'pending_sync' ? (
-                              <span className="px-2 py-0.5 rounded bg-amber-950/80 border border-amber-700/70 text-amber-300 text-[10px] font-semibold">
+                              <span className="px-2.5 py-0.5 rounded-lg bg-amber-950/80 border border-amber-700/70 text-amber-300 text-xs font-semibold">
                                 محفوظ محلياً — بانتظار المزامنة
                               </span>
                             ) : (
-                              <span className="px-2 py-0.5 rounded bg-emerald-950/60 border border-emerald-800/60 text-emerald-300 text-[10px]">
+                              <span className="px-2.5 py-0.5 rounded-lg bg-emerald-950/60 border border-emerald-800/60 text-emerald-300 text-xs font-semibold">
                                 متزامن سحابياً ✓
                               </span>
                             )}
                           </div>
-                          <p className="text-sm font-bold text-white">{q.stemArabic}</p>
+                          <p className="text-sm sm:text-base font-bold text-white leading-relaxed">{q.stemArabic}</p>
                           {q.stemEnglish && <p className="text-xs text-slate-400 font-mono" dir="ltr">{q.stemEnglish}</p>}
                         </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
+
+                        <div className="flex items-center gap-2 shrink-0 pt-1 sm:pt-0">
                           <button
+                            type="button"
                             onClick={() => openEditQuestionModal(q)}
-                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-                            title="تعديل السؤال"
+                            className="px-3.5 py-2 min-h-[38px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 transition-colors"
                           >
-                            <Edit2 className="w-4 h-4" />
+                            <Edit2 className="w-3.5 h-3.5 text-teal-400" />
+                            <span>تعديل</span>
                           </button>
                           <button
+                            type="button"
                             onClick={() => deleteQuestion(q.id, selectedBank.id).then(() => setBankQuestions(prev => prev.filter(item => item.id !== q.id)))}
-                            className="p-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-400 transition-colors"
-                            title="حذف السؤال"
+                            className="px-3.5 py-2 min-h-[38px] rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-900/50 text-rose-300 text-xs font-bold flex items-center gap-1.5 transition-colors"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>حذف</span>
                           </button>
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                        {q.options.map(o => (
-                          <div
-                            key={o.id}
-                            className={`p-2 rounded-lg border ${
-                              o.id === q.correctOptionId 
-                                ? 'bg-teal-950/80 border-teal-500/80 text-teal-200 font-bold'
-                                : 'bg-slate-900/50 border-slate-800 text-slate-400'
-                            }`}
-                          >
-                            <div>{o.textArabic} {o.id === q.correctOptionId && '✓ (الإجابة الصحيحة)'}</div>
-                            {q.optionExplanations?.[o.id] && (
-                              <div className="text-[10px] font-normal text-slate-300 mt-1 pt-1 border-t border-slate-800/80">
-                                {q.optionExplanations[o.id]}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+                        {q.options.map((o, optIdx) => {
+                          const optionLetters = ['أ', 'ب', 'ج', 'د', 'هـ'];
+                          const isCorrect = o.id === q.correctOptionId;
+                          return (
+                            <div
+                              key={o.id}
+                              className={`p-3 rounded-xl border transition-all ${
+                                isCorrect 
+                                  ? 'bg-teal-950/70 border-teal-500/80 text-teal-200 font-bold shadow-sm'
+                                  : 'bg-slate-900/60 border-slate-800 text-slate-300'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                  <span className={`w-5 h-5 rounded-full flex items-center justify-center font-bold text-xs ${
+                                    isCorrect ? 'bg-teal-500 text-slate-950' : 'bg-slate-800 text-slate-400'
+                                  }`}>
+                                    {optionLetters[optIdx] || optIdx + 1}
+                                  </span>
+                                  <span>{o.textArabic}</span>
+                                </div>
+                                {isCorrect && (
+                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/40">
+                                    الإجابة الصحيحة ✓
+                                  </span>
+                                )}
                               </div>
-                            )}
-                          </div>
-                        ))}
+                              {q.optionExplanations?.[o.id] && (
+                                <div className="text-[11px] font-normal text-slate-400 mt-2 pt-1.5 border-t border-slate-800">
+                                  {q.optionExplanations[o.id]}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
 
                       {q.explanationArabic && (
-                        <div className="text-[11px] text-slate-400 bg-slate-900/60 p-2.5 rounded-lg border border-slate-800/80">
-                          <strong className="text-teal-400">التعليل الطبي:</strong> {q.explanationArabic}
+                        <div className="text-xs text-slate-300 bg-slate-900/70 p-3 rounded-xl border border-slate-800">
+                          <strong className="text-teal-400">التعليل الطبي المعتمد:</strong> {q.explanationArabic}
                         </div>
                       )}
                     </div>
@@ -1751,107 +1774,130 @@ export default function AssessmentManager({
             {assessments
               .filter(a => assessmentFilterType === 'all' || a.assessmentType === assessmentFilterType)
               .map(a => (
-              <div key={a.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
-                      a.assessmentType === 'competition' ? 'bg-amber-500/20 text-amber-300' : 'bg-teal-500/20 text-teal-300'
-                    }`}>
-                      {a.assessmentType === 'competition' ? 'مسابقة' : 'امتحان مادة'}
-                    </span>
-                    <select
-                      value={a.status}
-                      onChange={(e) => handleToggleAssessmentStatus(a, e.target.value as AssessmentStatus)}
-                      className={`px-2 py-0.5 rounded-lg text-[11px] font-bold border focus:outline-none ${
-                        a.status === 'published'
-                          ? 'bg-emerald-950/70 border-emerald-700 text-emerald-300'
-                          : a.status === 'draft'
-                          ? 'bg-slate-800 border-slate-700 text-slate-300'
-                          : 'bg-rose-950/70 border-rose-800 text-rose-300'
-                      }`}
-                    >
-                      <option value="published">منشور (Published)</option>
-                      <option value="draft">مسودة (Draft)</option>
-                      <option value="closed">مغلق (Closed)</option>
-                    </select>
-                  </div>
+              <div key={a.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-4 hover:border-slate-700 transition-all flex flex-col justify-between">
+                <div className="space-y-3.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2.5 pb-2.5 border-b border-slate-800">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`px-3 py-1 rounded-xl text-xs font-bold border ${
+                        a.assessmentType === 'competition' 
+                          ? 'bg-amber-500/15 border-amber-500/30 text-amber-300' 
+                          : 'bg-teal-500/15 border-teal-500/30 text-teal-300'
+                      }`}>
+                        {a.assessmentType === 'competition' ? '🏆 مسابقة' : '📝 امتحان مادة'}
+                      </span>
+                      <select
+                        value={a.status}
+                        onChange={(e) => handleToggleAssessmentStatus(a, e.target.value as AssessmentStatus)}
+                        className={`px-3 py-1.5 min-h-[36px] rounded-xl text-xs font-bold border focus:outline-none transition-colors ${
+                          a.status === 'published'
+                            ? 'bg-emerald-950/70 border-emerald-700 text-emerald-300'
+                            : a.status === 'draft'
+                            ? 'bg-slate-800 border-slate-700 text-slate-300'
+                            : 'bg-rose-950/70 border-rose-800 text-rose-300'
+                        }`}
+                      >
+                        <option value="published">منشور (Published)</option>
+                        <option value="draft">مسودة (Draft)</option>
+                        <option value="closed">مغلق (Closed)</option>
+                      </select>
+                    </div>
 
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      onClick={() => openEditAssessmentModal(a)}
-                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-                      title="تعديل التقييم"
-                    >
-                      <Edit2 className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => setConfirmDeleteAssessmentId(a.id)}
-                      className="p-1.5 rounded-lg bg-rose-950/50 hover:bg-rose-900/70 text-rose-400 transition-colors"
-                      title="حذف التقييم"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-
-                <h4 className="text-base font-bold text-white">{a.titleArabic}</h4>
-                {a.descriptionArabic && <p className="text-xs text-slate-400">{a.descriptionArabic}</p>}
-
-                <div className="text-xs text-slate-400 grid grid-cols-2 gap-2 bg-slate-950/70 p-3 rounded-xl border border-slate-800/80">
-                  <div>المستوى: <span className="text-teal-300 font-semibold">{getLevelLabel(a.studyLevelId)}</span></div>
-                  <div>
-                    المدة: <span className="text-slate-200 font-mono">{a.enableExamTimer === false || !a.durationMinutes ? 'وقت مفتوح' : `${a.durationMinutes} د`}</span>
-                    {a.questionDurationSeconds ? <span className="text-amber-300 font-mono"> • {a.questionDurationSeconds}ث/سؤال</span> : null}
-                  </div>
-                  <div>الأسئلة: <span className="text-slate-200 font-mono">{a.questionIds?.length || 3}</span> • المحاولات: <span className="text-slate-200 font-mono">{a.maxAttempts}</span></div>
-                  <div>النتائج: <span className="text-slate-200 font-semibold">{a.resultReleasePolicy === 'immediate' ? 'فوري بالترتيب' : a.resultReleasePolicy === 'manual' ? 'يدوي' : 'بعد الإغلاق'}</span></div>
-                </div>
-
-                {confirmDeleteAssessmentId === a.id && (
-                  <div className="p-3 rounded-xl bg-rose-950/70 border border-rose-800 flex items-center justify-between gap-2">
-                    <span className="text-xs text-rose-200 font-bold">هل أنت متأكد من حذف هذا التقييم نهائياً؟</span>
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={() => handleDeleteAssessment(a.id)}
-                        className="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold"
+                        type="button"
+                        onClick={() => openEditAssessmentModal(a)}
+                        className="px-3 py-1.5 min-h-[36px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                        title="تعديل التقييم"
                       >
-                        تأكيد الحذف
+                        <Edit2 className="w-3.5 h-3.5 text-teal-400" />
+                        <span>تعديل</span>
                       </button>
                       <button
-                        onClick={() => setConfirmDeleteAssessmentId(null)}
-                        className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 text-xs"
+                        type="button"
+                        onClick={() => setConfirmDeleteAssessmentId(a.id)}
+                        className="px-3 py-1.5 min-h-[36px] rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-900/50 text-rose-300 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                        title="حذف التقييم"
                       >
-                        إلغاء
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>حذف</span>
                       </button>
                     </div>
                   </div>
-                )}
 
-                <div className="pt-2 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex flex-wrap items-center gap-1.5">
+                  <h4 className="text-base sm:text-lg font-black text-white leading-snug">{a.titleArabic}</h4>
+                  {a.descriptionArabic && <p className="text-xs text-slate-400 line-clamp-2">{a.descriptionArabic}</p>}
+
+                  <div className="text-xs text-slate-300 grid grid-cols-2 gap-2.5 bg-slate-950/80 p-3.5 rounded-2xl border border-slate-800">
+                    <div>المستوى: <span className="text-teal-300 font-bold">{getLevelLabel(a.studyLevelId)}</span></div>
+                    <div>
+                      المدة: <span className="text-white font-mono font-bold">{a.enableExamTimer === false || !a.durationMinutes ? 'وقت مفتوح' : `${a.durationMinutes} دقيقة`}</span>
+                      {a.questionDurationSeconds ? <span className="text-amber-300 font-mono text-[11px]"> ({a.questionDurationSeconds}ث/س)</span> : null}
+                    </div>
+                    <div>الأسئلة: <span className="text-white font-mono font-bold">{a.questionIds?.length || 0} سؤال</span></div>
+                    <div>المحاولات: <span className="text-white font-mono font-bold">{a.maxAttempts} لكل طالب</span></div>
+                    <div className="col-span-2 pt-1.5 border-t border-slate-800/80 text-[11px] text-slate-400 flex items-center justify-between">
+                      <span>سياسة النتائج: <strong className="text-slate-200">{a.resultReleasePolicy === 'immediate' ? 'إعلان فوري مع الترتيب' : a.resultReleasePolicy === 'manual' ? 'يدوي بعد المراجعة' : 'بعد إغلاق الاختبار'}</strong></span>
+                      <span className="text-slate-500 font-mono text-[10px]">{a.language === 'en' ? 'English' : a.language === 'bilingual' ? 'Ar+En' : 'عربي'}</span>
+                    </div>
+                  </div>
+
+                  {confirmDeleteAssessmentId === a.id && (
+                    <div className="p-3.5 rounded-2xl bg-rose-950/80 border border-rose-700 space-y-2">
+                      <div className="text-xs text-rose-200 font-bold flex items-center gap-1.5">
+                        <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                        <span>هل أنت متأكد من حذف هذا التقييم وجميع محاولاته نهائياً؟</span>
+                      </div>
+                      <div className="flex items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteAssessment(a.id)}
+                          className="flex-1 py-2 min-h-[38px] rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition-colors"
+                        >
+                          نعم، تأكيد الحذف
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteAssessmentId(null)}
+                          className="px-4 py-2 min-h-[38px] rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold"
+                        >
+                          إلغاء
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Two-Tier Spacious Action Toolbar */}
+                <div className="pt-3 border-t border-slate-800 space-y-2">
+                  {/* Primary Action Button: Test & Preview */}
+                  <button
+                    type="button"
+                    onClick={() => handlePreviewAndTestAssessment(a)}
+                    className="w-full py-2.5 px-4 min-h-[42px] rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-extrabold flex items-center justify-center gap-2 transition-all shadow-md shadow-teal-900/20"
+                    title="فحص وتجربة حل الاختبار الآن (يعمل أونلاين وأوفلاين)"
+                  >
+                    <Play className="w-4 h-4 fill-current shrink-0" />
+                    <span>فحص وتجربة حل الاختبار</span>
+                  </button>
+
+                  {/* Secondary 3-Column Equal Buttons */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                     <button
                       type="button"
-                      onClick={() => handlePreviewAndTestAssessment(a)}
-                      className="px-3 py-1.5 rounded-lg bg-teal-950/90 hover:bg-teal-900 border border-teal-500/40 text-teal-200 text-xs font-bold flex items-center gap-1.5 transition-colors"
-                      title="فحص وتجربة حل الاختبار الآن (يعمل أونلاين وأوفلاين)"
-                    >
-                      <Play className="w-3.5 h-3.5 text-teal-400" />
-                      <span>فحص وتجربة الاختبار</span>
-                    </button>
-
-                    <button
                       onClick={() => {
                         setSelectedAssessmentForResults(a);
                         setActiveTab('results');
                         getAssessmentResultsForAdmin(a.id).then(setResults);
                       }}
-                      className="px-3 py-1.5 rounded-lg bg-blue-950/80 hover:bg-blue-900 text-blue-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                      className="py-2 px-2.5 min-h-[40px] rounded-xl bg-slate-800 hover:bg-blue-600/30 border border-slate-700 text-blue-300 hover:text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+                      title="عرض النتائج ولوحة الترتيب"
                     >
-                      <Eye className="w-3.5 h-3.5" />
-                      <span>عرض النتائج بالترتيب</span>
+                      <Eye className="w-3.5 h-3.5 shrink-0" />
+                      <span className="truncate">النتائج والترتيب</span>
                     </button>
 
                     <button
+                      type="button"
                       onClick={async () => {
                         const url = buildShareableAssessmentUrl(a);
                         try {
@@ -1864,30 +1910,32 @@ export default function AssessmentManager({
                         });
                         setTimeout(() => setCopiedAssessmentShareId(null), 2500);
                       }}
-                      className="px-3 py-1.5 rounded-lg bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-500/30 text-indigo-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                      title="إنشاء ونسخ رابط مشاركة الاختبار التجريبي (يعمل أونلاين وأوفلاين)"
+                      className="py-2 px-2.5 min-h-[40px] rounded-xl bg-slate-800 hover:bg-indigo-600/30 border border-slate-700 text-indigo-300 hover:text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+                      title="إنشاء ونسخ رابط مشاركة الاختبار التجريبي"
                     >
                       {copiedAssessmentShareId === a.id ? (
                         <>
-                          <Check className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>تم نسخ الرابط ✓</span>
+                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          <span className="truncate text-emerald-300">تم النسخ ✓</span>
                         </>
                       ) : (
                         <>
-                          <Share2 className="w-3.5 h-3.5 text-indigo-400" />
-                          <span>إنشاء رابط الاختبار</span>
+                          <Share2 className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate">نسخ الرابط</span>
                         </>
                       )}
                     </button>
-                  </div>
 
-                  <button
-                    onClick={() => handleReleaseResults(a.id)}
-                    className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors"
-                  >
-                    <Unlock className="w-3.5 h-3.5" />
-                    <span>إفراج عن النتائج</span>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => handleReleaseResults(a.id)}
+                      className="py-2 px-2.5 min-h-[40px] rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-sm"
+                      title="الإفراج عن النتائج للطلاب"
+                    >
+                      <Unlock className="w-3.5 h-3.5 shrink-0" />
+                      <span className="truncate">إفراج النتائج</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}
