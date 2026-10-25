@@ -13,7 +13,8 @@ import {
   SAMPLE_BULK_TEXT_TEMPLATE_EN,
   SAMPLE_BULK_TEXT_TEMPLATE_BILINGUAL,
   SAMPLE_BULK_CSV_TEMPLATE,
-  buildProfessionalAiPrompt
+  buildProfessionalAiPrompt,
+  synchronizeExamTimers
 } from '../src/services/mcqBulkParser.ts';
 import {
   sanitizePublicQuestion,
@@ -263,7 +264,86 @@ async function runVerification() {
   );
   console.log('[PASS] 10. Dynamic question count, Fill-in-Blank mode, & Second Year Hematology level/block inference');
 
-  console.log('\nALL 10 VERIFICATION SUITES PASSED SUCCESSFULLY.');
+  // 11. Test Bidirectional Timer Synchronization (per-question <-> total duration)
+  const syncFromQuestionSec = synchronizeExamTimers({
+    questionsCount: 111,
+    durationMinutes: 30,
+    questionDurationSeconds: 60,
+    changedField: 'questionSeconds'
+  });
+  assert(
+    syncFromQuestionSec.durationMinutes === 111,
+    `Expected 111 questions × 60s = 111 minutes, got ${syncFromQuestionSec.durationMinutes}`
+  );
+
+  const syncFrom45Sec = synchronizeExamTimers({
+    questionsCount: 111,
+    durationMinutes: 30,
+    questionDurationSeconds: 45,
+    changedField: 'questionSeconds'
+  });
+  assert(
+    syncFrom45Sec.durationMinutes === 84,
+    `Expected ceil(111 × 45 / 60) = 84 minutes, got ${syncFrom45Sec.durationMinutes}`
+  );
+
+  const syncFromTotalMin = synchronizeExamTimers({
+    questionsCount: 111,
+    durationMinutes: 111,
+    questionDurationSeconds: 45,
+    changedField: 'totalMinutes'
+  });
+  assert(
+    syncFromTotalMin.questionDurationSeconds === 60,
+    `Expected 111 minutes ÷ 111 questions = 60s/question, got ${syncFromTotalMin.questionDurationSeconds}`
+  );
+  console.log('[PASS] 11. Bidirectional Timer Synchronization (questionDurationSeconds <-> durationMinutes)');
+
+  // 12. Test 111-Question Bulk Import & Full Preservation Without Truncation
+  const raw111Lines: string[] = [
+    'اللغة: عربي',
+    'العنوان: اختبار شامل بلوك الدم سنة ثانية (111 سؤال)',
+    'المستوى: المستوى الثاني',
+    'مؤقت السؤال: 45 ثانية',
+    ''
+  ];
+  for (let i = 1; i <= 111; i++) {
+    raw111Lines.push(`${i}. سؤال طبي سريري رقم ${i} في بلوك الدم والجهاز اللمفاوي لمريض يعاني من فقر دم؟`);
+    raw111Lines.push(`أ) خيار تشخيصي أول للسؤال ${i}`);
+    raw111Lines.push(`ب) خيار تشخيصي ثانٍ صحيح للسؤال ${i} *`);
+    raw111Lines.push(`ج) خيار تشخيصي ثالث للسؤال ${i}`);
+    raw111Lines.push(`د) خيار تشخيصي رابع للسؤال ${i}`);
+    raw111Lines.push(`الإجابة: ب`);
+    raw111Lines.push('');
+  }
+  const { drafts: parsed111, detectedMetadata: meta111 } = parseBulkQuestionsInput({
+    rawInput: raw111Lines.join('\n'),
+    formatHint: 'text',
+    bankId: 'qbank-hem-111',
+    defaultPoints: 5,
+    existingBankQuestions: []
+  });
+  assert(parsed111.length === 111, `Expected all 111 questions to be parsed without truncation, got ${parsed111.length}`);
+  assert(parsed111.every(d => d.isValid), 'All 111 parsed questions must be valid');
+  assert(meta111.durationMinutes === 84, `Expected auto-calculated total duration 84 min for 111 questions × 45s, got ${meta111.durationMinutes}`);
+
+  const saved111 = await enqueueQuestionsUpsert(
+    'qbank-hem-111',
+    parsed111.map((d, idx) => ({
+      id: d.deterministicId || `q-hem-${idx + 1}`,
+      bankId: 'qbank-hem-111',
+      stemArabic: d.stemArabic,
+      options: d.options,
+      correctOptionId: d.correctOptionId,
+      points: d.points,
+      createdBy: 'ADMIN',
+      createdAt: new Date().toISOString()
+    }))
+  );
+  assert(saved111.length === 111, `Expected all 111 questions to be saved in bank, got ${saved111.length}`);
+  console.log('[PASS] 12. 111-Question bulk import, validation, and auto-timer calculation without truncation');
+
+  console.log('\nALL 12 VERIFICATION SUITES PASSED SUCCESSFULLY.');
 }
 
 runVerification().catch((err) => {

@@ -198,6 +198,8 @@ export interface StudyPeriod {
   code?: string;
   order: number;
   isActive: boolean;
+  isArchived?: boolean;
+  archivedAt?: string;
 }
 
 export interface CourseOffering {
@@ -208,6 +210,8 @@ export interface CourseOffering {
   universityId: string;
   curriculumVersionId?: string;
   code: string;
+  isArchived?: boolean;
+  archivedAt?: string;
   titleArabic: string;
   titleEnglish?: string;
   creditHours?: number;

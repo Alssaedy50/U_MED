@@ -41,6 +41,7 @@ import {
   BulkImportDraftSession,
   Assessment,
   StudyLevel,
+  StudyPeriod,
   DAR_AL_SALAM_SEED,
   QuestionOption,
   QuestionType,
@@ -53,7 +54,8 @@ import {
   validateAndAnnotateDrafts,
   getSampleTemplateByLanguage,
   SAMPLE_BULK_CSV_TEMPLATE,
-  buildProfessionalAiPrompt
+  buildProfessionalAiPrompt,
+  synchronizeExamTimers
 } from '../../services/mcqBulkParser.ts';
 import {
   saveBulkImportDraftSession,
@@ -66,7 +68,8 @@ import { bulkSaveQuestions, createAssessment, updateQuestionBank } from '../../s
 import {
   getUserAcademicContext,
   saveUserAcademicContext,
-  inferAcademicContextFromText
+  inferAcademicContextFromText,
+  fetchActiveStudyPeriods
 } from '../../services/academicService.ts';
 
 export type ApprovalPublishMode = 'bank_only' | 'exam_only' | 'competition_only';
@@ -126,7 +129,11 @@ export default function BulkQuestionImportModal({
     };
   }, [bank, defaultStudyLevelId]);
 
-  const [step, setStep] = useState<'input' | 'review'>('input');
+  const [step, setStep] = useState<'setup' | 'content' | 'review'>('setup');
+  const [inputSource, setInputSource] = useState<'ai' | 'manual'>('ai');
+  const [showAiSettingsModal, setShowAiSettingsModal] = useState<boolean>(false);
+  const [showTemplateModal, setShowTemplateModal] = useState<boolean>(false);
+  const [liveBlocks, setLiveBlocks] = useState<StudyPeriod[]>([]);
   const [examLanguage, setExamLanguage] = useState<AssessmentLanguage>(bank.language || 'ar');
   const [questionTypeMode, setQuestionTypeMode] = useState<BankQuestionTypeMode>(
     bank.questionTypeMode || 'hybrid'
@@ -145,6 +152,46 @@ export default function BulkQuestionImportModal({
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
 
+  // Direct Approval & Single-Mode Publishing State (Strictly Bank Only OR Exam Only OR Competition Only)
+  const [publishMode, setPublishMode] = useState<ApprovalPublishMode>('bank_only');
+  const [publishTitle, setPublishTitle] = useState<string>(
+    bank.language === 'en' ? `Exam: ${bank.titleEnglish || bank.titleArabic}` : `اختبار ${bank.titleArabic}`
+  );
+  const [publishStudyLevelId, setPublishStudyLevelId] = useState<string>(
+    initialAcademicResolution.studyLevelId
+  );
+  const [publishBlockName, setPublishBlockName] = useState<string>(
+    initialAcademicResolution.blockName
+  );
+  const [publishDurationMinutes, setPublishDurationMinutes] = useState<number>(30);
+  const [publishQuestionSeconds, setPublishQuestionSeconds] = useState<number>(45);
+  const [timerDriverMode, setTimerDriverMode] = useState<'questionSeconds' | 'totalMinutes'>('questionSeconds');
+  const [publishAvailabilityHours, setPublishAvailabilityHours] = useState<number>(168);
+  const [detectedMeta, setDetectedMeta] = useState<DetectedAssessmentMetadata | null>(null);
+
+  // Dynamic Live Blocks: Fetch only active, non-archived, non-deleted blocks for current level
+  useEffect(() => {
+    let isCurrent = true;
+    fetchActiveStudyPeriods(publishStudyLevelId).then((periods) => {
+      if (isCurrent) {
+        setLiveBlocks(periods);
+        if (periods.length > 0) {
+          const match = periods.find(p => p.titleArabic === publishBlockName || p.id === bank.studyPeriodId);
+          if (match) {
+            setPublishBlockName(match.titleArabic);
+            setAiTopic(match.titleArabic);
+          } else if (!publishBlockName) {
+            setPublishBlockName(periods[0].titleArabic);
+            setAiTopic(periods[0].titleArabic);
+          }
+        }
+      }
+    });
+    return () => {
+      isCurrent = false;
+    };
+  }, [publishStudyLevelId, bank.studyPeriodId]);
+
   // AI Smart Exam Prompt Studio Configuration
   const [aiMode, setAiMode] = useState<'generate_new' | 'format_existing'>('generate_new');
   const [aiTopic, setAiTopic] = useState<string>(
@@ -161,22 +208,6 @@ export default function BulkQuestionImportModal({
   const [aiDifficultyMix, setAiDifficultyMix] = useState<'clinical_usmle' | 'balanced' | 'foundational'>('clinical_usmle');
   const [aiIncludeOptionRationales, setAiIncludeOptionRationales] = useState<boolean>(true);
   const [directAiGenerating, setDirectAiGenerating] = useState<boolean>(false);
-
-  // Direct Approval & Single-Mode Publishing State (Strictly Bank Only OR Exam Only OR Competition Only)
-  const [publishMode, setPublishMode] = useState<ApprovalPublishMode>('bank_only');
-  const [publishTitle, setPublishTitle] = useState<string>(
-    bank.language === 'en' ? `Exam: ${bank.titleEnglish || bank.titleArabic}` : `اختبار ${bank.titleArabic}`
-  );
-  const [publishStudyLevelId, setPublishStudyLevelId] = useState<string>(
-    initialAcademicResolution.studyLevelId
-  );
-  const [publishBlockName, setPublishBlockName] = useState<string>(
-    initialAcademicResolution.blockName
-  );
-  const [publishDurationMinutes, setPublishDurationMinutes] = useState<number>(30);
-  const [publishQuestionSeconds, setPublishQuestionSeconds] = useState<number>(0);
-  const [publishAvailabilityHours, setPublishAvailabilityHours] = useState<number>(168);
-  const [detectedMeta, setDetectedMeta] = useState<DetectedAssessmentMetadata | null>(null);
 
   // Saving & Optional AI states
   const [saving, setSaving] = useState<boolean>(false);
@@ -214,10 +245,8 @@ export default function BulkQuestionImportModal({
   }, [studyLevels, publishStudyLevelId, examLanguage]);
 
   const blocksForCurrentLevel = useMemo(() => {
-    return (DAR_AL_SALAM_SEED.sampleBlocks || []).filter(
-      (b: any) => !b.levelId || b.levelId === publishStudyLevelId
-    );
-  }, [publishStudyLevelId]);
+    return liveBlocks;
+  }, [liveBlocks]);
 
   const generatedAiPrompt = useMemo(() => {
     const ctx = getUserAcademicContext();
@@ -266,6 +295,75 @@ export default function BulkQuestionImportModal({
     aiIncludeOptionRationales
   ]);
 
+  // Effective question count for bidirectional timer math
+  const effectiveQuestionsCountForTimer = useMemo(() => {
+    const selectedValidCount = drafts.filter((d) => d.selectedForImport && d.isValid).length;
+    if (selectedValidCount > 0) return selectedValidCount;
+    if (drafts.length > 0) return drafts.length;
+    if (!isDynamicQuestionCount) {
+      const manualSum =
+        (questionTypeMode === 'mcq' ? aiMcqCount : 0) +
+        (questionTypeMode === 'true_false' ? aiTfCount : 0) +
+        (questionTypeMode === 'essay' ? aiEssayCount : 0) +
+        (questionTypeMode === 'fill_blank' ? aiFillBlankCount : 0) +
+        (questionTypeMode === 'hybrid' ? aiMcqCount + aiTfCount + aiEssayCount + aiFillBlankCount : 0);
+      if (manualSum > 0) return manualSum;
+    }
+    return 20;
+  }, [drafts, isDynamicQuestionCount, questionTypeMode, aiMcqCount, aiTfCount, aiEssayCount, aiFillBlankCount]);
+
+  // Bidirectional handler: when user sets per-question time (seconds) -> auto-calculate total exam time (minutes)
+  const handleQuestionSecondsChange = (newSeconds: number) => {
+    const cleanSec = Math.max(0, Math.round(Number(newSeconds) || 0));
+    setTimerDriverMode('questionSeconds');
+    setPublishQuestionSeconds(cleanSec);
+    if (cleanSec > 0) {
+      const synced = synchronizeExamTimers({
+        questionsCount: effectiveQuestionsCountForTimer,
+        durationMinutes: publishDurationMinutes,
+        questionDurationSeconds: cleanSec,
+        changedField: 'questionSeconds'
+      });
+      setPublishDurationMinutes(synced.durationMinutes);
+    }
+  };
+
+  // Bidirectional handler: when user sets total exam time (minutes) -> auto-divide by question count to get per-question time (seconds)
+  const handleDurationMinutesChange = (newMinutes: number) => {
+    const cleanMin = Math.max(0, Math.round(Number(newMinutes) || 0));
+    setTimerDriverMode('totalMinutes');
+    setPublishDurationMinutes(cleanMin);
+    if (cleanMin > 0) {
+      const synced = synchronizeExamTimers({
+        questionsCount: effectiveQuestionsCountForTimer,
+        durationMinutes: cleanMin,
+        questionDurationSeconds: publishQuestionSeconds,
+        changedField: 'totalMinutes'
+      });
+      setPublishQuestionSeconds(synced.questionDurationSeconds);
+    } else {
+      setPublishQuestionSeconds(0);
+    }
+  };
+
+  // Keep timers synchronized whenever the parsed/selected question count changes (e.g. 111 questions imported)
+  useEffect(() => {
+    if (effectiveQuestionsCountForTimer <= 0) return;
+    const synced = synchronizeExamTimers({
+      questionsCount: effectiveQuestionsCountForTimer,
+      durationMinutes: publishDurationMinutes,
+      questionDurationSeconds: publishQuestionSeconds,
+      changedField: 'questionsCount',
+      preferredDriver: timerDriverMode
+    });
+    if (synced.durationMinutes !== publishDurationMinutes) {
+      setPublishDurationMinutes(synced.durationMinutes);
+    }
+    if (synced.questionDurationSeconds !== publishQuestionSeconds) {
+      setPublishQuestionSeconds(synced.questionDurationSeconds);
+    }
+  }, [effectiveQuestionsCountForTimer]);
+
   // Update default title & duration when switching between Exam Only and Competition Only
   const handleSelectPublishMode = (mode: ApprovalPublishMode) => {
     setPublishMode(mode);
@@ -277,7 +375,15 @@ export default function BulkQuestionImportModal({
             : `اختبار ${bank.titleArabic}`
           : prev
       );
-      setPublishDurationMinutes(30);
+      const sec = publishQuestionSeconds > 0 ? publishQuestionSeconds : 45;
+      const synced = synchronizeExamTimers({
+        questionsCount: effectiveQuestionsCountForTimer,
+        durationMinutes: 30,
+        questionDurationSeconds: sec,
+        changedField: 'questionSeconds'
+      });
+      setPublishQuestionSeconds(synced.questionDurationSeconds);
+      setPublishDurationMinutes(synced.durationMinutes);
     } else if (mode === 'competition_only') {
       setPublishTitle((prev) =>
         !prev.trim() || prev.startsWith('اختبار ') || prev.startsWith('Exam:')
@@ -286,7 +392,15 @@ export default function BulkQuestionImportModal({
             : `مسابقة ${bank.titleArabic}`
           : prev
       );
-      setPublishDurationMinutes(15);
+      const sec = publishQuestionSeconds > 0 ? publishQuestionSeconds : 30;
+      const synced = synchronizeExamTimers({
+        questionsCount: effectiveQuestionsCountForTimer,
+        durationMinutes: 15,
+        questionDurationSeconds: sec,
+        changedField: 'questionSeconds'
+      });
+      setPublishQuestionSeconds(synced.questionDurationSeconds);
+      setPublishDurationMinutes(synced.durationMinutes);
     }
   };
 
@@ -389,11 +503,38 @@ export default function BulkQuestionImportModal({
       if (detectedMetadata.studyLevelId) {
         setPublishStudyLevelId(detectedMetadata.studyLevelId);
       }
-      if (detectedMetadata.durationMinutes && detectedMetadata.durationMinutes > 0) {
-        setPublishDurationMinutes(detectedMetadata.durationMinutes);
-      }
+      const validCount = parsed.filter((d) => d.isValid).length || parsed.length;
       if (detectedMetadata.questionDurationSeconds && detectedMetadata.questionDurationSeconds > 0) {
+        setTimerDriverMode('questionSeconds');
         setPublishQuestionSeconds(detectedMetadata.questionDurationSeconds);
+        const synced = synchronizeExamTimers({
+          questionsCount: validCount,
+          durationMinutes: detectedMetadata.durationMinutes || publishDurationMinutes,
+          questionDurationSeconds: detectedMetadata.questionDurationSeconds,
+          changedField: 'questionSeconds'
+        });
+        setPublishDurationMinutes(synced.durationMinutes);
+      } else if (detectedMetadata.durationMinutes && detectedMetadata.durationMinutes > 0) {
+        setTimerDriverMode('totalMinutes');
+        setPublishDurationMinutes(detectedMetadata.durationMinutes);
+        const synced = synchronizeExamTimers({
+          questionsCount: validCount,
+          durationMinutes: detectedMetadata.durationMinutes,
+          questionDurationSeconds: publishQuestionSeconds,
+          changedField: 'totalMinutes'
+        });
+        setPublishQuestionSeconds(synced.questionDurationSeconds);
+      } else {
+        // Synchronize current timer state with the newly parsed question count (e.g. 111 questions)
+        const synced = synchronizeExamTimers({
+          questionsCount: validCount,
+          durationMinutes: publishDurationMinutes,
+          questionDurationSeconds: publishQuestionSeconds,
+          changedField: 'questionsCount',
+          preferredDriver: timerDriverMode
+        });
+        setPublishDurationMinutes(synced.durationMinutes);
+        setPublishQuestionSeconds(synced.questionDurationSeconds);
       }
     }
 
@@ -547,7 +688,7 @@ export default function BulkQuestionImportModal({
     setRawInput('');
     setDrafts([]);
     setDetectedMeta(null);
-    setStep('input');
+    setStep('setup');
     setFeedback({ type: 'info', text: 'تم مسح المسودة وبدء جلسة جديدة.' });
   };
 
@@ -948,24 +1089,35 @@ export default function BulkQuestionImportModal({
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
-            {/* Compact Step Toggle */}
+            {/* 3-Step Guided Wizard Toggle */}
             <div className="flex items-center bg-slate-900 p-0.5 rounded-xl border border-slate-800 text-[11px]">
               <button
                 type="button"
-                onClick={() => setStep('input')}
+                onClick={() => setStep('setup')}
                 className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
-                  step === 'input'
+                  step === 'setup'
                     ? 'bg-teal-600 text-white shadow'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
-                1. النص
+                1. الإعداد والمصدر
+              </button>
+              <button
+                type="button"
+                onClick={() => setStep('content')}
+                className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                  step === 'content'
+                    ? 'bg-teal-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                2. إدخال الأسئلة
               </button>
               <button
                 type="button"
                 onClick={() => {
                   if (drafts.length > 0) setStep('review');
-                  else handleParseInput();
+                  else if (rawInput.trim()) handleParseInput();
                 }}
                 className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
                   step === 'review'
@@ -973,7 +1125,7 @@ export default function BulkQuestionImportModal({
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
-                2. المراجعة ({drafts.length})
+                3. التدقيق ({drafts.length})
               </button>
             </div>
 
@@ -1019,458 +1171,236 @@ export default function BulkQuestionImportModal({
 
         {/* MAIN SCROLLABLE VIEWPORT (Takes >80% of mobile screen height) */}
         <div className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-3 overscroll-contain">
-          {step === 'input' ? (
-            <div className="space-y-3">
-              {/* STEP 1A: Compact Dropdown Settings Bar + Popup Academic Context Trigger */}
-              <div className="p-2.5 sm:p-3 rounded-xl bg-slate-950 border border-slate-800 grid grid-cols-1 sm:grid-cols-3 gap-2">
-                {/* 1. Popup Academic Level & Block Selector Trigger */}
-                <div>
-                  <label className="text-[10px] text-slate-400 block mb-1 font-semibold">
-                    المستوى الدراسي والبلوك (اضغط للتغيير):
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setShowAcademicPopup(true)}
-                    className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-teal-700/60 text-right flex items-center justify-between gap-2 transition-colors"
-                  >
-                    <div className="min-w-0">
-                      <div className="text-xs font-bold text-teal-300 truncate">
-                        {currentStudyLevelTitle}
-                      </div>
-                      <div className="text-[10px] text-slate-400 truncate">
-                        {publishBlockName || bank.titleArabic}
-                      </div>
+          {/* STEP 1: SETUP & MODALITY */}
+          {step === 'setup' && (
+            <div className="space-y-4">
+              {/* 1. Academic Target Banner with Popup Trigger */}
+              <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-teal-500/15 text-teal-400 flex items-center justify-center shrink-0">
+                    <BookOpen className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-slate-400">النطاق الأكاديمي للتقييم:</div>
+                    <div className="text-sm font-bold text-white flex items-center gap-2">
+                      <span className="text-teal-300">{currentStudyLevelTitle}</span>
+                      <span>·</span>
+                      <span className="text-amber-300">{publishBlockName || bank.titleArabic}</span>
                     </div>
-                    <ChevronDown className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-                  </button>
-                </div>
-
-                {/* 2. Compact Language Dropdown Selector */}
-                <div>
-                  <label className="text-[10px] text-slate-400 block mb-1 font-semibold">
-                    لغة الاختبار أو بنك الأسئلة:
-                  </label>
-                  <div className="relative">
-                    <select
-                      value={examLanguage}
-                      onChange={(e) => setExamLanguage(e.target.value as AssessmentLanguage)}
-                      className="w-full px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs font-bold text-white focus:outline-none focus:border-teal-500"
-                    >
-                      <option value="ar">العربية (عربي + مصطلحات طبية)</option>
-                      <option value="en">English (إنجليزي طبي بالكامل)</option>
-                      <option value="bilingual">ثنائي اللغة (Bilingual Ar + En)</option>
-                    </select>
                   </div>
                 </div>
 
-                {/* 3. Compact Question Bank / Exam Type Mode Dropdown */}
-                <div>
-                  <label className="text-[10px] text-slate-400 block mb-1 font-semibold">
-                    نوع البنك / نمط الأسئلة:
+                <button
+                  type="button"
+                  onClick={() => setShowAcademicPopup(true)}
+                  className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-teal-500/40 text-xs font-bold text-teal-300 flex items-center gap-1.5 transition-colors"
+                >
+                  <span>تغيير المستوى أو البلوك الطبي</span>
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* 2. Source Selection (AI vs Manual) */}
+              <div>
+                <label className="text-xs font-bold text-slate-300 block mb-2">
+                  طريقة إعداد وبناء الأسئلة:
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setInputSource('ai')}
+                    className={`p-4 rounded-2xl border text-right transition-all flex items-start gap-3 ${
+                      inputSource === 'ai'
+                        ? 'bg-indigo-950/60 border-indigo-500 shadow-lg shadow-indigo-950/50'
+                        : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                      inputSource === 'ai' ? 'bg-indigo-500 text-white' : 'bg-slate-900 text-slate-400'
+                    }`}>
+                      <Wand2 className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-bold text-white flex items-center justify-between">
+                        <span>✨ التوليد بالذكاء الاصطناعي (AI Studio)</span>
+                        {inputSource === 'ai' && <CheckCircle2 className="w-4 h-4 text-indigo-400" />}
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                        إنشاء موجه أمر طبي دقيق (USMLE) متوافق مع معايير الكلية ونسخه أو التوليد الفوري بنقرة واحدة.
+                      </p>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setInputSource('manual')}
+                    className={`p-4 rounded-2xl border text-right transition-all flex items-start gap-3 ${
+                      inputSource === 'manual'
+                        ? 'bg-teal-950/60 border-teal-500 shadow-lg shadow-teal-950/50'
+                        : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                      inputSource === 'manual' ? 'bg-teal-500 text-white' : 'bg-slate-900 text-slate-400'
+                    }`}>
+                      <FileText className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-bold text-white flex items-center justify-between">
+                        <span>✍️ إدخال يدوي أو رفع ملف نصي</span>
+                        {inputSource === 'manual' && <CheckCircle2 className="w-4 h-4 text-teal-400" />}
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                        لصق نص الأسئلة الجاهزة أو استيراد ملفات CSV و Text بترميز UTF-8 مع تدقيق فوري للأخطاء.
+                      </p>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              {/* 3. Language & Question Bank Modality */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800">
+                  <label className="text-xs font-bold text-slate-300 block mb-2">
+                    لغة الاختبار / بنك الأسئلة:
+                  </label>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setExamLanguage('ar')}
+                      className={`py-2 px-2 rounded-xl text-xs font-bold border transition-colors ${
+                        examLanguage === 'ar'
+                          ? 'bg-teal-600 text-white border-teal-500'
+                          : 'bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800'
+                      }`}
+                    >
+                      العربية (Ar)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setExamLanguage('en')}
+                      className={`py-2 px-2 rounded-xl text-xs font-bold border transition-colors ${
+                        examLanguage === 'en'
+                          ? 'bg-teal-600 text-white border-teal-500'
+                          : 'bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800'
+                      }`}
+                    >
+                      English (En)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setExamLanguage('bilingual')}
+                      className={`py-2 px-2 rounded-xl text-xs font-bold border transition-colors ${
+                        examLanguage === 'bilingual'
+                          ? 'bg-teal-600 text-white border-teal-500'
+                          : 'bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800'
+                      }`}
+                    >
+                      ثنائي (Ar+En)
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800">
+                  <label className="text-xs font-bold text-slate-300 block mb-2">
+                    نوع الأسئلة المستهدفة:
                   </label>
                   <select
                     value={questionTypeMode}
                     onChange={(e) => setQuestionTypeMode(e.target.value as BankQuestionTypeMode)}
-                    className="w-full px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs font-bold text-indigo-300 focus:outline-none focus:border-indigo-500"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs font-bold text-indigo-300 focus:outline-none focus:border-indigo-500"
                   >
                     <option value="hybrid">بنك هجين شامل (اختيارات + صح/خطأ + إكمال + مقالي)</option>
-                    <option value="mcq">بنك اختيارات من متعدد فقط (MCQ Only)</option>
-                    <option value="true_false">بنك صح وخطأ فقط (True/False Only)</option>
-                    <option value="fill_blank">بنك إكمال الفراغ فقط (Fill in the Blank)</option>
-                    <option value="essay">بنك أسئلة مقالية فقط (Essay Only)</option>
+                    <option value="mcq">اختيارات من متعدد فقط (MCQ Only)</option>
+                    <option value="true_false">صح وخطأ فقط (True/False Only)</option>
+                    <option value="fill_blank">إكمال الفراغ فقط (Fill in the Blank)</option>
+                    <option value="essay">أسئلة مقالية فقط (Essay Only)</option>
                   </select>
                 </div>
               </div>
 
-              {/* Standalone Popup Modal for Selecting Study Level & Medical Block */}
-              {showAcademicPopup && (
-                <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-xs flex items-center justify-center p-3">
-                  <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg max-h-[85dvh] flex flex-col shadow-2xl overflow-hidden">
-                    <div className="px-4 py-3 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
-                      <div>
-                        <h4 className="text-xs sm:text-sm font-bold text-white">
-                          تحديد المستوى الدراسي والبلوك الطبي للاختبار
-                        </h4>
-                        <p className="text-[10px] text-slate-400">
-                          يتم حفظ اختيارك وتحديث تعليمات الذكاء الاصطناعي والاختبار تلقائياً
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setShowAcademicPopup(false)}
-                        className="p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
+              {/* 4. AI Studio Settings Summary & Modal Trigger (Only if source is AI) */}
+              {inputSource === 'ai' && (
+                <div className="p-4 rounded-2xl bg-indigo-950/30 border border-indigo-800/60 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <Sparkles className="w-4 h-4 text-indigo-400" />
+                        <span>مواصفات وإعدادات التوليد الذكي:</span>
+                      </h4>
+                      <p className="text-[11px] text-indigo-300/80 mt-0.5">
+                        اضبط مواصفات وعمق الأسئلة السريرية بدقة عبر النافذة المنبثقة المخصصة
+                      </p>
                     </div>
 
-                    <div className="p-4 overflow-y-auto space-y-4">
-                      <div>
-                        <label className="text-xs font-bold text-teal-300 block mb-2">
-                          1. اختر السنة / المستوى الدراسي:
-                        </label>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                          {studyLevels.map((lvl) => {
-                            const active = lvl.id === publishStudyLevelId;
-                            return (
-                              <button
-                                key={lvl.id}
-                                type="button"
-                                onClick={() => {
-                                  setPublishStudyLevelId(lvl.id);
-                                  saveUserAcademicContext({
-                                    studyLevelId: lvl.id,
-                                    studyLevelName: lvl.titleArabic
-                                  });
-                                }}
-                                className={`p-2.5 rounded-xl border text-right transition-all flex items-center justify-between ${
-                                  active
-                                    ? 'bg-teal-950/80 border-teal-500 text-white font-bold'
-                                    : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
-                                }`}
-                              >
-                                <span className="text-xs">{lvl.titleArabic}</span>
-                                {active && <CheckCircle2 className="w-4 h-4 text-teal-400 shrink-0" />}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowAiSettingsModal(true)}
+                      className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 shadow transition-colors"
+                    >
+                      <span>⚙️ تخصيص إعدادات الذكاء المتقدمة</span>
+                    </button>
+                  </div>
 
-                      <div>
-                        <label className="text-xs font-bold text-indigo-300 block mb-2">
-                          2. اختر البلوك أو المقرر الطبي المرتبط بهذا المستوى:
-                        </label>
-                        <div className="grid grid-cols-1 gap-1.5 max-h-48 overflow-y-auto pr-1">
-                          {blocksForCurrentLevel.map((blk: any) => {
-                            const active = publishBlockName === blk.titleArabic;
-                            return (
-                              <button
-                                key={blk.id}
-                                type="button"
-                                onClick={() => {
-                                  setPublishBlockName(blk.titleArabic);
-                                  setAiTopic(blk.titleArabic);
-                                  saveUserAcademicContext({
-                                    studyPeriodId: blk.id,
-                                    studyPeriodName: blk.titleArabic
-                                  });
-                                }}
-                                className={`p-2.5 rounded-xl border text-right transition-all flex items-center justify-between ${
-                                  active
-                                    ? 'bg-indigo-950/80 border-indigo-500 text-white font-bold'
-                                    : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
-                                }`}
-                              >
-                                <span className="text-xs">{blk.titleArabic}</span>
-                                {active && <CheckCircle2 className="w-4 h-4 text-indigo-400 shrink-0" />}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs pt-1">
+                    <div className="p-2.5 rounded-xl bg-slate-950/80 border border-indigo-900/60">
+                      <span className="text-[10px] text-slate-400 block">الموضوع / البلوك الطبي:</span>
+                      <span className="font-bold text-indigo-200 truncate block mt-0.5">
+                        {aiTopic || publishBlockName || bank.titleArabic}
+                      </span>
                     </div>
 
-                    <div className="px-4 py-3 bg-slate-950 border-t border-slate-800 flex justify-end">
-                      <button
-                        type="button"
-                        onClick={() => setShowAcademicPopup(false)}
-                        className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold"
-                      >
-                        اعتماد وإغلاق
-                      </button>
+                    <div className="p-2.5 rounded-xl bg-slate-950/80 border border-indigo-900/60">
+                      <span className="text-[10px] text-slate-400 block">نظام عدد الأسئلة:</span>
+                      <span className="font-bold text-teal-300 block mt-0.5">
+                        {isDynamicQuestionCount ? 'ديناميكي مفتوح (شامل للموضوع)' : `${aiMcqCount} MCQ / مخصص`}
+                      </span>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-slate-950/80 border border-indigo-900/60">
+                      <span className="text-[10px] text-slate-400 block">العمق العلمي والخيارات:</span>
+                      <span className="font-bold text-amber-300 block mt-0.5">
+                        {aiDifficultyMix === 'clinical_usmle' ? 'حالات USMLE سريرية' : 'متوازن'} · {aiOptionsCount} خيارات
+                      </span>
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* Compact Action Strip */}
-              <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".txt,.md,.csv,.tsv,.json"
-                    onChange={handleFileUpload}
-                    className="hidden"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="px-3 py-1.5 rounded-lg bg-teal-600/20 hover:bg-teal-600/30 border border-teal-500/40 text-teal-300 text-xs font-bold flex items-center gap-1.5 transition-colors"
-                  >
-                    <Upload className="w-3.5 h-3.5" />
-                    <span>رفع ملف (TXT / CSV / JSON)</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRawInput(getSampleTemplateByLanguage(examLanguage));
-                      setSourceFormat('text');
-                    }}
-                    className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 text-[11px] font-bold flex items-center gap-1"
-                  >
-                    <FileText className="w-3.5 h-3.5" />
-                    <span>
-                      إدراج نموذج جاهز ({examLanguage === 'en' ? 'English' : examLanguage === 'bilingual' ? 'ثنائي اللغة' : 'عربي'})
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setShowAiPromptStudio(!showAiPromptStudio)}
-                    className={`px-3 py-1.5 rounded-lg border text-[11px] font-bold flex items-center gap-1.5 transition-all ${
-                      showAiPromptStudio
-                        ? 'bg-indigo-600 border-indigo-400 text-white shadow-lg'
-                        : 'bg-indigo-950/90 hover:bg-indigo-900 border-indigo-500/50 text-indigo-200'
-                    }`}
-                  >
-                    <Wand2 className="w-3.5 h-3.5 text-indigo-300" />
-                    <span>استوديو واضع الاختبار الذكي (AI Prompt)</span>
-                    {showAiPromptStudio ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(generatedAiPrompt);
-                        setFeedback({
-                          type: 'success',
-                          text: `تم نسخ طلب التوليد الاحترافي (${examLanguage === 'en' ? 'English' : examLanguage === 'bilingual' ? 'ثنائي اللغة' : 'عربي'}) — الصقه في ChatGPT أو Gemini أو Claude ✓`
-                        });
-                      } catch {}
-                    }}
-                    className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-indigo-500/30 text-indigo-300 text-[11px] font-bold flex items-center gap-1 transition-colors"
-                    title="نسخ سريع لطلب الذكاء الاصطناعي حسب اللغة المحددة"
-                  >
-                    <Copy className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>نسخ سريع للبرومبت</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setShowFormatOptions(!showFormatOptions)}
-                    className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-[11px] flex items-center gap-1"
-                  >
-                    <span>خيارات القوالب</span>
-                    {showFormatOptions ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                  </button>
-                </div>
-
-                {(rawInput.trim() || drafts.length > 0) && (
-                  <button
-                    type="button"
-                    onClick={handleClearSession}
-                    className="px-2.5 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900/70 border border-rose-800/70 text-rose-300 text-[11px] font-semibold flex items-center gap-1"
-                  >
-                    <RotateCcw className="w-3 h-3" />
-                    <span>مسح</span>
-                  </button>
-                )}
+              {/* Step 1 Footer CTA */}
+              <div className="pt-2 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setStep('content')}
+                  className="py-3 px-6 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold shadow-lg shadow-teal-900/40 flex items-center gap-2 transition-colors"
+                >
+                  <span>متابعة لإدخال وتوليد الأسئلة</span>
+                  <span>←</span>
+                </button>
               </div>
+            </div>
+          )}
 
-              {/* Interactive AI Smart Exam Prompt Builder Studio */}
-              {showAiPromptStudio && (
-                <div className="p-3.5 rounded-xl bg-indigo-950/25 border border-indigo-700/60 space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-indigo-800/50 pb-2.5">
-                    <div className="flex items-center gap-2">
-                      <Sparkles className="w-4 h-4 text-indigo-400 shrink-0" />
-                      <div>
-                        <h4 className="text-xs font-bold text-white">
-                          مُعدّ طلب التوليد الاحترافي بالذكاء الاصطناعي (UMED Smart AI Exam Architect)
-                        </h4>
-                        <p className="text-[10px] text-indigo-200/80">
-                          خصص مواصفات الاختبار أو البنك ثم انسخ البرومبت الاحترافي لـ ChatGPT / Claude / Gemini أو ولّد الأسئلة مباشرة
-                        </p>
-                      </div>
-                    </div>
 
-                    {/* Compact AI Mode Dropdown */}
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={aiMode}
-                        onChange={(e) => setAiMode(e.target.value as 'generate_new' | 'format_existing')}
-                        className="px-3 py-1.5 rounded-xl bg-slate-950 border border-indigo-700/80 text-xs font-bold text-indigo-200 focus:outline-none focus:border-indigo-400"
-                      >
-                        <option value="generate_new">وضع التوليد: إنشاء اختبار طبي جديد</option>
-                        <option value="format_existing">وضع التحويل: تنسيق محاضرة أو أسئلة خام</option>
-                      </select>
-                    </div>
-                  </div>
 
-                  {/* Customization Grid with Compact Dropdowns */}
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 text-xs">
-                    <div className="sm:col-span-2">
-                      <label className="text-[11px] text-indigo-200 block mb-1 font-semibold">
-                        الموضوع الطبي / البلوك / المحاضرة (يكتشف المستوى تلقائياً):
-                      </label>
-                      <input
-                        type="text"
-                        value={aiTopic}
-                        onChange={(e) => setAiTopic(e.target.value)}
-                        placeholder={
-                          examLanguage === 'en'
-                            ? 'e.g. Second Year Hematology Block - Anemia & Coagulation'
-                            : 'مثال: اختبار بلوك دم سنة ثانية - فقر الدم وتخثر الدم'
-                        }
-                        className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-indigo-800/70 text-xs text-white focus:outline-none focus:border-indigo-400"
-                      />
-                    </div>
-
+          {/* STEP 2: CONTENT INPUT & AI GENERATION */}
+          {step === 'content' && (
+            <div className="space-y-4">
+              {inputSource === 'ai' ? (
+                /* AI Prompt Generation Card & Fast Actions */
+                <div className="p-4 rounded-2xl bg-indigo-950/30 border border-indigo-800/60 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <label className="text-[11px] text-indigo-200 block mb-1 font-semibold">
-                        الأسلوب العلمي ومستوى العمق:
-                      </label>
-                      <select
-                        value={aiDifficultyMix}
-                        onChange={(e) => setAiDifficultyMix(e.target.value as any)}
-                        className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-indigo-800/70 text-xs text-white"
-                      >
-                        <option value="clinical_usmle">حالات سريرية (USMLE / Clinical Vignettes)</option>
-                        <option value="balanced">متوازن (حالات سريرية + مفاهيم أساسية)</option>
-                        <option value="foundational">مفاهيم طبية مباشرة وأساسية</option>
-                      </select>
+                      <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <Sparkles className="w-4 h-4 text-indigo-400" />
+                        <span>طلب التوليد الاحترافي (Medical AI Prompt)</span>
+                      </h4>
+                      <p className="text-[10px] text-indigo-300/80 mt-0.5">
+                        انسخ هذا الموجه الاحترافي لـ ChatGPT أو Gemini أو Claude، أو اضغط توليد مباشر لتعبئة الأسئلة فورياً.
+                      </p>
                     </div>
 
-                    <div>
-                      <label className="text-[11px] text-indigo-200 block mb-1 font-semibold">
-                        نوع التقييم المستهدف:
-                      </label>
-                      <select
-                        value={aiAssessmentType}
-                        onChange={(e) => setAiAssessmentType(e.target.value as any)}
-                        className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-indigo-800/70 text-xs text-white"
-                      >
-                        <option value="exam">اختبار أكاديمي رسمي (Exam)</option>
-                        <option value="competition">مسابقة طبية تنافسية (Competition)</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  {/* Dynamic Question Count & Question Type Mode Controls (Dropdown-Based) */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs bg-slate-950/70 p-2.5 rounded-xl border border-indigo-900/50">
-                    <div>
-                      <label className="text-[10px] text-slate-300 block mb-1 font-semibold">
-                        نظام عدد الأسئلة:
-                      </label>
-                      <select
-                        value={isDynamicQuestionCount ? 'dynamic' : 'custom'}
-                        onChange={(e) => setIsDynamicQuestionCount(e.target.value === 'dynamic')}
-                        className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-indigo-800/70 text-xs font-bold text-teal-300"
-                      >
-                        <option value="dynamic">ديناميكي مفتوح (تلقائي حسب شمولية الموضوع بدون حصر)</option>
-                        <option value="custom">تحديد عدد الأسئلة يدوياً</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="text-[10px] text-slate-300 block mb-1 font-semibold">
-                        خيارات كل سؤال اختيارات (MCQ):
-                      </label>
-                      <select
-                        value={aiOptionsCount}
-                        onChange={(e) => setAiOptionsCount(Number(e.target.value) === 5 ? 5 : 4)}
-                        className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white"
-                      >
-                        <option value={4}>4 خيارات (A-D / أ-د)</option>
-                        <option value={5}>5 خيارات (A-E / أ-هـ)</option>
-                      </select>
-                    </div>
-
-                    <div className="flex items-end">
-                      <button
-                        type="button"
-                        onClick={() => setAiIncludeOptionRationales(!aiIncludeOptionRationales)}
-                        className={`w-full py-1.5 px-2.5 rounded-lg border text-xs font-bold flex items-center justify-center gap-1.5 transition-colors ${
-                          aiIncludeOptionRationales
-                            ? 'bg-emerald-950/70 border-emerald-700/70 text-emerald-300'
-                            : 'bg-slate-900 border-slate-800 text-slate-400'
-                        }`}
-                      >
-                        {aiIncludeOptionRationales ? <CheckSquare className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
-                        <span>تضمين تعليل علمي لكل خيار</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Custom Question Counts (Shown ONLY if user explicitly switches from Dynamic to Custom) */}
-                  {!isDynamicQuestionCount && (
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs p-2.5 rounded-xl bg-slate-950 border border-slate-800">
-                      {(questionTypeMode === 'hybrid' || questionTypeMode === 'mcq') && (
-                        <div>
-                          <label className="text-[10px] text-slate-300 block mb-0.5">عدد أسئلة MCQ:</label>
-                          <input
-                            type="number"
-                            min={0}
-                            max={100}
-                            value={aiMcqCount}
-                            onChange={(e) => setAiMcqCount(Math.max(0, Number(e.target.value) || 0))}
-                            className="w-full px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-xs text-teal-300 font-mono font-bold"
-                          />
-                        </div>
-                      )}
-                      {(questionTypeMode === 'hybrid' || questionTypeMode === 'true_false') && (
-                        <div>
-                          <label className="text-[10px] text-slate-300 block mb-0.5">أسئلة صح وخطأ:</label>
-                          <input
-                            type="number"
-                            min={0}
-                            max={100}
-                            value={aiTfCount}
-                            onChange={(e) => setAiTfCount(Math.max(0, Number(e.target.value) || 0))}
-                            className="w-full px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-xs text-amber-300 font-mono font-bold"
-                          />
-                        </div>
-                      )}
-                      {(questionTypeMode === 'hybrid' || questionTypeMode === 'fill_blank') && (
-                        <div>
-                          <label className="text-[10px] text-slate-300 block mb-0.5">أسئلة إكمال الفراغ:</label>
-                          <input
-                            type="number"
-                            min={0}
-                            max={100}
-                            value={aiFillBlankCount}
-                            onChange={(e) => setAiFillBlankCount(Math.max(0, Number(e.target.value) || 0))}
-                            className="w-full px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-xs text-sky-300 font-mono font-bold"
-                          />
-                        </div>
-                      )}
-                      {(questionTypeMode === 'hybrid' || questionTypeMode === 'essay') && (
-                        <div>
-                          <label className="text-[10px] text-slate-300 block mb-0.5">أسئلة مقالية:</label>
-                          <input
-                            type="number"
-                            min={0}
-                            max={50}
-                            value={aiEssayCount}
-                            onChange={(e) => setAiEssayCount(Math.max(0, Number(e.target.value) || 0))}
-                            className="w-full px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-xs text-purple-300 font-mono font-bold"
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Prompt Preview & Action Buttons */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between text-[11px]">
-                      <span className="text-indigo-200 font-semibold">
-                        معاينة البرومبت الاحترافي الجاهز للنسخ ({examLanguage === 'en' ? 'English Prompt' : examLanguage === 'bilingual' ? 'برومبت ثنائي اللغة' : 'برومبت عربي'}):
-                      </span>
-                      <span className="text-[10px] text-slate-400">
-                        يتضمن الترويسة وقواعد التعرف التلقائي بنسبة 100%
-                      </span>
-                    </div>
-                    <textarea
-                      readOnly
-                      dir={examLanguage === 'en' ? 'ltr' : 'rtl'}
-                      value={generatedAiPrompt}
-                      rows={5}
-                      className="w-full p-2.5 rounded-lg bg-slate-950/90 border border-indigo-900/80 text-[11px] text-slate-300 font-mono leading-relaxed focus:outline-none"
-                    />
-                    <div className="flex flex-wrap items-center justify-end gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
                         onClick={async () => {
@@ -1478,104 +1408,92 @@ export default function BulkQuestionImportModal({
                             await navigator.clipboard.writeText(generatedAiPrompt);
                             setFeedback({
                               type: 'success',
-                              text: 'تم نسخ طلب التوليد الاحترافي المخصص بنجاح! الصقه في ChatGPT أو Gemini أو Claude ثم الصق النتيجة بالأسفل ✓'
+                              text: 'تم نسخ موجه الأمر الطبي المخصص بنجاح! الصقه في ChatGPT أو Gemini أو Claude ثم الصق الأسئلة بالأسفل ✓'
                             });
                           } catch {}
                         }}
-                        className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 shadow"
+                        className="py-2 px-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-indigo-500/40 text-indigo-300 text-xs font-bold flex items-center gap-1.5 transition-colors"
                       >
                         <Copy className="w-3.5 h-3.5" />
-                        <span>نسخ طلب التوليد الاحترافي (Copy AI Prompt)</span>
+                        <span>نسخ البرومبت الطبي</span>
                       </button>
 
                       <button
                         type="button"
                         onClick={handleDirectAiGenerateExam}
                         disabled={directAiGenerating}
-                        className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5 shadow"
+                        className="py-2 px-4 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5 shadow transition-colors"
                       >
                         {directAiGenerating ? (
                           <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                         ) : (
-                          <Sparkles className="w-3.5 h-3.5" />
+                          <Wand2 className="w-3.5 h-3.5" />
                         )}
-                        <span>
-                          {directAiGenerating
-                            ? 'جاري التوليد والتحليل...'
-                            : 'توليد مباشر بالذكاء الاصطناعي المدمج'}
-                        </span>
+                        <span>{directAiGenerating ? 'جاري التوليد والتحليل...' : 'توليد ذكي فوري مباشر'}</span>
                       </button>
                     </div>
                   </div>
-                </div>
-              )}
 
-              {/* Collapsible Format & Template Options (Hidden by default to keep screen clean) */}
-              {showFormatOptions && (
-                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
-                  <div>
-                    <label className="text-[11px] text-slate-400 block mb-1">تنسيق القراءة:</label>
-                    <select
-                      value={sourceFormat}
-                      onChange={(e) => setSourceFormat(e.target.value as any)}
-                      className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white"
-                    >
-                      <option value="auto">اكتشاف تلقائي ذكي (يدعم مخرجات الذكاء الاصطناعي والـ Markdown)</option>
-                      <option value="text">نص مرقم (TXT / Markdown)</option>
-                      <option value="csv">جدول (CSV / TSV)</option>
-                      <option value="json">ملف (JSON)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-[11px] text-slate-400 block mb-1">النقاط الافتراضية لكل سؤال:</label>
+                  <textarea
+                    readOnly
+                    dir={examLanguage === 'en' ? 'ltr' : 'rtl'}
+                    value={generatedAiPrompt}
+                    rows={4}
+                    className="w-full p-3 rounded-xl bg-slate-950/90 border border-indigo-900/80 text-[11px] text-slate-300 font-mono leading-relaxed focus:outline-none"
+                  />
+                </div>
+              ) : (
+                /* Manual Input / File Upload Tools */
+                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
                     <input
-                      type="number"
-                      min={1}
-                      max={100}
-                      value={defaultPoints}
-                      onChange={(e) => setDefaultPoints(Number(e.target.value) || 5)}
-                      className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-teal-300 font-mono font-bold"
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".txt,.md,.csv,.tsv,.json"
+                      onChange={handleFileUpload}
+                      className="hidden"
                     />
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="py-2 px-3.5 rounded-xl bg-teal-600/20 hover:bg-teal-600/30 border border-teal-500/40 text-teal-300 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>رفع ملف (TXT / CSV / JSON)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowTemplateModal(true)}
+                      className="py-2 px-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-amber-300 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                    >
+                      <FileText className="w-3.5 h-3.5" />
+                      <span>عرض قوالب التنسيق الجاهزة</span>
+                    </button>
                   </div>
-                  <div>
-                    <label className="text-[11px] text-slate-400 block mb-1">تحميل قالب فارغ:</label>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => handleDownloadTemplate('txt')}
-                        className="flex-1 py-1.5 px-2 rounded-lg bg-slate-900 border border-slate-700 text-slate-300 text-[11px] flex items-center justify-center gap-1"
-                      >
-                        <Download className="w-3 h-3" />
-                        <span>قالب TXT ({examLanguage.toUpperCase()})</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDownloadTemplate('csv')}
-                        className="flex-1 py-1.5 px-2 rounded-lg bg-slate-900 border border-slate-700 text-slate-300 text-[11px] flex items-center justify-center gap-1"
-                      >
-                        <Download className="w-3 h-3" />
-                        <span>قالب CSV</span>
-                      </button>
-                    </div>
-                  </div>
+
+                  {(rawInput.trim() || drafts.length > 0) && (
+                    <button
+                      type="button"
+                      onClick={handleClearSession}
+                      className="py-2 px-3 rounded-xl bg-rose-950/60 hover:bg-rose-900/70 border border-rose-800/70 text-rose-300 text-xs font-semibold flex items-center gap-1.5"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>مسح النص</span>
+                    </button>
+                  )}
                 </div>
               )}
 
-              {/* Spacious Textarea Input */}
+              {/* Spacious Textarea */}
               <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-slate-300 font-semibold">
-                    {examLanguage === 'en' ? (
-                      <>
-                        الصق الأسئلة باللغة الإنجليزية (يدعم مخرجات الذكاء الاصطناعي، <code className="text-sky-300">*</code> بجوار الخيار الصحيح أو سطر <code className="text-sky-300">Answer: B</code>):
-                      </>
-                    ) : (
-                      <>
-                        الصق الأسئلة مع خياراتها (ضع علامة <code className="text-teal-300">*</code> بجوار الإجابة الصحيحة أو سطر <code className="text-teal-300">الإجابة: ب</code> أو <code className="text-teal-300">Answer: B</code>):
-                      </>
-                    )}
+                <div className="flex items-center justify-between text-xs text-slate-300 font-semibold">
+                  <span>
+                    {inputSource === 'ai'
+                      ? 'الصق مخرجات الذكاء الاصطناعي هنا (أو ستظهر تلقائياً بعد التوليد المباشر):'
+                      : 'الصق نص الأسئلة أو عدلها هنا:'}
                   </span>
-                  <span className="text-slate-500 font-mono">{rawInput.length} حرف</span>
+                  <span className="text-slate-500 font-mono text-[11px]">{rawInput.length} حرف</span>
                 </div>
                 <textarea
                   dir={examLanguage === 'en' ? 'ltr' : 'rtl'}
@@ -1583,14 +1501,38 @@ export default function BulkQuestionImportModal({
                   onChange={(e) => setRawInput(e.target.value)}
                   placeholder={
                     examLanguage === 'en'
-                      ? `Example:\nLanguage: English\nTitle: CVS Block Exam\n\n1. Which heart valve lies between the left ventricle and the aorta?\nA) Mitral Valve\nB) Aortic Valve * (Rationale: Correct, separates LV from aorta)\nC) Tricuspid Valve\nD) Pulmonary Valve\nAnswer: B\nRationale: The aortic valve prevents regurgitation from the aorta into the left ventricle.`
+                      ? `Example:\nLanguage: English\nTitle: Second Year Hematology Exam\n\n1. Which heart valve lies between the left ventricle and the aorta?\nA) Mitral Valve\nB) Aortic Valve * (Rationale: Correct, separates LV from aorta)\nC) Tricuspid Valve\nD) Pulmonary Valve\nAnswer: B\nRationale: The aortic valve prevents regurgitation from the aorta into the left ventricle.`
                       : `مثال:\nاللغة: ${examLanguage === 'bilingual' ? 'ثنائي اللغة' : 'عربي'}\n1. ما هو الصمام القلبي الفاصل بين البطين الأيسر والشريان الأبهر؟\nأ) الصمام التاجي\nب) الصمام الأبهري *\nج) الصمام ثلاثي الشرف\nد) الصمام الرئوي\nالإجابة: ب`
                   }
-                  className="w-full min-h-[240px] sm:min-h-[300px] p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white leading-relaxed focus:outline-none focus:border-teal-500"
+                  className="w-full min-h-[260px] sm:min-h-[340px] p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white leading-relaxed focus:outline-none focus:border-teal-500"
                 />
               </div>
+
+              {/* Step 2 Bottom Navigation */}
+              <div className="flex items-center justify-between gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setStep('setup')}
+                  className="py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-bold border border-slate-800 transition-colors"
+                >
+                  <span>← رجوع لخطوة الإعداد</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleParseInput(rawInput)}
+                  disabled={!rawInput.trim()}
+                  className="py-3 px-6 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-40 text-white text-xs font-bold shadow-lg shadow-teal-900/40 flex items-center gap-2 transition-colors"
+                >
+                  <span>فحص وتحليل الأسئلة والانتقال للتدقيق والتوقيت</span>
+                  <span>←</span>
+                </button>
+              </div>
             </div>
-          ) : (
+          )}
+
+          {/* STEP 3: REVIEW, TIMERS & PUBLISHING */}
+          {step === 'review' && (
             /* STEP 2: STREAMLINED, HIGH-VISIBILITY REVIEW & EDIT SCREEN */
             <div className="space-y-3">
               {/* Auto-Detected Assessment Header Banner (Language, Title, Type, Level, Batch, Course, Timers) */}
@@ -2240,7 +2182,7 @@ export default function BulkQuestionImportModal({
 
         {/* COMPACT BOTTOM FOOTER WITH STRICT SINGLE-MODE PUBLISH SELECTOR */}
         <div className="p-2.5 sm:p-3.5 bg-slate-950 border-t border-slate-800 space-y-2 shrink-0">
-          {step === 'input' ? (
+          {step === 'setup' ? (
             <div className="flex items-center justify-between gap-2">
               <button
                 type="button"
@@ -2251,11 +2193,30 @@ export default function BulkQuestionImportModal({
               </button>
               <button
                 type="button"
+                onClick={() => setStep('content')}
+                className="px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold shadow-lg flex items-center justify-center gap-2 transition-colors"
+              >
+                <span>المتابعة إلى إدخال المحتوى والتوليد</span>
+                <span className="font-mono">←</span>
+              </button>
+            </div>
+          ) : step === 'content' ? (
+            <div className="flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => setStep('setup')}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold"
+              >
+                رجوع للإعدادات
+              </button>
+              <button
+                type="button"
                 onClick={() => handleParseInput()}
-                className="flex-1 sm:flex-initial px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold shadow-lg flex items-center justify-center gap-2 transition-colors"
+                disabled={!rawInput.trim()}
+                className="flex-1 sm:flex-initial px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-40 text-white text-xs font-bold shadow-lg flex items-center justify-center gap-2 transition-colors"
               >
                 <CheckCircle2 className="w-4 h-4" />
-                <span>تحليل وعرض الأسئلة للمراجعة</span>
+                <span>تحليل وعرض الأسئلة للمراجعة (الخطوة 3)</span>
               </button>
             </div>
           ) : (
@@ -2308,31 +2269,76 @@ export default function BulkQuestionImportModal({
                         </option>
                       ))}
                     </select>
-                    <select
-                      value={publishDurationMinutes}
-                      onChange={(e) => setPublishDurationMinutes(Number(e.target.value))}
-                      className="px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-[11px] text-amber-300 font-bold"
-                      title="مؤقت الاختبار كاملاً"
-                    >
-                      <option value={0}>مؤقت كلي: مفتوح</option>
-                      <option value={10}>مؤقت: 10 دقائق</option>
-                      <option value={15}>مؤقت: 15 دقيقة</option>
-                      <option value={30}>مؤقت: 30 دقيقة</option>
-                      <option value={45}>مؤقت: 45 دقيقة</option>
-                      <option value={60}>مؤقت: 60 دقيقة</option>
-                    </select>
-                    <select
-                      value={publishQuestionSeconds}
-                      onChange={(e) => setPublishQuestionSeconds(Number(e.target.value))}
-                      className="px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-[11px] text-indigo-300 font-bold"
-                      title="مؤقت اختياري لكل سؤال"
-                    >
-                      <option value={0}>سؤال: بدون مؤقت</option>
-                      <option value={30}>30ث / سؤال</option>
-                      <option value={45}>45ث / سؤال</option>
-                      <option value={60}>60ث / سؤال</option>
-                      <option value={90}>90ث / سؤال</option>
-                    </select>
+                    {/* Bidirectional Question Timer <-> Total Exam Timer Controls */}
+                    <div className="flex flex-wrap items-center gap-1.5 bg-slate-950/90 px-2.5 py-1 rounded-xl border border-indigo-800/60">
+                      <div className="flex items-center gap-1" title="عند تحديد وقت السؤال يتم حساب الوقت الكلي تلقائياً بناءً على عدد الأسئلة">
+                        <span className="text-[10px] text-indigo-300 font-bold whitespace-nowrap">وقت السؤال (ث):</span>
+                        <input
+                          type="number"
+                          min={0}
+                          max={600}
+                          value={publishQuestionSeconds}
+                          onChange={(e) => handleQuestionSecondsChange(Number(e.target.value))}
+                          className="w-14 px-1.5 py-1 rounded bg-slate-900 border border-indigo-700/80 text-[11px] text-indigo-200 font-bold text-center focus:outline-none focus:border-indigo-400"
+                        />
+                        <select
+                          value={[0, 20, 30, 45, 60, 90, 120].includes(publishQuestionSeconds) ? publishQuestionSeconds : 'custom'}
+                          onChange={(e) => {
+                            if (e.target.value !== 'custom') handleQuestionSecondsChange(Number(e.target.value));
+                          }}
+                          className="px-1.5 py-1 rounded bg-slate-900 border border-slate-700 text-[10px] text-indigo-300"
+                        >
+                          <option value={0}>بدون</option>
+                          <option value={20}>20ث</option>
+                          <option value={30}>30ث</option>
+                          <option value={45}>45ث</option>
+                          <option value={60}>60ث</option>
+                          <option value={90}>90ث</option>
+                          <option value={120}>120ث</option>
+                          {![0, 20, 30, 45, 60, 90, 120].includes(publishQuestionSeconds) && (
+                            <option value="custom">{publishQuestionSeconds}ث (تلقائي)</option>
+                          )}
+                        </select>
+                      </div>
+
+                      <span className="text-slate-500 text-xs font-bold">⇄</span>
+
+                      <div className="flex items-center gap-1" title="عند تحديد الوقت الكلي يتم تقسيمه تلقائياً على عدد الأسئلة لمعرفة وقت كل سؤال">
+                        <span className="text-[10px] text-amber-300 font-bold whitespace-nowrap">الوقت الكلي (د):</span>
+                        <input
+                          type="number"
+                          min={0}
+                          max={600}
+                          value={publishDurationMinutes}
+                          onChange={(e) => handleDurationMinutesChange(Number(e.target.value))}
+                          className="w-14 px-1.5 py-1 rounded bg-slate-900 border border-amber-700/80 text-[11px] text-amber-200 font-bold text-center focus:outline-none focus:border-amber-400"
+                        />
+                        <select
+                          value={[0, 10, 15, 30, 45, 60, 90, 120].includes(publishDurationMinutes) ? publishDurationMinutes : 'custom'}
+                          onChange={(e) => {
+                            if (e.target.value !== 'custom') handleDurationMinutesChange(Number(e.target.value));
+                          }}
+                          className="px-1.5 py-1 rounded bg-slate-900 border border-slate-700 text-[10px] text-amber-300"
+                        >
+                          <option value={0}>مفتوح</option>
+                          <option value={10}>10د</option>
+                          <option value={15}>15د</option>
+                          <option value={30}>30د</option>
+                          <option value={45}>45د</option>
+                          <option value={60}>60د</option>
+                          <option value={90}>90د</option>
+                          <option value={120}>120د</option>
+                          {![0, 10, 15, 30, 45, 60, 90, 120].includes(publishDurationMinutes) && (
+                            <option value="custom">{publishDurationMinutes}د (تلقائي)</option>
+                          )}
+                        </select>
+                      </div>
+
+                      <span className="text-[10px] text-teal-300 font-semibold bg-teal-950/60 border border-teal-800/50 px-2 py-0.5 rounded-md whitespace-nowrap">
+                        {stats.selectedValid} سؤال × {publishQuestionSeconds}ث ≈ {publishDurationMinutes} دقيقة
+                      </span>
+                    </div>
+
                     <select
                       value={publishAvailabilityHours}
                       onChange={(e) => setPublishAvailabilityHours(Number(e.target.value))}
@@ -2352,10 +2358,10 @@ export default function BulkQuestionImportModal({
               <div className="flex items-center justify-between gap-2">
                 <button
                   type="button"
-                  onClick={() => setStep('input')}
+                  onClick={() => setStep('content')}
                   className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold shrink-0"
                 >
-                  رجوع للنص
+                  رجوع لتعديل المحتوى
                 </button>
 
                 <button
@@ -2385,6 +2391,425 @@ export default function BulkQuestionImportModal({
         </div>
 
       </div>
+
+      {/* 1. Academic Scope Selection Popup Modal */}
+      {showAcademicPopup && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4" dir="rtl">
+          <div className="bg-slate-900 border border-teal-500/40 rounded-2xl max-w-lg w-full max-h-[85dvh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
+              <div className="flex items-center gap-2">
+                <BookOpen className="w-5 h-5 text-teal-400" />
+                <h3 className="text-sm font-black text-white">تحديد النطاق الأكاديمي للاختبار</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAcademicPopup(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 overflow-y-auto text-xs">
+              <div>
+                <label className="block text-slate-300 font-bold mb-1.5">المستوى / السنة الدراسية:</label>
+                <select
+                  value={publishStudyLevelId}
+                  onChange={(e) => {
+                    const newLvl = e.target.value;
+                    setPublishStudyLevelId(newLvl);
+                    const matched = (studyLevels || []).find(l => l.id === newLvl);
+                    saveUserAcademicContext({
+                      studyLevelId: newLvl,
+                      studyLevelName: matched?.titleArabic
+                    });
+                  }}
+                  className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 font-medium focus:border-teal-500 focus:outline-none"
+                >
+                  {(studyLevels || []).map((lvl) => (
+                    <option key={lvl.id} value={lvl.id}>
+                      {lvl.stageType === 'internship' ? 'سنة الامتياز الطبي' : `السنة ${lvl.order} - ${lvl.titleArabic}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-bold mb-1.5">البلوك الدراسي المتاح (النشط فقط):</label>
+                {blocksForCurrentLevel.length === 0 ? (
+                  <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl text-slate-400 text-center">
+                    لا توجد بلوكات نشطة مسجلة لهذا المستوى. يمكنك إدخال اسم البلوك يدوياً أدناه.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-2 max-h-48 overflow-y-auto p-1">
+                    {blocksForCurrentLevel.map((blk) => (
+                      <button
+                        key={blk.id}
+                        type="button"
+                        onClick={() => {
+                          setPublishBlockName(blk.titleArabic);
+                          setAiTopic(blk.titleArabic);
+                          saveUserAcademicContext({
+                            studyPeriodId: blk.id,
+                            studyPeriodName: blk.titleArabic
+                          });
+                        }}
+                        className={`p-3 rounded-xl border text-right transition-all flex items-center justify-between ${
+                          publishBlockName === blk.titleArabic
+                            ? 'bg-teal-500/20 border-teal-400 text-white shadow-sm font-bold'
+                            : 'bg-slate-950/70 border-slate-800 text-slate-300 hover:border-slate-700'
+                        }`}
+                      >
+                        <span className="truncate">{blk.titleArabic}</span>
+                        {blk.code && (
+                          <span className="text-[10px] px-2 py-0.5 rounded bg-slate-900 text-teal-300 font-mono">
+                            {blk.code}
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-slate-400 text-[11px] font-bold mb-1">اسم البلوك المخصص أو تعديل الاسم:</label>
+                <input
+                  type="text"
+                  value={publishBlockName}
+                  onChange={(e) => {
+                    setPublishBlockName(e.target.value);
+                    setAiTopic(e.target.value);
+                  }}
+                  placeholder="مثال: بلوك القلب والجهاز الدوري (Cardiovascular)"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-teal-500 focus:outline-none text-xs"
+                />
+              </div>
+
+              <div className="p-3 rounded-xl bg-teal-950/30 border border-teal-800/40 text-[11px] text-teal-300 flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>تم استبعاد جميع البلوكات المحذوفة والمؤرشفة تلقائياً لضمان سلامة الربط.</span>
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-slate-800 bg-slate-950/80 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowAcademicPopup(false)}
+                className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs shadow-md transition-colors"
+              >
+                تطبيق وإغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 2. AI Prompt & Generation Settings Modal */}
+      {showAiSettingsModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4" dir="rtl">
+          <div className="bg-slate-900 border border-indigo-500/40 rounded-2xl max-w-xl w-full max-h-[90dvh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-indigo-400" />
+                <h3 className="text-sm font-black text-white">إعدادات الذكاء الاصطناعي وصياغة الأسئلة المتقدمة</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAiSettingsModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 overflow-y-auto text-xs">
+              {/* Question Count Calibration */}
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-bold text-white text-xs">طريقة تحديد عدد الأسئلة</div>
+                    <div className="text-[11px] text-slate-400">
+                      {isDynamicQuestionCount ? 'توليد تلقائي ديناميكي غير محدود حسب كثافة المحتوى الطبي' : 'تحديد يدوي دقيق لكل نمط'}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsDynamicQuestionCount(!isDynamicQuestionCount)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                      isDynamicQuestionCount
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                    }`}
+                  >
+                    {isDynamicQuestionCount ? 'ديناميكي تلقائي' : 'تخصيص يدوي'}
+                  </button>
+                </div>
+
+                {!isDynamicQuestionCount && (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-800/80">
+                    <div>
+                      <label className="block text-slate-400 text-[10px] mb-1">MCQ (خيارات):</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={150}
+                        value={aiMcqCount}
+                        onChange={(e) => setAiMcqCount(Math.max(1, Number(e.target.value)))}
+                        className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-white text-center font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-400 text-[10px] mb-1">صح / خطأ:</label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={aiTfCount}
+                        onChange={(e) => setAiTfCount(Math.max(0, Number(e.target.value)))}
+                        className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-white text-center font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-400 text-[10px] mb-1">إكمال الفراغ:</label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={aiFillBlankCount}
+                        onChange={(e) => setAiFillBlankCount(Math.max(0, Number(e.target.value)))}
+                        className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-white text-center font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-400 text-[10px] mb-1">مقالي / سريري:</label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={50}
+                        value={aiEssayCount}
+                        onChange={(e) => setAiEssayCount(Math.max(0, Number(e.target.value)))}
+                        className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-white text-center font-bold"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Options Count */}
+              <div>
+                <label className="block text-slate-300 font-bold mb-1.5">عدد خيارات الأسئلة متعددة الخيارات:</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAiOptionsCount(4)}
+                    className={`py-2 px-3 rounded-xl border text-center transition-all ${
+                      aiOptionsCount === 4
+                        ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300 font-bold'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    4 خيارات (A, B, C, D)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAiOptionsCount(5)}
+                    className={`py-2 px-3 rounded-xl border text-center transition-all ${
+                      aiOptionsCount === 5
+                        ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300 font-bold'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    5 خيارات (A, B, C, D, E)
+                  </button>
+                </div>
+              </div>
+
+              {/* Difficulty and Clinical Depth */}
+              <div>
+                <label className="block text-slate-300 font-bold mb-1.5">عمق ونمط الأسئلة الطبية:</label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAiDifficultyMix('clinical_usmle')}
+                    className={`p-2.5 rounded-xl border text-right transition-all ${
+                      aiDifficultyMix === 'clinical_usmle'
+                        ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300 font-bold'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="text-xs">سيناريوهات USMLE</div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">حالات مرضية وسيناريوهات سريرية</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAiDifficultyMix('balanced')}
+                    className={`p-2.5 rounded-xl border text-right transition-all ${
+                      aiDifficultyMix === 'balanced'
+                        ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300 font-bold'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="text-xs">توازن سريري ونظري</div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">شامل للمفاهيم والتطبيقات</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAiDifficultyMix('foundational')}
+                    className={`p-2.5 rounded-xl border text-right transition-all ${
+                      aiDifficultyMix === 'foundational'
+                        ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300 font-bold'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="text-xs">مفاهيم أساسية</div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">تعاريف وحقائق طبية مباشرة</div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Rationales Toggle */}
+              <div className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-800">
+                <div>
+                  <div className="font-bold text-white text-xs">تضمين التفسير الطبي للخيارات (Rationales)</div>
+                  <div className="text-[11px] text-slate-400">شرح سبب صحة الخيار الصحيح وأسباب خطأ الخيارات الأخرى</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAiIncludeOptionRationales(!aiIncludeOptionRationales)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                    aiIncludeOptionRationales
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'bg-slate-800 text-slate-400'
+                  }`}
+                >
+                  {aiIncludeOptionRationales ? 'مفعّل' : 'معطّل'}
+                </button>
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-slate-800 bg-slate-950/80 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowAiSettingsModal(false)}
+                className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-md transition-colors"
+              >
+                حفظ وإغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Sample Templates Modal */}
+      {showTemplateModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4" dir="rtl">
+          <div className="bg-slate-900 border border-teal-500/40 rounded-2xl max-w-2xl w-full max-h-[90dvh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
+              <div className="flex items-center gap-2">
+                <FileText className="w-5 h-5 text-teal-400" />
+                <h3 className="text-sm font-black text-white">نماذج وقوالب إدخال الأسئلة المعتمدة</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowTemplateModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 overflow-y-auto text-xs">
+              <p className="text-slate-300 leading-relaxed">
+                يدعم المحلل الذكي أشكالاً متعددة من النصوص سواء كانت منسوخة من نماذج الذكاء الاصطناعي أو ملفات Word أو جداول Excel. يمكنك نسخ أي نموذج أو إدراجه فوراً:
+              </p>
+
+              {/* Template 1: MCQ */}
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-teal-300">1. نموذج أسئلة متعددة الخيارات (MCQ عربي / إنجليزي)</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const sample = getSampleTemplateByLanguage(examLanguage);
+                        navigator.clipboard.writeText(sample);
+                        setFeedback({ type: 'success', text: 'تم نسخ نموذج MCQ إلى الحافظة' });
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-bold flex items-center gap-1"
+                    >
+                      <Copy className="w-3 h-3" />
+                      <span>نسخ</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const sample = getSampleTemplateByLanguage(examLanguage);
+                        setRawInput(sample);
+                        setShowTemplateModal(false);
+                        setStep('content');
+                        setFeedback({ type: 'success', text: 'تم إدراج نموذج MCQ في المحتوى' });
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-teal-600/30 hover:bg-teal-600/50 text-teal-300 text-[11px] font-bold flex items-center gap-1"
+                    >
+                      <span>إدراج في المحتوى</span>
+                    </button>
+                  </div>
+                </div>
+                <pre className="p-3 bg-slate-900 rounded-lg text-slate-300 font-mono text-[11px] overflow-x-auto whitespace-pre-wrap">
+                  {getSampleTemplateByLanguage(examLanguage)}
+                </pre>
+              </div>
+
+              {/* Template 2: CSV Template */}
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-amber-300">2. نموذج جدول CSV (Excel)</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(SAMPLE_BULK_CSV_TEMPLATE);
+                        setFeedback({ type: 'success', text: 'تم نسخ نموذج CSV إلى الحافظة' });
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-bold flex items-center gap-1"
+                    >
+                      <Copy className="w-3 h-3" />
+                      <span>نسخ</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRawInput(SAMPLE_BULK_CSV_TEMPLATE);
+                        setSourceFormat('csv');
+                        setShowTemplateModal(false);
+                        setStep('content');
+                        setFeedback({ type: 'success', text: 'تم إدراج جدول CSV في المحتوى' });
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-amber-600/30 hover:bg-amber-600/50 text-amber-300 text-[11px] font-bold flex items-center gap-1"
+                    >
+                      <span>إدراج في المحتوى</span>
+                    </button>
+                  </div>
+                </div>
+                <pre className="p-3 bg-slate-900 rounded-lg text-slate-300 font-mono text-[11px] overflow-x-auto whitespace-pre-wrap">
+                  {SAMPLE_BULK_CSV_TEMPLATE}
+                </pre>
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-slate-800 bg-slate-950/80 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowTemplateModal(false)}
+                className="px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs transition-colors"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -24,7 +24,9 @@ import {
   Trash2,
   ToggleLeft,
   ToggleRight,
-  BarChart3
+  BarChart3,
+  Archive,
+  ArchiveRestore
 } from 'lucide-react';
 import AcademicAnalyticsDashboard from './AcademicAnalyticsDashboard.tsx';
 import { 
@@ -59,6 +61,8 @@ import {
   saveStudyPeriod, 
   toggleStudyPeriodActive,
   deleteStudyPeriod,
+  archiveStudyPeriod,
+  fetchArchivedStudyPeriods,
   fetchCourseOfferings, 
   saveCourseOffering,
   toggleCourseOfferingActive,
@@ -114,7 +118,8 @@ export default function AcademicStructureManager({
   const [courses, setCourses] = useState<CourseOffering[]>([]);
 
   // UI State
-  const [activeViewMode, setActiveViewMode] = useState<'hierarchy' | 'analytics'>('hierarchy');
+  const [activeViewMode, setActiveViewMode] = useState<'hierarchy' | 'analytics' | 'archive'>('hierarchy');
+  const [archivedPeriods, setArchivedPeriods] = useState<StudyPeriod[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [seedLoading, setSeedLoading] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
@@ -318,16 +323,21 @@ export default function AcademicStructureManager({
         studyLevelName: selectedLevel.titleArabic
       });
       fetchStudyPeriods(selectedLevel.id).then((periods) => {
-        setStudyPeriods(periods);
+        const activeOnly = periods.filter(p => !p.isArchived);
+        setStudyPeriods(activeOnly);
         setSelectedPeriod(prev =>
-          (prev && periods.find(p => p.id === prev.id)) ||
-          periods.find(p => p.id === savedCtx.studyPeriodId) ||
-          (periods.length > 0 ? periods[0] : null)
+          (prev && activeOnly.find(p => p.id === prev.id)) ||
+          activeOnly.find(p => p.id === savedCtx.studyPeriodId) ||
+          (activeOnly.length > 0 ? activeOnly[0] : null)
         );
+      });
+      fetchArchivedStudyPeriods(selectedLevel.id).then((archived) => {
+        setArchivedPeriods(archived);
       });
     } else {
       setStudyPeriods([]);
       setSelectedPeriod(null);
+      setArchivedPeriods([]);
     }
   }, [selectedLevel]);
 
@@ -411,6 +421,7 @@ export default function AcademicStructureManager({
         await deleteStudyPeriod(id, forceCascade);
         const remaining = studyPeriods.filter(p => p.id !== id);
         setStudyPeriods(remaining);
+        setArchivedPeriods(prev => prev.filter(p => p.id !== id));
         if (selectedPeriod?.id === id) {
           setSelectedPeriod(remaining.length > 0 ? remaining[0] : null);
         }
@@ -430,6 +441,41 @@ export default function AcademicStructureManager({
       setStatusMessage({ type: 'error', text: err.message || 'فشلت عملية الحذف' });
     } finally {
       setDeleteLoading(false);
+    }
+  };
+
+  // Archive / Restore Study Period Handler
+  const handleArchivePeriod = async (periodId: string, archive: boolean) => {
+    try {
+      await archiveStudyPeriod(periodId, archive);
+      if (archive) {
+        const remaining = studyPeriods.filter(p => p.id !== periodId);
+        setStudyPeriods(remaining);
+        if (selectedPeriod?.id === periodId) {
+          setSelectedPeriod(remaining.length > 0 ? remaining[0] : null);
+        }
+        if (selectedLevel) {
+          const updatedArchived = await fetchArchivedStudyPeriods(selectedLevel.id, selectedUniversity?.id);
+          setArchivedPeriods(updatedArchived);
+        }
+        setStatusMessage({
+          type: 'success',
+          text: 'تم نقل البلوك إلى الأرشيف الأكاديمي بنجاح، واختفى من قوائم العمل النشطة مع بقاء سجلاته في الأرشيف.'
+        });
+      } else {
+        setArchivedPeriods(prev => prev.filter(p => p.id !== periodId));
+        if (selectedLevel) {
+          const periods = await fetchStudyPeriods(selectedLevel.id, selectedUniversity?.id);
+          const activeOnly = periods.filter(p => !p.isArchived);
+          setStudyPeriods(activeOnly);
+        }
+        setStatusMessage({
+          type: 'success',
+          text: 'تمت استعادة البلوك من الأرشيف بنجاح وإعادته إلى البلوكات الدراسية النشطة.'
+        });
+      }
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || 'فشلت معالجة الأرشفة' });
     }
   };
 
@@ -867,6 +913,28 @@ export default function AcademicStructureManager({
               Recharts Data Viz
             </span>
           </button>
+
+          <button
+            onClick={() => {
+              setActiveViewMode('archive');
+              if (selectedLevel) {
+                fetchArchivedStudyPeriods(selectedLevel.id, selectedUniversity?.id).then(setArchivedPeriods);
+              }
+            }}
+            className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
+              activeViewMode === 'archive'
+                ? 'bg-amber-600 text-white shadow-md shadow-amber-500/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <Archive className="w-4 h-4 text-amber-300" />
+            <span>الأرشيف الأكاديمي</span>
+            {archivedPeriods.length > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black">
+                {archivedPeriods.length}
+              </span>
+            )}
+          </button>
         </div>
 
         {selectedUniversity && (
@@ -901,6 +969,103 @@ export default function AcademicStructureManager({
           selectedUniversity={selectedUniversity}
           studyLevels={studyLevels}
         />
+      ) : activeViewMode === 'archive' ? (
+        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800">
+            <div>
+              <div className="flex items-center gap-2 text-amber-400 font-bold text-xs">
+                <Archive className="w-4 h-4" />
+                <span>الأرشيف الأكاديمي الرقمي</span>
+              </div>
+              <h3 className="text-base sm:text-lg font-black text-white mt-1">
+                سجلات البلوكات والمقررات المؤرشفة
+              </h3>
+              <p className="text-xs text-slate-400 mt-1 max-w-2xl leading-relaxed">
+                البلوكات المؤرشفة معزولة تماماً عن مولد الاختبارات والمصادر النشطة ولكنها تظل محفوظة للطلاب كمرجع دراسي عند الحاجة. يمكنك استعادتها للخدمة أو تنفيذ حذف نهائي شامل مع كافة التبعات.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (selectedLevel) {
+                    fetchArchivedStudyPeriods(selectedLevel.id, selectedUniversity?.id).then(setArchivedPeriods);
+                  }
+                }}
+                className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold flex items-center gap-1.5"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>تحديث الأرشيف</span>
+              </button>
+            </div>
+          </div>
+
+          {archivedPeriods.length === 0 ? (
+            <div className="p-12 text-center bg-slate-950/70 border border-slate-800 rounded-2xl space-y-3">
+              <Archive className="w-10 h-10 text-slate-600 mx-auto" />
+              <div className="text-sm font-bold text-slate-300">لا توجد بلوكات دراسية مؤرشفة حالياً</div>
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                عند أرشفة أي بلوك غير مستمر من واجهة البلوكات، سيتم إخراجه فوراً من العمليات النشطة والاحتفاظ به هنا كأرشيف مع إمكانية استعادته بنقرة واحدة.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {archivedPeriods.map((period) => (
+                <div
+                  key={period.id}
+                  className="p-4 bg-slate-950 border border-amber-900/30 hover:border-amber-500/40 rounded-xl flex flex-col justify-between gap-4 transition-all"
+                >
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-amber-300 font-mono text-[11px] font-bold">
+                        {period.code || 'BLOCK'}
+                      </span>
+                      <span className="px-2 py-0.5 rounded bg-amber-950/60 text-amber-300 border border-amber-800/60 text-[10px] font-bold flex items-center gap-1">
+                        <Archive className="w-3 h-3" />
+                        <span>مؤرشف</span>
+                      </span>
+                    </div>
+
+                    <div className="font-bold text-white text-sm">
+                      {period.titleArabic}
+                    </div>
+                    {period.titleEnglish && (
+                      <div className="text-xs text-slate-400 font-mono" dir="ltr">
+                        {period.titleEnglish}
+                      </div>
+                    )}
+                    {period.archivedAt && (
+                      <div className="text-[10px] text-slate-500">
+                        تاريخ الأرشفة: {new Date(period.archivedAt).toLocaleDateString('ar-YE', { dateStyle: 'medium' })}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-3 border-t border-slate-900 flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleArchivePeriod(period.id, false)}
+                      className="flex-1 py-2 px-3 rounded-xl bg-teal-600/20 hover:bg-teal-600 text-teal-300 hover:text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-all"
+                    >
+                      <ArchiveRestore className="w-3.5 h-3.5" />
+                      <span>استعادة للخدمة النشطة</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleAttemptDelete('period', period.id, period.titleArabic, period.isActive)}
+                      className="py-2 px-3 rounded-xl bg-rose-950/40 hover:bg-rose-900/60 text-rose-400 hover:text-rose-200 text-xs font-bold flex items-center gap-1.5 transition-all"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>حذف نهائي</span>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       ) : (
         <>
           {/* 2. Main Title Cards for Academic Hierarchy (Click any card to open its Standalone Popup Selector/Manager) */}
@@ -1209,14 +1374,26 @@ export default function AcademicStructureManager({
                     <span>{selectedLevel.stageType === 'internship' ? 'إضافة روتيشن سريري' : 'إضافة بلوك دراسي'}</span>
                   </button>
                   {selectedPeriod && (
-                    <button
-                      type="button"
-                      onClick={() => setShowAddCourseModal(true)}
-                      className="py-2 px-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>إضافة مقرر للبلوك</span>
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setShowAddCourseModal(true)}
+                        className="py-2 px-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>إضافة مقرر للبلوك</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleArchivePeriod(selectedPeriod.id, true)}
+                        className="py-2 px-3 rounded-xl bg-amber-950/50 hover:bg-amber-900/70 text-amber-300 text-xs font-bold flex items-center gap-1.5 border border-amber-800/50 transition-colors"
+                        title="أرشفة البلوك وإخفاؤه من العمليات النشطة"
+                      >
+                        <Archive className="w-3.5 h-3.5" />
+                        <span>أرشفة البلوك</span>
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
@@ -1502,6 +1679,16 @@ export default function AcademicStructureManager({
                         >
                           <Edit2 className="w-3 h-3" />
                           <span>تعديل</span>
+                        </button>
+                        <button
+                          title="نقل البلوك إلى الأرشيف الأكاديمي"
+                          onClick={() => {
+                            setActivePopupList(null);
+                            handleArchivePeriod(period.id, true);
+                          }}
+                          className="p-1.5 rounded-lg bg-amber-950/40 hover:bg-amber-900/60 text-amber-300"
+                        >
+                          <Archive className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={() => handleAttemptDelete('period', period.id, period.titleArabic, period.isActive)}

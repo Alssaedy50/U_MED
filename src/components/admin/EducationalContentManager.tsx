@@ -52,7 +52,6 @@ import {
   getUserAcademicContext,
   subscribeToUserAcademicContext
 } from '../../services/academicService.ts';
-import AcademicContextBar from '../common/AcademicContextModal.tsx';
 import ResourcePreviewModal from '../library/ResourcePreviewModal.tsx';
 
 interface EducationalContentManagerProps {
@@ -125,6 +124,20 @@ export default function EducationalContentManager({
 
   // Direct File Upload & Voice Recording State
   const [uploadSourceMode, setUploadSourceMode] = useState<'device_file' | 'voice_record' | 'external_link'>('device_file');
+
+  // Automatic subscription to global academic context saved in the University Hierarchy page
+  useEffect(() => {
+    const unsub = subscribeToUserAcademicContext((ctx) => {
+      setUserContext(ctx);
+      setForm(prev => ({
+        ...prev,
+        universityId: isUnivScoped ? assignedUniversityId : (ctx.universityId || prev.universityId),
+        studyLevelId: isBatchScoped && assignedStudyLevelId ? assignedStudyLevelId : (ctx.studyLevelId || prev.studyLevelId),
+        studyPeriodId: ctx.studyPeriodId || prev.studyPeriodId
+      }));
+    });
+    return () => unsub();
+  }, [isUnivScoped, assignedUniversityId, isBatchScoped, assignedStudyLevelId]);
   const [uploadingFile, setUploadingFile] = useState<boolean>(false);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -557,21 +570,24 @@ export default function EducationalContentManager({
         </div>
       </div>
 
-      {/* Persistent User Academic Context Bar & Popup Selector */}
-      <AcademicContextBar
-        userRole={userRole}
-        assignedUniversityId={assignedUniversityId}
-        assignedStudyLevelId={assignedStudyLevelId}
-        onContextChange={(ctx) => {
-          setUserContext(ctx);
-          setForm(prev => ({
-            ...prev,
-            universityId: isUnivScoped ? assignedUniversityId : (ctx.universityId || prev.universityId),
-            studyLevelId: isBatchScoped && assignedStudyLevelId ? assignedStudyLevelId : (ctx.studyLevelId || prev.studyLevelId),
-            studyPeriodId: ctx.studyPeriodId || prev.studyPeriodId
-          }));
-        }}
-      />
+      {/* Active Academic Scope Header Indicator */}
+      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 rounded-2xl bg-slate-900/80 border border-slate-800 text-xs">
+        <div className="flex flex-wrap items-center gap-2 text-slate-300">
+          <span className="text-slate-400 font-medium">النطاق الأكاديمي النشط:</span>
+          <span className="font-bold text-teal-300">{userContext.universityNameArabic || 'جامعة دار السلام'}</span>
+          <span>·</span>
+          <span className="font-bold text-white">{userContext.studyLevelNameArabic || 'المستوى الثاني'}</span>
+          {userContext.studyPeriodNameArabic && (
+            <>
+              <span>·</span>
+              <span className="text-amber-300 font-semibold">{userContext.studyPeriodNameArabic}</span>
+            </>
+          )}
+        </div>
+        <div className="text-[11px] text-slate-500">
+          يتم ضبط النطاق وتغييره حصرياً من صفحة «هيكلة الجامعات» مع تطبيقه تلقائياً هنا
+        </div>
+      </div>
 
       {/* Cloud Storage Architecture Explanation Banner */}
       <div className="bg-slate-900/60 border border-teal-500/30 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs">

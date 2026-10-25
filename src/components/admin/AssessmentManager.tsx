@@ -83,9 +83,9 @@ import {
   inferAcademicContextFromText
 } from '../../services/academicService.ts';
 import { getRoleLabelArabic } from '../../services/batchGovernanceService.ts';
+import { synchronizeExamTimers } from '../../services/mcqBulkParser.ts';
 import BulkQuestionImportModal from './BulkQuestionImportModal.tsx';
 import ExamTakingModal from '../assessment/ExamTakingModal.tsx';
-import { AcademicContextBar } from '../common/AcademicContextModal.tsx';
 
 interface AssessmentManagerProps {
   universityId: string;
@@ -162,9 +162,11 @@ export default function AssessmentManager({
     assignedStudyLevelId || academicCtx.studyLevelId || 'lvl-2'
   );
   const [selectedBankForAssessment, setSelectedBankForAssessment] = useState<string>('');
+  const [createBankQuestionCount, setCreateBankQuestionCount] = useState<number>(10);
+  const [createTimerDriver, setCreateTimerDriver] = useState<'questionSeconds' | 'totalMinutes'>('questionSeconds');
   const [durationMinutes, setDurationMinutes] = useState<number>(45);
   const [enableExamTimer, setEnableExamTimer] = useState<boolean>(true);
-  const [questionDurationSeconds, setQuestionDurationSeconds] = useState<number>(0);
+  const [questionDurationSeconds, setQuestionDurationSeconds] = useState<number>(45);
   const [availabilityDurationHours, setAvailabilityDurationHours] = useState<number>(336);
   const [maxAttempts, setMaxAttempts] = useState<number>(1);
   const [releasePolicy, setReleasePolicy] = useState<ResultReleasePolicy>('immediate');
@@ -180,6 +182,7 @@ export default function AssessmentManager({
   // Edit Assessment Modal State
   const [editingAssessment, setEditingAssessment] = useState<Assessment | null>(null);
   const [editAssessmentBankId, setEditAssessmentBankId] = useState<string>('');
+  const [editBankQuestionCount, setEditBankQuestionCount] = useState<number>(10);
   const [confirmDeleteAssessmentId, setConfirmDeleteAssessmentId] = useState<string | null>(null);
 
   // Results State
@@ -574,9 +577,151 @@ export default function AssessmentManager({
     }
   };
 
+  // Load question count for selected bank in Create Assessment form and synchronize timers
+  useEffect(() => {
+    const targetBankId = selectedBankForAssessment || selectedBank?.id;
+    if (!targetBankId) return;
+    let cancelled = false;
+    getBankQuestions(targetBankId).then((qs) => {
+      if (cancelled) return;
+      const count = Math.max(1, qs.length || 1);
+      setCreateBankQuestionCount(count);
+      const synced = synchronizeExamTimers({
+        questionsCount: count,
+        durationMinutes,
+        questionDurationSeconds,
+        changedField: 'questionsCount',
+        preferredDriver: createTimerDriver
+      });
+      if (enableExamTimer && synced.durationMinutes > 0) {
+        setDurationMinutes(synced.durationMinutes);
+      }
+      if (synced.questionDurationSeconds > 0) {
+        setQuestionDurationSeconds(synced.questionDurationSeconds);
+      }
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedBankForAssessment, selectedBank?.id, bankQuestions.length]);
+
+  const handleCreateDurationChange = (newMin: number) => {
+    const cleanMin = Math.max(1, Math.round(Number(newMin) || 1));
+    setCreateTimerDriver('totalMinutes');
+    setDurationMinutes(cleanMin);
+    const synced = synchronizeExamTimers({
+      questionsCount: createBankQuestionCount,
+      durationMinutes: cleanMin,
+      questionDurationSeconds,
+      changedField: 'totalMinutes'
+    });
+    setQuestionDurationSeconds(synced.questionDurationSeconds);
+  };
+
+  const handleCreateQuestionSecondsChange = (newSec: number) => {
+    const cleanSec = Math.max(0, Math.round(Number(newSec) || 0));
+    setCreateTimerDriver('questionSeconds');
+    setQuestionDurationSeconds(cleanSec);
+    if (cleanSec > 0) {
+      setEnableExamTimer(true);
+      const synced = synchronizeExamTimers({
+        questionsCount: createBankQuestionCount,
+        durationMinutes,
+        questionDurationSeconds: cleanSec,
+        changedField: 'questionSeconds'
+      });
+      setDurationMinutes(synced.durationMinutes);
+    }
+  };
+
   const openEditAssessmentModal = (asmnt: Assessment) => {
-    setEditingAssessment(asmnt);
-    setEditAssessmentBankId(selectedBank?.id || banks[0]?.id || '');
+    const count = Math.max(1, asmnt.questionIds?.length || 10);
+    setEditBankQuestionCount(count);
+    let initDuration = Number(asmnt.durationMinutes) || 0;
+    let initQSec = Number(asmnt.questionDurationSeconds) || 0;
+    if (initQSec > 0 && initDuration <= 0) {
+      initDuration = Math.max(1, Math.ceil((initQSec * count) / 60));
+    } else if (initDuration > 0 && initQSec <= 0) {
+      initQSec = Math.max(5, Math.round((initDuration * 60) / count));
+    }
+    setEditingAssessment({
+      ...asmnt,
+      durationMinutes: initDuration,
+      questionDurationSeconds: initQSec
+    });
+    setEditAssessmentBankId('');
+  };
+
+  const handleEditBankSelectionChange = async (newBankId: string) => {
+    setEditAssessmentBankId(newBankId);
+    if (!editingAssessment) return;
+    if (!newBankId) {
+      const origCount = Math.max(1, editingAssessment.questionIds?.length || 10);
+      setEditBankQuestionCount(origCount);
+      return;
+    }
+    try {
+      const qs = await getBankQuestions(newBankId);
+      const count = Math.max(1, qs.length || 1);
+      setEditBankQuestionCount(count);
+      const synced = synchronizeExamTimers({
+        questionsCount: count,
+        durationMinutes: editingAssessment.durationMinutes || 30,
+        questionDurationSeconds: editingAssessment.questionDurationSeconds || 45,
+        changedField: 'questionsCount',
+        preferredDriver: (editingAssessment.questionDurationSeconds || 0) > 0 ? 'questionSeconds' : 'totalMinutes'
+      });
+      setEditingAssessment((prev) =>
+        prev
+          ? {
+              ...prev,
+              durationMinutes: synced.durationMinutes,
+              questionDurationSeconds: synced.questionDurationSeconds
+            }
+          : null
+      );
+    } catch {}
+  };
+
+  const handleEditDurationChange = (newMin: number) => {
+    if (!editingAssessment) return;
+    const cleanMin = Math.max(1, Math.round(Number(newMin) || 1));
+    const synced = synchronizeExamTimers({
+      questionsCount: editBankQuestionCount,
+      durationMinutes: cleanMin,
+      questionDurationSeconds: editingAssessment.questionDurationSeconds || 0,
+      changedField: 'totalMinutes'
+    });
+    setEditingAssessment({
+      ...editingAssessment,
+      enableExamTimer: true,
+      durationMinutes: cleanMin,
+      questionDurationSeconds: synced.questionDurationSeconds
+    });
+  };
+
+  const handleEditQuestionSecondsChange = (newSec: number) => {
+    if (!editingAssessment) return;
+    const cleanSec = Math.max(0, Math.round(Number(newSec) || 0));
+    if (cleanSec > 0) {
+      const synced = synchronizeExamTimers({
+        questionsCount: editBankQuestionCount,
+        durationMinutes: editingAssessment.durationMinutes || 30,
+        questionDurationSeconds: cleanSec,
+        changedField: 'questionSeconds'
+      });
+      setEditingAssessment({
+        ...editingAssessment,
+        enableExamTimer: true,
+        questionDurationSeconds: cleanSec,
+        durationMinutes: synced.durationMinutes
+      });
+    } else {
+      setEditingAssessment({
+        ...editingAssessment,
+        questionDurationSeconds: 0
+      });
+    }
   };
 
   const handleUpdateAssessment = async (e: React.FormEvent) => {
@@ -785,17 +930,24 @@ export default function AssessmentManager({
         </div>
       </div>
 
-      {/* Persistent User Academic Context Bar & Popup Selector */}
-      <AcademicContextBar
-        userRole={userRole}
-        lockedUniversityId={!isOwner ? initialUniversityId : undefined}
-        lockedStudyLevelId={isBatchScoped ? assignedStudyLevelId : undefined}
-        onChange={(ctx) => {
-          setAcademicCtx(ctx);
-          if (isOwner && ctx.universityId) setUniversityId(ctx.universityId);
-          if (!isBatchScoped && ctx.studyLevelId) setStudyLevelId(ctx.studyLevelId);
-        }}
-      />
+      {/* Active Academic Scope Header Indicator */}
+      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 rounded-2xl bg-slate-900/80 border border-slate-800 text-xs">
+        <div className="flex flex-wrap items-center gap-2 text-slate-300">
+          <span className="text-slate-400 font-medium">النطاق الأكاديمي النشط:</span>
+          <span className="font-bold text-teal-300">{academicCtx.universityNameArabic || 'جامعة دار السلام'}</span>
+          <span>·</span>
+          <span className="font-bold text-white">{academicCtx.studyLevelNameArabic || 'المستوى الثاني'}</span>
+          {academicCtx.studyPeriodNameArabic && (
+            <>
+              <span>·</span>
+              <span className="text-amber-300 font-semibold">{academicCtx.studyPeriodNameArabic}</span>
+            </>
+          )}
+        </div>
+        <div className="text-[11px] text-slate-500">
+          يتم ضبط النطاق وتغييره حصرياً من صفحة «هيكلة الجامعات» مع تطبيقه تلقائياً هنا
+        </div>
+      </div>
 
       {/* Offline / Outbox Synchronization Status Bar */}
       <div className="px-4 py-2.5 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
@@ -1415,7 +1567,10 @@ export default function AssessmentManager({
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs text-slate-400">مؤقت الاختبار الكلي</label>
+                    <label className="text-xs text-slate-400">
+                      مؤقت الاختبار الكلي (دقيقة)
+                      <span className="text-[10px] text-teal-400 mr-1">({createBankQuestionCount} سؤال)</span>
+                    </label>
                     <label className="flex items-center gap-1.5 text-[11px] text-teal-300 cursor-pointer">
                       <input
                         type="checkbox"
@@ -1427,14 +1582,19 @@ export default function AssessmentManager({
                     </label>
                   </div>
                   {enableExamTimer ? (
-                    <input
-                      type="number"
-                      value={durationMinutes}
-                      onChange={(e) => setDurationMinutes(Number(e.target.value))}
-                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-mono"
-                      min={5}
-                      placeholder="المدة بالدقائق"
-                    />
+                    <div className="space-y-1">
+                      <input
+                        type="number"
+                        value={durationMinutes}
+                        onChange={(e) => handleCreateDurationChange(Number(e.target.value))}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-mono"
+                        min={1}
+                        placeholder="المدة بالدقائق"
+                      />
+                      <p className="text-[10px] text-amber-300/90">
+                        يقسم تلقائياً على {createBankQuestionCount} سؤال = {questionDurationSeconds} ثانية/سؤال
+                      </p>
+                    </div>
                   ) : (
                     <div className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-emerald-400 font-bold">
                       بدون مؤقت كلي (مفتوح)
@@ -1443,19 +1603,42 @@ export default function AssessmentManager({
                 </div>
 
                 <div>
-                  <label className="text-xs text-slate-400 block mb-1">مؤقت اختياري لكل سؤال</label>
-                  <select
-                    value={questionDurationSeconds}
-                    onChange={(e) => setQuestionDurationSeconds(Number(e.target.value))}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-amber-300 font-bold"
-                  >
-                    <option value={0}>بدون مؤقت لكل سؤال</option>
-                    <option value={30}>30 ثانية لكل سؤال</option>
-                    <option value={45}>45 ثانية لكل سؤال</option>
-                    <option value={60}>60 ثانية (دقيقة) لكل سؤال</option>
-                    <option value={90}>90 ثانية لكل سؤال</option>
-                    <option value={120}>120 ثانية (دقيقتان) لكل سؤال</option>
-                  </select>
+                  <label className="text-xs text-slate-400 block mb-1">
+                    وقت السؤال (ثانية) ⇄ يحسب الوقت الكلي
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      min={0}
+                      max={600}
+                      value={questionDurationSeconds}
+                      onChange={(e) => handleCreateQuestionSecondsChange(Number(e.target.value))}
+                      className="w-20 px-2.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-amber-300 font-mono font-bold text-center"
+                    />
+                    <select
+                      value={[0, 20, 30, 45, 60, 90, 120].includes(questionDurationSeconds) ? questionDurationSeconds : 'custom'}
+                      onChange={(e) => {
+                        if (e.target.value !== 'custom') handleCreateQuestionSecondsChange(Number(e.target.value));
+                      }}
+                      className="flex-1 px-2.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-amber-300 font-bold"
+                    >
+                      <option value={0}>بدون مؤقت للسؤال</option>
+                      <option value={20}>20 ثانية / سؤال</option>
+                      <option value={30}>30 ثانية / سؤال</option>
+                      <option value={45}>45 ثانية / سؤال</option>
+                      <option value={60}>60 ثانية (دقيقة) / سؤال</option>
+                      <option value={90}>90 ثانية / سؤال</option>
+                      <option value={120}>120 ثانية / سؤال</option>
+                      {![0, 20, 30, 45, 60, 90, 120].includes(questionDurationSeconds) && (
+                        <option value="custom">{questionDurationSeconds} ثانية / سؤال (محسوب تلقائياً)</option>
+                      )}
+                    </select>
+                  </div>
+                  {questionDurationSeconds > 0 && (
+                    <p className="text-[10px] text-teal-300/90 mt-1">
+                      الوقت الكلي لـ {createBankQuestionCount} سؤال = {durationMinutes} دقيقة
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -2246,7 +2429,7 @@ export default function AssessmentManager({
                   <label className="text-slate-400 block mb-1">تحديث الأسئلة من بنك أسئلة (اختياري)</label>
                   <select
                     value={editAssessmentBankId}
-                    onChange={(e) => setEditAssessmentBankId(e.target.value)}
+                    onChange={(e) => handleEditBankSelectionChange(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
                   >
                     <option value="">-- الإبقاء على الأسئلة الحالية ({editingAssessment.questionIds?.length || 3}) --</option>
@@ -2260,7 +2443,10 @@ export default function AssessmentManager({
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="text-slate-400">مؤقت الاختبار الكلي</label>
+                    <label className="text-slate-400">
+                      مؤقت الاختبار الكلي (دقيقة)
+                      <span className="text-[10px] text-teal-400 mr-1">({editBankQuestionCount} سؤال)</span>
+                    </label>
                     <label className="flex items-center gap-1 text-[11px] text-teal-300 cursor-pointer">
                       <input
                         type="checkbox"
@@ -2272,13 +2458,18 @@ export default function AssessmentManager({
                     </label>
                   </div>
                   {editingAssessment.enableExamTimer !== false ? (
-                    <input
-                      type="number"
-                      value={editingAssessment.durationMinutes}
-                      onChange={(e) => setEditingAssessment({ ...editingAssessment, durationMinutes: Number(e.target.value) })}
-                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
-                      min={5}
-                    />
+                    <div className="space-y-1">
+                      <input
+                        type="number"
+                        value={editingAssessment.durationMinutes}
+                        onChange={(e) => handleEditDurationChange(Number(e.target.value))}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                        min={1}
+                      />
+                      <p className="text-[10px] text-amber-300/90">
+                        يقسم تلقائياً على {editBankQuestionCount} سؤال = {editingAssessment.questionDurationSeconds || 0} ثانية/سؤال
+                      </p>
+                    </div>
                   ) : (
                     <div className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-emerald-400 font-bold">
                       بدون مؤقت كلي (مفتوح)
@@ -2287,19 +2478,40 @@ export default function AssessmentManager({
                 </div>
 
                 <div>
-                  <label className="text-slate-400 block mb-1">مؤقت لكل سؤال (اختياري)</label>
-                  <select
-                    value={editingAssessment.questionDurationSeconds || 0}
-                    onChange={(e) => setEditingAssessment({ ...editingAssessment, questionDurationSeconds: Number(e.target.value) })}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-amber-300 font-bold"
-                  >
-                    <option value={0}>بدون مؤقت لكل سؤال</option>
-                    <option value={30}>30 ثانية / سؤال</option>
-                    <option value={45}>45 ثانية / سؤال</option>
-                    <option value={60}>60 ثانية / سؤال</option>
-                    <option value={90}>90 ثانية / سؤال</option>
-                    <option value={120}>120 ثانية / سؤال</option>
-                  </select>
+                  <label className="text-slate-400 block mb-1">وقت السؤال (ثانية) ⇄ الوقت الكلي</label>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      min={0}
+                      max={600}
+                      value={editingAssessment.questionDurationSeconds || 0}
+                      onChange={(e) => handleEditQuestionSecondsChange(Number(e.target.value))}
+                      className="w-20 px-2.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-amber-300 font-mono font-bold text-center"
+                    />
+                    <select
+                      value={[0, 20, 30, 45, 60, 90, 120].includes(editingAssessment.questionDurationSeconds || 0) ? (editingAssessment.questionDurationSeconds || 0) : 'custom'}
+                      onChange={(e) => {
+                        if (e.target.value !== 'custom') handleEditQuestionSecondsChange(Number(e.target.value));
+                      }}
+                      className="flex-1 px-2.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-amber-300 font-bold"
+                    >
+                      <option value={0}>بدون مؤقت لكل سؤال</option>
+                      <option value={20}>20 ثانية / سؤال</option>
+                      <option value={30}>30 ثانية / سؤال</option>
+                      <option value={45}>45 ثانية / سؤال</option>
+                      <option value={60}>60 ثانية / سؤال</option>
+                      <option value={90}>90 ثانية / سؤال</option>
+                      <option value={120}>120 ثانية / سؤال</option>
+                      {![0, 20, 30, 45, 60, 90, 120].includes(editingAssessment.questionDurationSeconds || 0) && (
+                        <option value="custom">{editingAssessment.questionDurationSeconds} ثانية / سؤال (تلقائي)</option>
+                      )}
+                    </select>
+                  </div>
+                  {(editingAssessment.questionDurationSeconds || 0) > 0 && (
+                    <p className="text-[10px] text-teal-300/90 mt-1">
+                      الوقت الكلي لـ {editBankQuestionCount} سؤال = {editingAssessment.durationMinutes} دقيقة
+                    </p>
+                  )}
                 </div>
 
                 <div>

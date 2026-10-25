@@ -1558,10 +1558,86 @@ export function parseBulkQuestionsInput(params: {
   }
 
   const validated = validateAndAnnotateDrafts(rawDrafts, bankId, existingBankQuestions);
+  const validCount = validated.filter(d => d.isValid).length || validated.length;
+
+  if (validCount > 0) {
+    if (detectedMetadata.questionDurationSeconds && detectedMetadata.questionDurationSeconds > 0) {
+      // Compute total duration from per-question timer × question count
+      const computedMinutes = Math.max(1, Math.ceil((detectedMetadata.questionDurationSeconds * validCount) / 60));
+      if (!detectedMetadata.durationMinutes || detectedMetadata.durationMinutes < computedMinutes) {
+        detectedMetadata.durationMinutes = computedMinutes;
+      }
+    } else if (detectedMetadata.durationMinutes && detectedMetadata.durationMinutes > 0 && detectedMetadata.questionDurationSeconds === undefined) {
+      // Compute per-question timer from total duration ÷ question count
+      detectedMetadata.questionDurationSeconds = Math.max(5, Math.round((detectedMetadata.durationMinutes * 60) / validCount));
+    }
+  }
+
   return {
     detectedFormat,
     drafts: validated,
     detectedMetadata
+  };
+}
+
+/**
+ * Bidirectional Timer Synchronization Helper:
+ * - When `changedField === 'questionSeconds'` (user picked per-question time):
+ *   Calculates `durationMinutes = Math.max(1, Math.ceil((questionDurationSeconds * count) / 60))`
+ * - When `changedField === 'totalMinutes'` (user picked total exam duration):
+ *   Calculates `questionDurationSeconds = Math.max(5, Math.round((durationMinutes * 60) / count))`
+ * - When `changedField === 'questionsCount'` (number of questions changed):
+ *   Recalculates the dependent timer based on `preferredDriver` ('questionSeconds' default if > 0, else 'totalMinutes').
+ */
+export function synchronizeExamTimers(params: {
+  questionsCount: number;
+  durationMinutes: number;
+  questionDurationSeconds: number;
+  changedField: 'questionSeconds' | 'totalMinutes' | 'questionsCount';
+  preferredDriver?: 'questionSeconds' | 'totalMinutes';
+}): {
+  durationMinutes: number;
+  questionDurationSeconds: number;
+  totalSeconds: number;
+} {
+  const count = Math.max(1, Math.round(params.questionsCount || 1));
+  let durationMinutes = Math.max(0, Number(params.durationMinutes) || 0);
+  let questionDurationSeconds = Math.max(0, Number(params.questionDurationSeconds) || 0);
+
+  if (params.changedField === 'questionSeconds') {
+    if (questionDurationSeconds > 0) {
+      const totalSec = questionDurationSeconds * count;
+      durationMinutes = Math.max(1, Math.ceil(totalSec / 60));
+      return { durationMinutes, questionDurationSeconds, totalSeconds: totalSec };
+    }
+    return { durationMinutes, questionDurationSeconds: 0, totalSeconds: durationMinutes * 60 };
+  }
+
+  if (params.changedField === 'totalMinutes') {
+    if (durationMinutes > 0) {
+      const totalSec = durationMinutes * 60;
+      questionDurationSeconds = Math.max(5, Math.round(totalSec / count));
+      return { durationMinutes, questionDurationSeconds, totalSeconds: totalSec };
+    }
+    return { durationMinutes: 0, questionDurationSeconds: 0, totalSeconds: 0 };
+  }
+
+  // changedField === 'questionsCount'
+  const driver = params.preferredDriver || (questionDurationSeconds > 0 ? 'questionSeconds' : 'totalMinutes');
+  if (driver === 'questionSeconds' && questionDurationSeconds > 0) {
+    const totalSec = questionDurationSeconds * count;
+    durationMinutes = Math.max(1, Math.ceil(totalSec / 60));
+    return { durationMinutes, questionDurationSeconds, totalSeconds: totalSec };
+  } else if (durationMinutes > 0) {
+    const totalSec = durationMinutes * 60;
+    questionDurationSeconds = Math.max(5, Math.round(totalSec / count));
+    return { durationMinutes, questionDurationSeconds, totalSeconds: totalSec };
+  }
+
+  return {
+    durationMinutes,
+    questionDurationSeconds,
+    totalSeconds: durationMinutes * 60
   };
 }
 

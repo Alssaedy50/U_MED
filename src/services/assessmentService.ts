@@ -815,25 +815,30 @@ export async function flushOfflineAssessmentOutbox(): Promise<number> {
       try {
         await setDoc(doc(db, 'assessments', item.assessment.id), cleanFirestoreData(item.assessment), { merge: true });
         if (Array.isArray(item.bankQuestions) && item.bankQuestions.length > 0) {
-          await Promise.all(
-            item.bankQuestions.map(async (q) => {
-              await setDoc(doc(db, 'assessmentQuestions', q.id), cleanFirestoreData({
-                id: q.id,
-                bankId: q.bankId,
-                stemArabic: q.stemArabic,
-                stemEnglish: q.stemEnglish || '',
-                options: q.options,
-                points: Number(q.points) || 5
-              }), { merge: true });
-              await setDoc(doc(db, 'questionAnswerKeys', q.id), cleanFirestoreData({
-                questionId: q.id,
-                assessmentId: item.assessment.id,
-                correctOptionId: q.correctOptionId,
-                explanationArabic: q.explanationArabic || '',
-                points: Number(q.points) || 5
-              }), { merge: true });
-            })
-          );
+          const CHUNK_SIZE = 25;
+          for (let i = 0; i < item.bankQuestions.length; i += CHUNK_SIZE) {
+            const chunk = item.bankQuestions.slice(i, i + CHUNK_SIZE);
+            await Promise.all(
+              chunk.map(async (q) => {
+                const pubQ = sanitizePublicQuestion(q);
+                try {
+                  localStorage.setItem(`${LOCAL_STORAGE_PREFIX}public_q_${q.id}`, JSON.stringify(pubQ));
+                } catch {}
+                await setDoc(doc(db, 'assessmentQuestions', q.id), cleanFirestoreData(pubQ), { merge: true });
+                await setDoc(doc(db, 'questionAnswerKeys', q.id), cleanFirestoreData({
+                  questionId: q.id,
+                  assessmentId: item.assessment.id,
+                  questionType: q.questionType || 'mcq',
+                  language: q.language,
+                  correctOptionId: q.correctOptionId,
+                  modelAnswerArabic: q.modelAnswerArabic || '',
+                  explanationArabic: q.explanationArabic || '',
+                  optionExplanations: q.optionExplanations,
+                  points: Number(q.points) || 5
+                }), { merge: true });
+              })
+            );
+          }
         }
         const token = await getIdTokenSafe();
         await fetch('/api/admin/sync-assessment-questions', {
@@ -918,25 +923,30 @@ export async function createAssessment(
   try {
     await setDoc(doc(db, 'assessments', id), cleanFirestoreData(newAssessment));
     if (Array.isArray(bankQuestions) && bankQuestions.length > 0) {
-      await Promise.all(
-        bankQuestions.map(async (q) => {
-          await setDoc(doc(db, 'assessmentQuestions', q.id), cleanFirestoreData({
-            id: q.id,
-            bankId: q.bankId,
-            stemArabic: q.stemArabic,
-            stemEnglish: q.stemEnglish || '',
-            options: q.options,
-            points: Number(q.points) || 5
-          }), { merge: true });
-          await setDoc(doc(db, 'questionAnswerKeys', q.id), cleanFirestoreData({
-            questionId: q.id,
-            assessmentId: id,
-            correctOptionId: q.correctOptionId,
-            explanationArabic: q.explanationArabic || '',
-            points: Number(q.points) || 5
-          }), { merge: true });
-        })
-      );
+      const CHUNK_SIZE = 25;
+      for (let i = 0; i < bankQuestions.length; i += CHUNK_SIZE) {
+        const chunk = bankQuestions.slice(i, i + CHUNK_SIZE);
+        await Promise.all(
+          chunk.map(async (q) => {
+            const pubQ = sanitizePublicQuestion(q);
+            try {
+              localStorage.setItem(`${LOCAL_STORAGE_PREFIX}public_q_${q.id}`, JSON.stringify(pubQ));
+            } catch {}
+            await setDoc(doc(db, 'assessmentQuestions', q.id), cleanFirestoreData(pubQ), { merge: true });
+            await setDoc(doc(db, 'questionAnswerKeys', q.id), cleanFirestoreData({
+              questionId: q.id,
+              assessmentId: id,
+              questionType: q.questionType || 'mcq',
+              language: q.language,
+              correctOptionId: q.correctOptionId,
+              modelAnswerArabic: q.modelAnswerArabic || '',
+              explanationArabic: q.explanationArabic || '',
+              optionExplanations: q.optionExplanations,
+              points: Number(q.points) || 5
+            }), { merge: true });
+          })
+        );
+      }
     }
     cloudSynced = true;
   } catch (err) {
@@ -1012,25 +1022,30 @@ export async function updateAssessment(
   try {
     await setDoc(doc(db, 'assessments', assessmentId), cleanFirestoreData(updatedAssessment), { merge: true });
     if (Array.isArray(bankQuestions) && bankQuestions.length > 0) {
-      await Promise.all(
-        bankQuestions.map(async (q) => {
-          await setDoc(doc(db, 'assessmentQuestions', q.id), cleanFirestoreData({
-            id: q.id,
-            bankId: q.bankId,
-            stemArabic: q.stemArabic,
-            stemEnglish: q.stemEnglish || '',
-            options: q.options,
-            points: Number(q.points) || 5
-          }), { merge: true });
-          await setDoc(doc(db, 'questionAnswerKeys', q.id), cleanFirestoreData({
-            questionId: q.id,
-            assessmentId,
-            correctOptionId: q.correctOptionId,
-            explanationArabic: q.explanationArabic || '',
-            points: Number(q.points) || 5
-          }), { merge: true });
-        })
-      );
+      const CHUNK_SIZE = 25;
+      for (let i = 0; i < bankQuestions.length; i += CHUNK_SIZE) {
+        const chunk = bankQuestions.slice(i, i + CHUNK_SIZE);
+        await Promise.all(
+          chunk.map(async (q) => {
+            const pubQ = sanitizePublicQuestion(q);
+            try {
+              localStorage.setItem(`${LOCAL_STORAGE_PREFIX}public_q_${q.id}`, JSON.stringify(pubQ));
+            } catch {}
+            await setDoc(doc(db, 'assessmentQuestions', q.id), cleanFirestoreData(pubQ), { merge: true });
+            await setDoc(doc(db, 'questionAnswerKeys', q.id), cleanFirestoreData({
+              questionId: q.id,
+              assessmentId,
+              questionType: q.questionType || 'mcq',
+              language: q.language,
+              correctOptionId: q.correctOptionId,
+              modelAnswerArabic: q.modelAnswerArabic || '',
+              explanationArabic: q.explanationArabic || '',
+              optionExplanations: q.optionExplanations,
+              points: Number(q.points) || 5
+            }), { merge: true });
+          })
+        );
+      }
     }
   } catch (err) {
     enqueueOfflineAssessmentSync(updatedAssessment, bankQuestions);
@@ -1212,6 +1227,27 @@ export async function fetchPublicQuestionsForAssessment(questionIds: string[]): 
   const defaultMap: Record<string, AssessmentQuestionPublic> = {};
   DEFAULT_PUBLIC_QUESTIONS.forEach(q => { defaultMap[q.id] = q; });
 
+  // Also build a local bank question lookup map so newly imported questions (even if still syncing) resolve 100%
+  const localBankPubMap = new Map<string, AssessmentQuestionPublic>();
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('umed_assessment_q_') && !key.startsWith('umed_assessment_q_init_')) {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const list = JSON.parse(raw) as QuestionItemFull[];
+          if (Array.isArray(list)) {
+            list.forEach((fullQ) => {
+              if (fullQ && fullQ.id) {
+                localBankPubMap.set(fullQ.id, sanitizePublicQuestion(fullQ));
+              }
+            });
+          }
+        }
+      }
+    }
+  } catch {}
+
   // Fetch all questions in parallel with local offline cache fallback
   const fetched = await Promise.all(
     questionIds.map(async (qId) => {
@@ -1224,10 +1260,12 @@ export async function fetchPublicQuestionsForAssessment(questionIds: string[]): 
             const item: AssessmentQuestionPublic = {
               id: d.id || qId,
               bankId: d.bankId,
+              questionType: d.questionType || 'mcq',
+              language: d.language,
               stemArabic: d.stemArabic,
               stemEnglish: d.stemEnglish,
               imageUrl: d.imageUrl,
-              options: d.options,
+              options: d.options || [],
               points: Number(d.points) || 5
             };
             try {
@@ -1238,13 +1276,22 @@ export async function fetchPublicQuestionsForAssessment(questionIds: string[]): 
         }
       } catch (e) {}
 
-      // Fallback to cached public question in localStorage when offline
+      // Fallback 1: cached public question in localStorage
       try {
         const cachedRaw = localStorage.getItem(cacheKey);
         if (cachedRaw) {
           return JSON.parse(cachedRaw) as AssessmentQuestionPublic;
         }
       } catch (e) {}
+
+      // Fallback 2: local bank question mirror
+      const fromLocalBank = localBankPubMap.get(qId);
+      if (fromLocalBank) {
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify(fromLocalBank));
+        } catch {}
+        return fromLocalBank;
+      }
 
       return defaultMap[qId] || null;
     })
@@ -1267,14 +1314,29 @@ export async function startAttemptServer(
 }> {
   const token = await getIdTokenSafe();
   const uid = auth.currentUser?.uid || 'student-user';
-  const durationMinutes = assessmentObj?.durationMinutes || 45;
-  const maxAttempts = assessmentObj?.maxAttempts || 1;
   const questionIds = assessmentObj?.questionIds?.length
     ? assessmentObj.questionIds
     : ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
 
+  const perQuestionSeconds = Number(assessmentObj?.questionDurationSeconds || 0);
+  const minDurationFromPerQuestion =
+    perQuestionSeconds > 0 ? Math.max(1, Math.ceil((questionIds.length * perQuestionSeconds) / 60)) : 0;
+  const isUntimed = assessmentObj?.enableExamTimer === false && perQuestionSeconds <= 0;
+  const rawDuration = Number(assessmentObj?.durationMinutes || 0);
+  const durationMinutes = isUntimed
+    ? 1440 // 24 hours window for untimed open exams
+    : Math.max(rawDuration > 0 ? rawDuration : 45, minDurationFromPerQuestion);
+
+  const maxAttempts = assessmentObj?.maxAttempts || 1;
+
   // Fetch public questions from Firestore or offline local cache
   let firestoreQuestions = await fetchPublicQuestionsForAssessment(questionIds);
+  if (firestoreQuestions.length < questionIds.length && assessmentObj) {
+    const localSync = findLocalQuestionsForAssessmentSync(assessmentObj);
+    if (localSync.publicQuestions.length > firestoreQuestions.length) {
+      firestoreQuestions = localSync.publicQuestions;
+    }
+  }
   if (firestoreQuestions.length === 0) {
     try {
       const cachedSet = localStorage.getItem(`${LOCAL_STORAGE_PREFIX}cached_questions_${assessmentId}`);
@@ -1294,6 +1356,14 @@ export async function startAttemptServer(
   );
 
   if (activeLocalOrRemoteAttempt) {
+    // Ensure expiresAt is never shorter than the required duration for all questions
+    const minRequiredExpiry = new Date(
+      new Date(activeLocalOrRemoteAttempt.startedAt).getTime() + durationMinutes * 60 * 1000
+    ).getTime();
+    if (new Date(activeLocalOrRemoteAttempt.expiresAt).getTime() < minRequiredExpiry) {
+      activeLocalOrRemoteAttempt.expiresAt = new Date(minRequiredExpiry).toISOString();
+      saveLocalStudentAttempt(uid, activeLocalOrRemoteAttempt);
+    }
     return {
       attempt: activeLocalOrRemoteAttempt,
       questions: firestoreQuestions
@@ -1366,7 +1436,10 @@ export async function startAttemptServer(
     } catch (e) {}
   }
 
-  const questionsToUse = serverQuestions.length > 0 ? serverQuestions : firestoreQuestions;
+  // CRITICAL: Prefer whichever source has the full set of questions (never let a partial server cache truncate firestoreQuestions)
+  const questionsToUse =
+    firestoreQuestions.length >= serverQuestions.length ? firestoreQuestions : serverQuestions;
+
   try {
     localStorage.setItem(
       `${LOCAL_STORAGE_PREFIX}cached_questions_${assessmentId}`,
@@ -2765,19 +2838,11 @@ export async function publishSharedAssessmentSnapshot(
           points: Number(q.points) || 5
         };
       }
-      return {
-        id: q.id,
-        bankId: q.bankId,
-        stemArabic: q.stemArabic,
-        stemEnglish: q.stemEnglish,
-        imageUrl: q.imageUrl,
-        options: q.options,
-        points: Number(q.points) || 5
-      };
+      return sanitizePublicQuestion(q as QuestionItemFull);
     });
   } else if (assessment.questionIds?.length) {
     const fetched = await fetchPublicQuestionsForAssessment(assessment.questionIds).catch(() => []);
-    if (fetched.length > 0) {
+    if (fetched.length > publicQuestions.length) {
       publicQuestions = fetched;
     }
   }
@@ -2858,10 +2923,15 @@ export function buildShareableAssessmentUrl(
   let encodedBundle = '';
   if (assessmentObj) {
     const syncData = findLocalQuestionsForAssessmentSync(assessmentObj);
-    const qs = (questionsInput && questionsInput.length > 0 ? questionsInput : syncData.publicQuestions).slice(0, 25);
-    publishSharedAssessmentSnapshot(assessmentObj, qs).catch(() => {});
+    // CRITICAL FIX: NEVER slice/truncate questions passed to publishSharedAssessmentSnapshot!
+    // Always publish ALL questions (e.g. all 111 questions) so students receive the complete exam.
+    const allQuestions =
+      questionsInput && questionsInput.length >= syncData.publicQuestions.length
+        ? questionsInput
+        : syncData.publicQuestions;
+    publishSharedAssessmentSnapshot(assessmentObj, allQuestions).catch(() => {});
 
-    // Embed compact self-contained snapshot so the link opens in 0ms on any browser/device even before Firestore connects
+    // Embed compact self-contained URL snapshot ONLY if the entire exam fits within URL length limits
     const compactPayload = {
       a: {
         id: assessmentObj.id,
@@ -2879,8 +2949,9 @@ export function buildShareableAssessmentUrl(
         tp: assessmentObj.totalPoints,
         qIds: assessmentObj.questionIds
       },
-      q: qs.map((item) => ({
+      q: allQuestions.map((item) => ({
         i: item.id,
+        qt: item.questionType,
         s: item.stemArabic,
         e: item.stemEnglish || '',
         p: item.points || 5,
@@ -3074,25 +3145,36 @@ export function getCachedSharedAssessmentSync(
   if (!assessmentId) return null;
   const normalizedId = assessmentId === 'exam-cvs-midterm' ? 'asmnt-cvs-midterm' : assessmentId;
 
+  const localAssessment = findLocalAssessmentById(normalizedId);
+  const localResolved = localAssessment ? findLocalQuestionsForAssessmentSync(localAssessment) : null;
+
   try {
     const rawBundle = localStorage.getItem(`${SHARED_BUNDLE_CACHE_PREFIX}${normalizedId}`);
     if (rawBundle) {
       const parsed = JSON.parse(rawBundle) as SharedAssessmentBundle;
       if (parsed?.assessment && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
-        return {
-          assessment: parsed.assessment,
-          questions: parsed.questions
-        };
+        const expectedCount = parsed.assessment.questionIds?.length || 0;
+        // If local bank has more complete questions than a previously truncated bundle, prefer the complete set
+        if (localResolved && localResolved.publicQuestions.length > parsed.questions.length) {
+          return {
+            assessment: localAssessment || parsed.assessment,
+            questions: localResolved.publicQuestions
+          };
+        }
+        if (expectedCount === 0 || parsed.questions.length >= expectedCount) {
+          return {
+            assessment: parsed.assessment,
+            questions: parsed.questions
+          };
+        }
       }
     }
   } catch {}
 
-  const localAssessment = findLocalAssessmentById(normalizedId);
-  if (localAssessment) {
-    const { publicQuestions } = findLocalQuestionsForAssessmentSync(localAssessment);
+  if (localAssessment && localResolved) {
     return {
       assessment: localAssessment,
-      questions: publicQuestions
+      questions: localResolved.publicQuestions
     };
   }
 
@@ -3106,26 +3188,32 @@ export async function fetchSharedAssessmentForGuest(
   const assessmentId =
     rawAssessmentId.trim() === 'exam-cvs-midterm' ? 'asmnt-cvs-midterm' : rawAssessmentId.trim();
 
-  // 0. Check decoded URL / localStorage shared bundle first (instant 0ms)
+  let foundAssessment: Assessment | null = findLocalAssessmentById(assessmentId);
+  let bundleQuestions: AssessmentQuestionPublic[] = [];
+
+  // 0. Check decoded URL / localStorage shared bundle first
   try {
     const rawBundle = localStorage.getItem(`${SHARED_BUNDLE_CACHE_PREFIX}${assessmentId}`);
     if (rawBundle) {
       const parsed = JSON.parse(rawBundle) as SharedAssessmentBundle;
-      if (parsed?.assessment && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+      if (parsed?.assessment) {
+        foundAssessment = parsed.assessment;
+      }
+      if (Array.isArray(parsed?.questions) && parsed.questions.length > 0) {
+        bundleQuestions = parsed.questions;
+      }
+      const expectedCount = foundAssessment?.questionIds?.length || 0;
+      if (foundAssessment && bundleQuestions.length > 0 && (expectedCount === 0 || bundleQuestions.length >= expectedCount)) {
         return {
-          assessment: parsed.assessment,
-          questions: parsed.questions
+          assessment: foundAssessment,
+          questions: bundleQuestions
         };
       }
     }
   } catch {}
 
-  let foundAssessment: Assessment | null = findLocalAssessmentById(assessmentId);
-  let bundleQuestions: AssessmentQuestionPublic[] = [];
-
   if (typeof navigator === 'undefined' || navigator.onLine) {
     // 1. Check Publicly Readable `uniqueIdentifiers/shared_exam_${assessmentId}` on Firestore
-    // (100% readable by unauthenticated guests on live `umed-yemen`)
     try {
       const pubSnap = await getDoc(doc(db, 'uniqueIdentifiers', `shared_exam_${assessmentId}`));
       if (pubSnap.exists()) {
@@ -3133,10 +3221,11 @@ export async function fetchSharedAssessmentForGuest(
         if (d?.assessment) {
           foundAssessment = d.assessment as Assessment;
         }
-        if (Array.isArray(d?.questions) && d.questions.length > 0) {
+        if (Array.isArray(d?.questions) && d.questions.length > bundleQuestions.length) {
           bundleQuestions = d.questions as AssessmentQuestionPublic[];
         }
-        if (foundAssessment && bundleQuestions.length > 0) {
+        const expectedCount = foundAssessment?.questionIds?.length || 0;
+        if (foundAssessment && bundleQuestions.length > 0 && (expectedCount === 0 || bundleQuestions.length >= expectedCount)) {
           try {
             localStorage.setItem(
               `${SHARED_BUNDLE_CACHE_PREFIX}${assessmentId}`,
@@ -3164,7 +3253,7 @@ export async function fetchSharedAssessmentForGuest(
         if (d?.assessment && !foundAssessment) {
           foundAssessment = d.assessment as Assessment;
         }
-        if (Array.isArray(d?.questions) && d.questions.length > 0 && bundleQuestions.length === 0) {
+        if (Array.isArray(d?.questions) && d.questions.length > bundleQuestions.length) {
           bundleQuestions = d.questions as AssessmentQuestionPublic[];
         }
       }
@@ -3178,7 +3267,7 @@ export async function fetchSharedAssessmentForGuest(
         if (data.assessment && !foundAssessment) {
           foundAssessment = data.assessment as Assessment;
         }
-        if (Array.isArray(data.questions) && data.questions.length > 0 && bundleQuestions.length === 0) {
+        if (Array.isArray(data.questions) && data.questions.length > bundleQuestions.length) {
           bundleQuestions = data.questions;
         }
       }
@@ -3212,9 +3301,24 @@ export async function fetchSharedAssessmentForGuest(
     ? foundAssessment.questionIds
     : ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
 
-  let questions = bundleQuestions.length > 0
-    ? bundleQuestions
-    : await fetchPublicQuestionsForAssessment(questionIds);
+  // If bundleQuestions was previously truncated (e.g., 25 questions while questionIds has 111), fetch all questionIds!
+  let questions = bundleQuestions;
+  if (questions.length < questionIds.length) {
+    const localSync = findLocalQuestionsForAssessmentSync(foundAssessment);
+    if (localSync.publicQuestions.length > questions.length) {
+      questions = localSync.publicQuestions;
+    }
+    if (questions.length < questionIds.length) {
+      const fetchedAll = await fetchPublicQuestionsForAssessment(questionIds);
+      if (fetchedAll.length > questions.length) {
+        questions = fetchedAll;
+      }
+    }
+    // Re-publish repaired full snapshot so future loads are instant with all 111 questions
+    if (questions.length > bundleQuestions.length) {
+      publishSharedAssessmentSnapshot(foundAssessment, questions).catch(() => {});
+    }
+  }
 
   if (questions.length === 0) {
     questions = DEFAULT_PUBLIC_QUESTIONS;

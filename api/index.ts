@@ -951,14 +951,20 @@ app.post('/api/assessments/start-attempt', optionalAuth, (req: AuthenticatedRequ
     if (!assessmentId) return res.status(400).json({ error: 'معرف الاختبار مطلوب' });
 
     const storedAssessment = assessmentsStore[assessmentId];
-    const durationMinutes = Number(reqDuration || storedAssessment?.durationMinutes || 45);
-    const maxAttempts = Number(reqMaxAttempts || storedAssessment?.maxAttempts || 1);
-    const now = new Date();
-
     const targetIds: string[] =
       (Array.isArray(questionIds) && questionIds.length > 0 ? questionIds : null) ||
       (storedAssessment?.questionIds?.length ? storedAssessment.questionIds : null) ||
       ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
+
+    const perQSec = Number(storedAssessment?.questionDurationSeconds || 0);
+    const minMinutesFromPerQ = perQSec > 0 ? Math.max(1, Math.ceil((targetIds.length * perQSec) / 60)) : 0;
+    const rawDuration = Number(reqDuration !== undefined ? reqDuration : (storedAssessment?.durationMinutes ?? 45));
+    const durationMinutes =
+      rawDuration <= 0 && perQSec <= 0
+        ? 1440
+        : Math.max(rawDuration > 0 ? rawDuration : 45, minMinutesFromPerQ);
+    const maxAttempts = Number(reqMaxAttempts || storedAssessment?.maxAttempts || 1);
+    const now = new Date();
 
     // Check existing attempts for this student & assessment
     const userAttempts = Object.values(attemptsStore).filter(
@@ -972,7 +978,16 @@ app.post('/api/assessments/start-attempt', optionalAuth, (req: AuthenticatedRequ
 
     let attempt = activeAttempt;
 
-    if (!attempt) {
+    if (attempt) {
+      if (targetIds.length > (attempt.questionIds?.length || 0)) {
+        attempt.questionIds = targetIds;
+      }
+      const minRequiredExp = new Date(new Date(attempt.startedAt).getTime() + durationMinutes * 60 * 1000).getTime();
+      if (new Date(attempt.expiresAt).getTime() < minRequiredExp) {
+        attempt.expiresAt = new Date(minRequiredExp).toISOString();
+      }
+      saveJsonSafe(ATTEMPTS_FILE, attemptsStore);
+    } else {
       // 2. Count completed/scored attempts and enforce maxAttempts
       const scoredCount = userAttempts.filter((a: any) => a.status === 'scored' || a.status === 'submitted').length;
       if (scoredCount >= maxAttempts) {
@@ -1284,19 +1299,27 @@ app.post('/api/assessments/register-shared', optionalAuth, (req: AuthenticatedRe
   try {
     const { assessment, questions } = req.body;
     if (assessment && assessment.id) {
+      const prev = assessmentsStore[assessment.id];
+      const mergedQuestionIds =
+        Array.isArray(assessment.questionIds) &&
+        assessment.questionIds.length >= (prev?.questionIds?.length || 0)
+          ? assessment.questionIds
+          : prev?.questionIds || assessment.questionIds || [];
       assessmentsStore[assessment.id] = {
-        ...(assessmentsStore[assessment.id] || {}),
-        ...assessment
+        ...(prev || {}),
+        ...assessment,
+        questionIds: mergedQuestionIds
       };
       saveJsonSafe(ASSESSMENTS_FILE, assessmentsStore);
     }
     if (Array.isArray(questions) && questions.length > 0) {
       questions.forEach((q: any) => {
-        if (q && q.id && q.stemArabic && Array.isArray(q.options)) {
+        if (q && q.id && q.stemArabic) {
           const existing = questionsStore[q.id];
           questionsStore[q.id] = {
             ...(existing || {}),
             ...q,
+            options: Array.isArray(q.options) ? q.options : existing?.options || [],
             correctOptionId: q.correctOptionId || existing?.correctOptionId || 'opt-a',
             points: Number(q.points || existing?.points) || 5
           };

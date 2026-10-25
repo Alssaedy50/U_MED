@@ -11,7 +11,7 @@
  * - Ranked Leaderboard & Student Display Name / Username Visibility Selector
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Clock, 
   CheckCircle2, 
@@ -104,26 +104,48 @@ export default function ExamTakingModal({
     attempt.startedAt ? new Date(attempt.startedAt).getTime() : Date.now()
   );
 
-  // Full Exam Timer state (Optional)
-  const isExamTimerEnabled =
-    assessment.enableExamTimer !== false && Number(assessment.durationMinutes) > 0;
-
-  const [timeLeftSeconds, setTimeLeftSeconds] = useState<number>(() => {
-    if (!isExamTimerEnabled) return 0;
-    const expireTime = new Date(attempt.expiresAt).getTime();
-    const nowTime = Date.now();
-    const diff = Math.floor((expireTime - nowTime) / 1000);
-    return diff > 0 ? diff : Number(assessment.durationMinutes || 30) * 60;
-  });
-
   // Per-Question Timer state (Optional)
   const perQuestionDuration = Number(assessment.questionDurationSeconds || 0);
   const isQuestionTimerEnabled = perQuestionDuration > 0;
   const [questionTimeLeft, setQuestionTimeLeft] = useState<number>(perQuestionDuration);
 
+  // Full Exam Timer state (Synchronized with per-question timer × questions.length)
+  const effectiveExamDurationSeconds = useMemo(() => {
+    const fromMinutes = Number(assessment.durationMinutes || 0) * 60;
+    const fromPerQuestion = perQuestionDuration > 0 ? questions.length * perQuestionDuration : 0;
+    return Math.max(fromMinutes, fromPerQuestion);
+  }, [assessment.durationMinutes, perQuestionDuration, questions.length]);
+
+  const isExamTimerEnabled =
+    (assessment.enableExamTimer !== false && Number(assessment.durationMinutes) > 0) ||
+    perQuestionDuration > 0;
+
+  const examDeadlineRef = useRef<number>(
+    Math.max(
+      attempt.expiresAt ? new Date(attempt.expiresAt).getTime() : 0,
+      Date.now() + (effectiveExamDurationSeconds || 1800) * 1000
+    )
+  );
+
+  const [timeLeftSeconds, setTimeLeftSeconds] = useState<number>(() => {
+    if (!isExamTimerEnabled) return 0;
+    const diff = Math.floor((examDeadlineRef.current - Date.now()) / 1000);
+    return diff > 0 ? diff : effectiveExamDurationSeconds || 1800;
+  });
+
   const [result, setResult] = useState<AssessmentResult | null>(null);
   const [queuedOfflineSubmit, setQueuedOfflineSubmit] = useState<boolean>(false);
   const saveTimeoutRef = useRef<any>(null);
+
+  // Ensure deadline is refreshed when questions finish loading or when guest passes the identity gate
+  useEffect(() => {
+    if (!isExamTimerEnabled || result) return;
+    const minDeadline = startedAtTimestampRef.current + effectiveExamDurationSeconds * 1000;
+    if (examDeadlineRef.current < minDeadline) {
+      examDeadlineRef.current = minDeadline;
+      setTimeLeftSeconds(Math.max(1, Math.floor((examDeadlineRef.current - Date.now()) / 1000)));
+    }
+  }, [effectiveExamDurationSeconds, isExamTimerEnabled, result]);
 
   // Reset per-question timer whenever the question changes
   useEffect(() => {
@@ -167,9 +189,8 @@ export default function ExamTakingModal({
     if (!isExamTimerEnabled || result || showMandatoryGuestGate) return;
 
     const timer = setInterval(() => {
-      const expireTime = new Date(attempt.expiresAt).getTime();
       const nowTime = Date.now();
-      const remaining = Math.max(0, Math.floor((expireTime - nowTime) / 1000));
+      const remaining = Math.max(0, Math.floor((examDeadlineRef.current - nowTime) / 1000));
       setTimeLeftSeconds(remaining);
 
       if (remaining === 0 && !submitting && !result) {
@@ -179,7 +200,7 @@ export default function ExamTakingModal({
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [isExamTimerEnabled, attempt.expiresAt, result, submitting, showMandatoryGuestGate, isGuestMode, answers]);
+  }, [isExamTimerEnabled, result, submitting, showMandatoryGuestGate, isGuestMode, answers]);
 
   // Load Leaderboard when result is shown
   useEffect(() => {

@@ -556,6 +556,13 @@ export async function enqueueQuestionsUpsert(
     byHash.set(hash, canonicalId);
     preparedQuestions.push(finalizedQ);
 
+    try {
+      localStorage.setItem(
+        `umed_assessment_public_q_${canonicalId}`,
+        JSON.stringify(sanitizePublicQuestion(finalizedQ))
+      );
+    } catch {}
+
     const outboxId = `outbox_${bankId}_${canonicalId}`;
     const entry: QuestionOutboxEntry = {
       id: outboxId,
@@ -671,8 +678,8 @@ export async function flushQuestionOutbox(): Promise<{
     const syncedDeletesForServer: string[] = [];
     const affectedBanks = new Set<string>();
 
-    // Process in batches of 4 for fast, non-blocking throughput
-    const BATCH_SIZE = 4;
+    // Process in batches of 25 for fast throughput on large banks (e.g. 100+ questions)
+    const BATCH_SIZE = 25;
     for (let i = 0; i < entries.length; i += BATCH_SIZE) {
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
         break; // Pause immediately if connection drops mid-flight

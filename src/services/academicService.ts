@@ -714,14 +714,82 @@ export async function toggleStudyPeriodActive(periodId: string, currentStatus: b
   }
 }
 
-export async function deleteStudyPeriod(periodId: string, forceCascade: boolean = false): Promise<void> {
+export async function archiveStudyPeriod(periodId: string, archive: boolean = true): Promise<void> {
+  const current = await ensureCollectionInitialized<StudyPeriod>('studyPeriods', 'studyPeriods');
+  const target = current.find(p => p.id === periodId);
+  const now = new Date().toISOString();
+
+  if (target) {
+    await upsertHybridItem<StudyPeriod>('studyPeriods', 'studyPeriods', {
+      ...target,
+      isArchived: archive,
+      archivedAt: archive ? now : undefined
+    });
+  } else {
+    try {
+      await updateDoc(doc(db, 'studyPeriods', periodId), { 
+        isArchived: archive,
+        archivedAt: archive ? now : undefined 
+      });
+    } catch (e) {}
+  }
+}
+
+export async function fetchActiveStudyPeriods(studyLevelId?: string, universityId?: string): Promise<StudyPeriod[]> {
+  const all = await fetchStudyPeriods(studyLevelId, universityId);
+  return all.filter(p => !p.isArchived && p.isActive !== false);
+}
+
+export async function fetchArchivedStudyPeriods(studyLevelId?: string, universityId?: string): Promise<StudyPeriod[]> {
+  const all = await fetchStudyPeriods(studyLevelId, universityId);
+  return all.filter(p => p.isArchived === true);
+}
+
+export async function deleteStudyPeriod(periodId: string, forceCascade: boolean = true): Promise<void> {
   if (forceCascade) {
     const courses = await fetchCourseOfferings(periodId);
     for (const course of courses) {
       await deleteCourseOffering(course.id);
     }
+
+    // Cascade purge educational resources linked to this block
+    try {
+      const resRaw = localStorage.getItem('umed_educational_resources');
+      if (resRaw) {
+        const resources = JSON.parse(resRaw) as any[];
+        const filteredRes = resources.filter(r => r.studyPeriodId !== periodId);
+        localStorage.setItem('umed_educational_resources', JSON.stringify(filteredRes));
+      }
+    } catch (e) {}
+
+    // Cascade purge question banks linked to this block
+    try {
+      const banksRaw = localStorage.getItem('umed_question_banks');
+      if (banksRaw) {
+        const banks = JSON.parse(banksRaw) as any[];
+        const filteredBanks = banks.filter(b => b.studyPeriodId !== periodId && b.blockId !== periodId);
+        localStorage.setItem('umed_question_banks', JSON.stringify(filteredBanks));
+      }
+    } catch (e) {}
   }
+
+  // Remove from studyPeriods and register in deletedIds
   await removeHybridItem<StudyPeriod>('studyPeriods', 'studyPeriods', periodId);
+
+  // If current active academic context references this deleted block, reset it cleanly
+  try {
+    const currentCtx = getUserAcademicContext();
+    if (currentCtx.studyPeriodId === periodId) {
+      const remainingPeriods = (await fetchActiveStudyPeriods(currentCtx.studyLevelId, currentCtx.universityId));
+      const nextPeriod = remainingPeriods[0];
+      saveUserAcademicContext({
+        studyPeriodId: nextPeriod?.id || '',
+        studyPeriodName: nextPeriod?.titleArabic || '',
+        studyPeriodNameArabic: nextPeriod?.titleArabic || '',
+        blockName: nextPeriod?.titleArabic || ''
+      });
+    }
+  } catch (e) {}
 }
 
 // ---------------------------------------------------------------------------
