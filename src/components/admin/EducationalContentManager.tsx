@@ -97,8 +97,16 @@ export default function EducationalContentManager({
   const [editPeriods, setEditPeriods] = useState<StudyPeriod[]>([]);
   const [editCourses, setEditCourses] = useState<CourseOffering[]>([]);
 
-  // Persistent User Academic Context
+  // Persistent User Academic Context & Inline Filter State
   const [userContext, setUserContext] = useState(() => getUserAcademicContext());
+  const [filterLevelId, setFilterLevelId] = useState<string>(() => {
+    const ctx = getUserAcademicContext();
+    return isBatchScoped && assignedStudyLevelId ? assignedStudyLevelId : (ctx.studyLevelId || 'all');
+  });
+  const [filterPeriodId, setFilterPeriodId] = useState<string>('all');
+  const [filterCourseId, setFilterCourseId] = useState<string>('all');
+  const [filterPeriodsList, setFilterPeriodsList] = useState<StudyPeriod[]>([]);
+  const [filterCoursesList, setFilterCoursesList] = useState<CourseOffering[]>([]);
 
   // Form State for Add Resource
   const [form, setForm] = useState(() => {
@@ -189,6 +197,8 @@ export default function EducationalContentManager({
         : rawCrs;
       const finalCrs = crs.length > 0 ? crs : rawCrs;
       setCourses(finalCrs);
+      setFilterPeriodsList(periods);
+      setFilterCoursesList(finalCrs);
 
       setForm(prev => ({
         ...prev,
@@ -514,31 +524,64 @@ export default function EducationalContentManager({
     return found ? found.titleArabic : lvlId;
   };
 
+  const handleFilterLevelChange = async (lvlId: string) => {
+    setFilterLevelId(lvlId);
+    setFilterPeriodId('all');
+    setFilterCourseId('all');
+    if (lvlId && lvlId !== 'all') {
+      const periods = await fetchStudyPeriods(lvlId);
+      setFilterPeriodsList(periods);
+      const allCrs: CourseOffering[] = [];
+      for (const p of periods) {
+        const crs = await fetchCourseOfferings(p.id);
+        allCrs.push(...crs);
+      }
+      setFilterCoursesList(allCrs);
+    } else {
+      setFilterPeriodsList([]);
+      setFilterCoursesList([]);
+    }
+  };
+
+  const handleFilterPeriodChange = async (periodId: string) => {
+    setFilterPeriodId(periodId);
+    setFilterCourseId('all');
+    if (periodId && periodId !== 'all') {
+      const crs = await fetchCourseOfferings(periodId);
+      setFilterCoursesList(crs);
+    } else if (filterLevelId && filterLevelId !== 'all') {
+      const allCrs: CourseOffering[] = [];
+      for (const p of filterPeriodsList) {
+        const crs = await fetchCourseOfferings(p.id);
+        allCrs.push(...crs);
+      }
+      setFilterCoursesList(allCrs);
+    }
+  };
+
   const filtered = resources.filter(r => {
     const matchStatus = statusFilter === 'all' || r.status === statusFilter;
     const matchType = typeFilter === 'all' || r.resourceType === typeFilter;
-    const matchScope =
-      !userContext.strictScope ||
-      ((!userContext.universityId || !r.universityId || r.universityId === userContext.universityId) &&
-        (!userContext.studyLevelId || !r.studyLevelId || r.studyLevelId === userContext.studyLevelId));
-    return matchStatus && matchType && matchScope;
+    const matchUniv = !userContext.universityId || !r.universityId || r.universityId === userContext.universityId;
+    const matchLevel = filterLevelId === 'all' || !r.studyLevelId || r.studyLevelId === filterLevelId;
+    const matchPeriod = filterPeriodId === 'all' || r.studyPeriodId === filterPeriodId;
+    const matchCourse = filterCourseId === 'all' || r.courseOfferingId === filterCourseId;
+    return matchStatus && matchType && matchUniv && matchLevel && matchPeriod && matchCourse;
   });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       
       {/* Top Banner */}
-      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-wrap items-center justify-between gap-4">
+      <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-4 sm:p-5 shadow-sm flex flex-wrap items-center justify-between gap-4 overflow-hidden">
         <div>
-          <div className="flex items-center gap-2 mb-1 text-xs text-teal-300 font-semibold">
+          <div className="flex items-center gap-2 mb-1 text-xs text-teal-400 font-semibold">
             <span>إدارة المحتوى والمكتبة الرقمية</span>
-            <span>·</span>
-            <span className="text-slate-400 font-mono">Educational Content Hub</span>
           </div>
-          <h2 className="text-lg sm:text-xl font-bold text-white">
+          <h2 className="text-base sm:text-lg font-bold text-[var(--text-primary)]">
             رفع وتعديل وتصنيف المحاضرات والشرائح والمراجع الطبية
           </h2>
-          <p className="text-xs text-slate-400 mt-0.5">
+          <p className="text-xs text-[var(--text-muted)] mt-0.5">
             ربط المواد ديناميكياً بالجامعة، المستوى الأكاديمي، البلوك الدراسي، المقرر، والشعبة (نظري / عملي ومختبر).
           </p>
         </div>
@@ -553,7 +596,7 @@ export default function EducationalContentManager({
             }}
             className="py-2.5 px-4 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-teal-600/20 transition-colors"
           >
-            <Upload className="w-4 h-4" />
+            <Upload className="w-4 h-4 shrink-0" />
             <span>رفع ملف (PDF / صورة / صوت) أو إضافة مورد</span>
           </button>
 
@@ -567,42 +610,6 @@ export default function EducationalContentManager({
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
-        </div>
-      </div>
-
-      {/* Active Academic Scope Header Indicator */}
-      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 rounded-2xl bg-slate-900/80 border border-slate-800 text-xs">
-        <div className="flex flex-wrap items-center gap-2 text-slate-300">
-          <span className="text-slate-400 font-medium">النطاق الأكاديمي النشط:</span>
-          <span className="font-bold text-teal-300">{userContext.universityNameArabic || 'جامعة دار السلام'}</span>
-          <span>·</span>
-          <span className="font-bold text-white">{userContext.studyLevelNameArabic || 'المستوى الثاني'}</span>
-          {userContext.studyPeriodNameArabic && (
-            <>
-              <span>·</span>
-              <span className="text-amber-300 font-semibold">{userContext.studyPeriodNameArabic}</span>
-            </>
-          )}
-        </div>
-        <div className="text-[11px] text-slate-500">
-          يتم ضبط النطاق وتغييره حصرياً من صفحة «هيكلة الجامعات» مع تطبيقه تلقائياً هنا
-        </div>
-      </div>
-
-      {/* Cloud Storage Architecture Explanation Banner */}
-      <div className="bg-slate-900/60 border border-teal-500/30 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
-        <div className="flex items-start sm:items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-teal-500/15 text-teal-400 flex items-center justify-center shrink-0">
-            <Cloud className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="font-bold text-white">
-              أين يتم تخزين الملفات المرفوعة (PDF، الصور، التسجيلات الصوتية)؟
-            </div>
-            <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
-              تُخزّن جميع الملفات المرفوعة سحابياً بشكل مباشر ومجاني داخل قاعدة بيانات مشروعك <code className="text-teal-300 font-mono">umed-yemen (Cloud Firestore)</code> ضمن مجموعتي <code className="text-teal-300 font-mono">educationalResources</code> و <code className="text-teal-300 font-mono">uploadedFileChunks</code>، مع حفظ نسخة محلية فورية في متصفح الطالب (<code className="text-amber-300 font-mono">IndexedDB</code>) لفتحها لاحقاً بدون استهلاك إنترنت.
-            </p>
-          </div>
         </div>
       </div>
 
@@ -620,15 +627,58 @@ export default function EducationalContentManager({
         </div>
       )}
 
-      {/* Compact Dropdown Filters Bar */}
-      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2">
-            <span className="text-slate-400 font-bold">حالة النشر:</span>
+      {/* Integrated Academic & Content Filters Bar (replaces static Academic Scope banner) */}
+      <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs overflow-hidden">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap items-center gap-2.5 w-full lg:w-auto">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[var(--text-muted)] font-bold shrink-0">المستوى:</span>
+            <select
+              value={filterLevelId}
+              disabled={isBatchScoped}
+              onChange={(e) => handleFilterLevelChange(e.target.value)}
+              className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-bold text-xs focus:outline-none focus:border-teal-500"
+            >
+              {!isBatchScoped && <option value="all">جميع المستويات</option>}
+              {studyLevels.map(lvl => (
+                <option key={lvl.id} value={lvl.id}>{lvl.titleArabic}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <span className="text-[var(--text-muted)] font-bold shrink-0">البلوك:</span>
+            <select
+              value={filterPeriodId}
+              onChange={(e) => handleFilterPeriodChange(e.target.value)}
+              className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-bold text-xs focus:outline-none focus:border-teal-500"
+            >
+              <option value="all">جميع البلوكات</option>
+              {filterPeriodsList.map(p => (
+                <option key={p.id} value={p.id}>{p.titleArabic}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <span className="text-[var(--text-muted)] font-bold shrink-0">المقرر:</span>
+            <select
+              value={filterCourseId}
+              onChange={(e) => setFilterCourseId(e.target.value)}
+              className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-bold text-xs focus:outline-none focus:border-teal-500"
+            >
+              <option value="all">جميع المقررات</option>
+              {filterCoursesList.map(c => (
+                <option key={c.id} value={c.id}>{c.titleArabic}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <span className="text-[var(--text-muted)] font-bold shrink-0">الحالة:</span>
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as any)}
-              className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-teal-300 font-bold text-xs focus:outline-none focus:border-teal-500"
+              className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-bold text-xs focus:outline-none focus:border-teal-500"
             >
               <option value="all">جميع الحالات ({filtered.length})</option>
               <option value="published">منشور للطلاب ({resources.filter(r => r.status === 'published').length})</option>
@@ -636,12 +686,12 @@ export default function EducationalContentManager({
             </select>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="text-slate-400 font-bold">نوع الملف:</span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[var(--text-muted)] font-bold shrink-0">النوع:</span>
             <select
               value={typeFilter}
               onChange={(e) => setTypeFilter(e.target.value as any)}
-              className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 font-bold text-xs focus:outline-none focus:border-teal-500"
+              className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-bold text-xs focus:outline-none focus:border-teal-500"
             >
               <option value="all">جميع الأنواع</option>
               <option value="pdf">ملفات PDF</option>
@@ -654,8 +704,8 @@ export default function EducationalContentManager({
           </div>
         </div>
 
-        <div className="text-[11px] text-slate-400">
-          عدد المواد المعروضة لمستواك الحالي: <strong className="text-white">{filtered.length}</strong>
+        <div className="text-[11px] text-[var(--text-muted)]">
+          عدد المواد المعروضة: <strong className="text-[var(--text-primary)]">{filtered.length}</strong>
         </div>
       </div>
 

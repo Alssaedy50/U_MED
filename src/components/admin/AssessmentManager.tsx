@@ -278,9 +278,7 @@ export default function AssessmentManager({
 
       const activeLevelFilter = isBatchScoped && assignedStudyLevelId
         ? assignedStudyLevelId
-        : academicCtx.strictScope
-        ? studyLevelId
-        : '';
+        : studyLevelId || '';
 
       const scopedAssessments = activeLevelFilter
         ? asmntList.filter(a => !a.studyLevelId || a.studyLevelId === activeLevelFilter)
@@ -965,22 +963,61 @@ export default function AssessmentManager({
         </div>
       </div>
 
-      {/* Active Academic Scope Header Indicator */}
-      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 rounded-2xl bg-slate-900/80 border border-slate-800 text-xs">
-        <div className="flex flex-wrap items-center gap-2 text-slate-300">
-          <span className="text-slate-400 font-medium">النطاق الأكاديمي النشط:</span>
-          <span className="font-bold text-teal-300">{academicCtx.universityNameArabic || 'جامعة دار السلام'}</span>
-          <span>·</span>
-          <span className="font-bold text-white">{academicCtx.studyLevelNameArabic || 'المستوى الثاني'}</span>
-          {academicCtx.studyPeriodNameArabic && (
-            <>
-              <span>·</span>
-              <span className="text-amber-300 font-semibold">{academicCtx.studyPeriodNameArabic}</span>
-            </>
-          )}
+      {/* Inline Academic Filter Bar (replaces static Academic Scope banner) */}
+      <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-3.5 sm:p-4 flex flex-wrap items-center justify-between gap-3 text-xs overflow-hidden">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap items-center gap-2.5 w-full lg:w-auto">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[var(--text-muted)] font-bold shrink-0">الجامعة:</span>
+            <select
+              value={universityId}
+              disabled={!isOwner}
+              onChange={(e) => {
+                const nextUnivId = e.target.value;
+                setUniversityId(nextUnivId);
+                const foundUniv = universities.find(u => u.id === nextUnivId);
+                saveUserAcademicContext({
+                  universityId: nextUnivId,
+                  universityName: foundUniv?.nameArabic || ''
+                });
+              }}
+              className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-bold text-xs focus:outline-none focus:border-teal-500"
+            >
+              {universities.map(u => (
+                <option key={u.id} value={u.id}>{u.nameArabic}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <span className="text-[var(--text-muted)] font-bold shrink-0">المستوى الدراسي:</span>
+            <select
+              value={studyLevelId}
+              disabled={isBatchScoped}
+              onChange={(e) => {
+                const nextLvlId = e.target.value;
+                setStudyLevelId(nextLvlId);
+                const foundLvl = studyLevels.find(l => l.id === nextLvlId);
+                if (nextLvlId) {
+                  saveUserAcademicContext({
+                    studyLevelId: nextLvlId,
+                    studyLevelName: foundLvl?.titleArabic || ''
+                  });
+                }
+              }}
+              className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-bold text-xs focus:outline-none focus:border-teal-500"
+            >
+              {!isBatchScoped && <option value="">جميع المستويات الدراسية</option>}
+              {studyLevels.map(lvl => (
+                <option key={lvl.id} value={lvl.id}>{lvl.titleArabic}</option>
+              ))}
+            </select>
+          </div>
         </div>
-        <div className="text-[11px] text-slate-500">
-          يتم ضبط النطاق وتغييره حصرياً من صفحة «هيكلة الجامعات» مع تطبيقه تلقائياً هنا
+
+        <div className="text-[11px] text-[var(--text-muted)] flex items-center gap-3">
+          <span>بنوك الأسئلة المعروضة: <strong className="text-[var(--text-primary)]">{banks.length}</strong></span>
+          <span>·</span>
+          <span>الاختبارات والمسابقات: <strong className="text-[var(--text-primary)]">{assessments.length}</strong></span>
         </div>
       </div>
 

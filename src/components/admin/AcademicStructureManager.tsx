@@ -927,41 +927,64 @@ export default function AcademicStructureManager({
   return (
     <div className="space-y-6">
       
-      {/* 1. Header Banner & One-Click Seed Loader Button */}
-      <div className="bg-gradient-to-r from-teal-950/60 via-slate-900 to-indigo-950/60 border border-teal-500/30 rounded-2xl p-6 shadow-xl flex flex-wrap items-center justify-between gap-4">
-        <div className="max-w-2xl">
-          <div className="flex items-center gap-2 mb-2 text-xs text-teal-300 font-semibold">
-            <span>إدارة الهيكل الأكاديمي الشامل</span>
-            <span>·</span>
-            <span className="font-mono text-slate-400">Dynamic CRUD & Hybrid Sync</span>
+      {/* Compact Header Bar & Archive Toggle (No duplicate hierarchy tab or seed banner) */}
+      <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-4 sm:p-5 shadow-sm flex flex-wrap items-center justify-between gap-3 overflow-hidden">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-10 h-10 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-400 shrink-0">
+            <Layers className="w-5 h-5" />
           </div>
-          <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight">
-            المؤسسات والبرامج الطبية ونظام البلوكات
-          </h2>
-          <p className="text-xs sm:text-sm text-slate-300 mt-1 leading-relaxed">
-            إنشاء وتعديل وتفعيل وحذف الجامعات والكليات والبرامج والمستويات الدراسية وسنة الامتياز والبلوكات والمقررات بشكل ديناميكي كامل.
-          </p>
+          <div className="min-w-0">
+            <h2 className="text-base sm:text-lg font-black text-[var(--text-primary)]">
+              إدارة الهيكل الأكاديمي، البلوكات، والمقررات الدراسية
+            </h2>
+            <p className="text-xs text-[var(--text-muted)] mt-0.5">
+              إدارة الجامعات، المستويات الدراسية، البلوكات، المقررات، ودكاترة المواد النظري والعملي
+            </p>
+          </div>
         </div>
 
-        {/* Idempotent Seed Loader Button */}
-        <div>
+        <div className="flex flex-wrap items-center gap-2">
+          {selectedUniversity && (
+            <div className="text-xs text-[var(--text-secondary)] flex items-center gap-1.5 px-3 py-2 bg-[var(--bg-elevated)] rounded-xl border border-[var(--border-color)]">
+              <Building2 className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+              <span>المؤسسة: <strong className="text-[var(--text-primary)]">{selectedUniversity.nameArabic}</strong></span>
+            </div>
+          )}
+
           <button
-            onClick={handleSeedDarAlSalam}
-            disabled={seedLoading}
-            className="py-3 px-5 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-400 hover:to-emerald-500 text-white font-bold text-xs transition-all shadow-lg shadow-teal-500/25 flex items-center gap-2"
+            onClick={() => {
+              if (activeViewMode === 'archive') {
+                setActiveViewMode('hierarchy');
+              } else {
+                setActiveViewMode('archive');
+                if (selectedLevel) {
+                  fetchArchivedStudyPeriods(selectedLevel.id, selectedUniversity?.id).then(setArchivedPeriods);
+                }
+              }
+            }}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all border ${
+              activeViewMode === 'archive'
+                ? 'bg-teal-600 text-white border-teal-500 shadow-md'
+                : 'bg-[var(--bg-elevated)] text-[var(--text-primary)] border-[var(--border-color)] hover:border-amber-500/50'
+            }`}
           >
-            {seedLoading ? (
-              <RefreshCw className="w-4 h-4 animate-spin" />
+            {activeViewMode === 'archive' ? (
+              <>
+                <Layers className="w-4 h-4 shrink-0" />
+                <span>العودة للهيكل الأكاديمي</span>
+              </>
             ) : (
-              <Sparkles className="w-4 h-4 text-amber-300" />
+              <>
+                <Archive className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>الأرشيف الأكاديمي</span>
+                {archivedPeriods.length > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black">
+                    {archivedPeriods.length}
+                  </span>
+                )}
+              </>
             )}
-            <span>
-              {seedLoading ? 'جارٍ تثبيت بذور جامعة دار السلام...' : 'تثبيت بذور جامعة دار السلام في Firestore'}
-            </span>
           </button>
-          <span className="block text-[10px] text-slate-400 text-center mt-1 font-mono">
-            * عملية آمنة وغير مكررة (Idempotent Seed)
-          </span>
         </div>
       </div>
 
@@ -983,52 +1006,6 @@ export default function AcademicStructureManager({
           </button>
         </div>
       )}
-
-      {/* View Switcher: Hierarchy Manager vs Archive */}
-      <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/80 p-2.5 rounded-2xl border border-slate-800 shadow-md">
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => setActiveViewMode('hierarchy')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
-              activeViewMode === 'hierarchy'
-                ? 'bg-teal-600 text-white shadow-md shadow-teal-500/20'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <Layers className="w-4 h-4" />
-            <span>إدارة الهيكل الأكاديمي والبلوكات</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setActiveViewMode('archive');
-              if (selectedLevel) {
-                fetchArchivedStudyPeriods(selectedLevel.id, selectedUniversity?.id).then(setArchivedPeriods);
-              }
-            }}
-            className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
-              activeViewMode === 'archive'
-                ? 'bg-amber-600 text-white shadow-md shadow-amber-500/20'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <Archive className="w-4 h-4 text-amber-300" />
-            <span>الأرشيف الأكاديمي</span>
-            {archivedPeriods.length > 0 && (
-              <span className="px-1.5 py-0.5 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black">
-                {archivedPeriods.length}
-              </span>
-            )}
-          </button>
-        </div>
-
-        {selectedUniversity && (
-          <div className="text-xs text-slate-400 flex items-center gap-2 px-3 py-1.5 bg-slate-950 rounded-xl border border-slate-800">
-            <Building2 className="w-3.5 h-3.5 text-teal-400" />
-            <span>المؤسسة: <strong className="text-white">{selectedUniversity.nameArabic}</strong></span>
-          </div>
-        )}
-      </div>
 
       {activeViewMode === 'archive' ? (
         <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-5">

@@ -7,32 +7,40 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { 
-  BookOpen, 
-  FileText, 
-  Image as ImageIcon, 
-  ExternalLink, 
-  Search, 
-  Filter, 
-  Layers, 
-  Sparkles, 
-  ShieldCheck, 
+import {
+  BookOpen,
+  FileText,
+  Image as ImageIcon,
+  ExternalLink,
+  Search,
   RefreshCw,
   Eye,
-  AlertCircle,
   Volume2,
   Video,
   SlidersHorizontal,
-  ArrowDownUp,
-  X,
-  Check
+  Stethoscope,
+  X
 } from 'lucide-react';
-import { EducationalResource, ResourceType } from '../../types/umed.ts';
+import {
+  EducationalResource,
+  ResourceType,
+  CourseOffering,
+  CourseInstructor
+} from '../../types/umed.ts';
 import {
   fetchEducationalResources,
   getCachedEducationalResources,
   subscribeToEducationalResources
 } from '../../services/resourceService.ts';
+import {
+  getCachedCollection,
+  fetchStudyPeriods,
+  fetchCourseOfferings
+} from '../../services/academicService.ts';
+import {
+  fetchCourseInstructors,
+  getCachedCourseInstructors
+} from '../../services/batchGovernanceService.ts';
 import {
   getActiveNotificationUser,
   syncNotificationsForResources
@@ -44,6 +52,9 @@ interface StudentMedicalLibraryProps {
   programId: string;
   studyLevelId: string;
   studentNameArabic: string;
+  initialCourseId?: string;
+  initialCourseTitle?: string;
+  onClearCourseFilter?: () => void;
 }
 
 type SortOption = 'newest' | 'oldest' | 'title' | 'size';
@@ -52,7 +63,9 @@ export default function StudentMedicalLibrary({
   universityId,
   programId,
   studyLevelId,
-  studentNameArabic
+  initialCourseId,
+  initialCourseTitle,
+  onClearCourseFilter
 }: StudentMedicalLibraryProps) {
   const [resources, setResources] = useState<EducationalResource[]>(() =>
     getCachedEducationalResources({
@@ -62,6 +75,15 @@ export default function StudentMedicalLibrary({
       status: 'published'
     })
   );
+  const [courses, setCourses] = useState<CourseOffering[]>(() =>
+    getCachedCollection<CourseOffering>('courseOfferings').filter(
+      (c) => !c.universityId || c.universityId === universityId
+    )
+  );
+  const [instructors, setInstructors] = useState<CourseInstructor[]>(() =>
+    getCachedCourseInstructors({ universityId, studyLevelId })
+  );
+  const [selectedCourseId, setSelectedCourseId] = useState<string>(initialCourseId || 'all');
   const [loading, setLoading] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedType, setSelectedType] = useState<ResourceType | 'all'>('all');
@@ -70,16 +92,36 @@ export default function StudentMedicalLibrary({
   const [showFilterModal, setShowFilterModal] = useState<boolean>(false);
   const [activePreviewResource, setActivePreviewResource] = useState<EducationalResource | null>(null);
 
+  useEffect(() => {
+    setSelectedCourseId(initialCourseId || 'all');
+  }, [initialCourseId]);
+
   const loadResources = async (showSpinner = false) => {
     if (showSpinner) setLoading(true);
     try {
-      const list = await fetchEducationalResources({
-        universityId,
-        programId,
-        studyLevelId,
-        status: 'published' // Students strictly see published content
-      });
+      const [list, instList, periods] = await Promise.all([
+        fetchEducationalResources({
+          universityId,
+          programId,
+          studyLevelId,
+          status: 'published'
+        }),
+        fetchCourseInstructors({ universityId, studyLevelId }),
+        fetchStudyPeriods(studyLevelId, universityId)
+      ]);
       setResources(list);
+      setInstructors(instList);
+
+      if (periods.length > 0) {
+        const crsArrays = await Promise.all(
+          periods.map((p) => fetchCourseOfferings(p.id, universityId).catch(() => []))
+        );
+        const mergedCourses = crsArrays.flat();
+        if (mergedCourses.length > 0) {
+          setCourses(mergedCourses);
+        }
+      }
+
       const activeUid = getActiveNotificationUser();
       if (activeUid && activeUid !== 'guest') {
         syncNotificationsForResources(activeUid, list, universityId, studyLevelId);
@@ -121,16 +163,21 @@ export default function StudentMedicalLibrary({
     return () => unsub();
   }, [universityId, programId, studyLevelId]);
 
+  const courseScopedResources =
+    selectedCourseId === 'all'
+      ? resources
+      : resources.filter((r) => r.courseOfferingId === selectedCourseId);
+
   const categories: { id: ResourceType | 'all'; label: string; icon: React.ReactNode; count: number }[] = [
-    { id: 'all', label: 'الكل', icon: <BookOpen className="w-3.5 h-3.5" />, count: resources.length },
-    { id: 'pdf', label: 'ملفات PDF', icon: <FileText className="w-3.5 h-3.5" />, count: resources.filter(r => r.resourceType === 'pdf').length },
-    { id: 'image', label: 'شرائح وصور', icon: <ImageIcon className="w-3.5 h-3.5" />, count: resources.filter(r => r.resourceType === 'image').length },
-    { id: 'video', label: 'فيديوهات', icon: <Video className="w-3.5 h-3.5" />, count: resources.filter(r => r.resourceType === 'video').length },
-    { id: 'audio', label: 'تسجيلات صوتية', icon: <Volume2 className="w-3.5 h-3.5" />, count: resources.filter(r => r.resourceType === 'audio').length },
-    { id: 'link', label: 'روابط خارجية', icon: <ExternalLink className="w-3.5 h-3.5" />, count: resources.filter(r => r.resourceType === 'link' || r.resourceType === 'video_link').length },
+    { id: 'all', label: 'الكل', icon: <BookOpen className="w-3.5 h-3.5" />, count: courseScopedResources.length },
+    { id: 'pdf', label: 'ملفات PDF', icon: <FileText className="w-3.5 h-3.5" />, count: courseScopedResources.filter(r => r.resourceType === 'pdf').length },
+    { id: 'image', label: 'شرائح وصور', icon: <ImageIcon className="w-3.5 h-3.5" />, count: courseScopedResources.filter(r => r.resourceType === 'image').length },
+    { id: 'video', label: 'فيديوهات', icon: <Video className="w-3.5 h-3.5" />, count: courseScopedResources.filter(r => r.resourceType === 'video').length },
+    { id: 'audio', label: 'تسجيلات صوتية', icon: <Volume2 className="w-3.5 h-3.5" />, count: courseScopedResources.filter(r => r.resourceType === 'audio').length },
+    { id: 'link', label: 'روابط خارجية', icon: <ExternalLink className="w-3.5 h-3.5" />, count: courseScopedResources.filter(r => r.resourceType === 'link' || r.resourceType === 'video_link').length },
   ];
 
-  const filteredResources = resources
+  const filteredResources = courseScopedResources
     .filter((res) => {
       const matchesType = selectedType === 'all' || res.resourceType === selectedType;
       const matchesSection = selectedSection === 'all' || res.sectionType === selectedSection;
@@ -166,51 +213,79 @@ export default function StudentMedicalLibrary({
     });
 
   const activeFilterCount = (selectedSection !== 'all' ? 1 : 0) + (sortBy !== 'newest' ? 1 : 0);
+  const selectedCourseObj = courses.find((c) => c.id === selectedCourseId);
+  const activeCourseLabel = selectedCourseObj?.titleArabic || initialCourseTitle || '';
 
   return (
-    <div className="space-y-4 sm:space-y-5">
+    <div className="space-y-3.5 max-w-full overflow-hidden">
       
-      {/* 1. Header Banner */}
-      <div className="bg-gradient-to-r from-teal-950/70 via-slate-900 to-indigo-950/70 border border-teal-500/30 rounded-2xl p-4 sm:p-6 shadow-xl flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5 sm:gap-2 mb-1 flex-wrap">
-            <span className="text-[10px] sm:text-xs px-2.5 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30 font-bold">
-              المكتبة الطبية الرقمية المعتمدة
-            </span>
-            <span className="text-[10px] sm:text-xs px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-300 font-semibold">
-              تصفح سريع وموفر للبيانات
-            </span>
-          </div>
-          <h2 className="text-base sm:text-lg font-black text-white leading-snug">
-            المحاضرات والشرائح والمراجع الطبية المخصصة لمستواك
+      {/* 1. Compact Single-Line Header Bar */}
+      <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-2.5">
+        <div className="flex items-center gap-2 flex-wrap min-w-0">
+          <BookOpen className="w-4 h-4 text-teal-400 shrink-0" />
+          <h2 className="text-sm sm:text-base font-extrabold text-[var(--text-primary)]">
+            مكتبة الدفعة الطبية والشرائح ({courseScopedResources.length})
           </h2>
-          <p className="text-[11px] sm:text-xs text-slate-300 mt-1 max-w-2xl leading-relaxed">
-            جميع المواد العلمية محسنة لشبكات 3G والاتصال المتقطع في اليمن، مع حماية استهلاك البيانات بعدم فتح أي ملف إلا بعد تأكيدك.
-          </p>
+          {selectedCourseId !== 'all' && activeCourseLabel && (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-teal-500/15 border border-teal-500/30 text-teal-300 text-xs font-bold">
+              <span>مادة: {activeCourseLabel}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedCourseId('all');
+                  if (onClearCourseFilter) onClearCourseFilter();
+                }}
+                className="hover:text-rose-400 p-0.5"
+                title="عرض جميع مواد الدفعة"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </span>
+          )}
         </div>
 
-        <button
-          onClick={() => loadResources(true)}
-          disabled={loading}
-          className="py-2 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition-colors border border-slate-700 shrink-0"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-teal-400' : ''}`} />
-          <span>تحديث المكتبة</span>
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          {courses.length > 0 && (
+            <select
+              value={selectedCourseId}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedCourseId(val);
+                if (val === 'all' && onClearCourseFilter) onClearCourseFilter();
+              }}
+              className="px-2.5 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] text-xs font-bold"
+            >
+              <option value="all">جميع مواد الدفعة ({resources.length})</option>
+              {courses.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.titleArabic}
+                </option>
+              ))}
+            </select>
+          )}
+          <button
+            onClick={() => loadResources(true)}
+            disabled={loading}
+            className="py-1.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition-colors border border-slate-700 shrink-0"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-teal-400' : ''}`} />
+            <span>تحديث</span>
+          </button>
+        </div>
       </div>
 
-      {/* 2. Mobile-First Category Chips Bar (Smooth Horizontal Scroll) */}
-      <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1 pt-0.5 -mx-1 px-1">
+      {/* 2. Responsive Category Chips Bar (flex-wrap so zero horizontal clipping on mobile) */}
+      <div className="flex flex-wrap items-center gap-1.5 w-full">
         {categories.map((cat) => {
           const isActive = selectedType === cat.id;
           return (
             <button
               key={cat.id}
               onClick={() => setSelectedType(cat.id)}
-              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold shrink-0 transition-all border ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all border ${
                 isActive
-                  ? 'bg-teal-600 text-white border-teal-500 shadow-md shadow-teal-900/30 ring-1 ring-teal-400/40'
-                  : 'bg-slate-900/90 hover:bg-slate-800 text-slate-300 border-slate-800 hover:border-slate-700'
+                  ? 'bg-teal-600 text-white border-teal-500 shadow-sm'
+                  : 'bg-[var(--bg-card)] hover:bg-[var(--bg-elevated)] text-[var(--text-primary)] border-[var(--border-color)]'
               }`}
             >
               <span className={isActive ? 'text-white' : 'text-teal-400'}>{cat.icon}</span>
@@ -226,16 +301,16 @@ export default function StudentMedicalLibrary({
       </div>
 
       {/* 3. Search & Advanced Filter Bar */}
-      <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-2.5 sm:p-3 flex flex-wrap sm:flex-nowrap items-center gap-2 text-xs">
+      <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-2.5 sm:p-3 flex flex-wrap sm:flex-nowrap items-center gap-2 text-xs">
         {/* Search input */}
-        <div className="relative flex-1 min-w-[200px]">
+        <div className="relative flex-1 min-w-[180px]">
           <Search className="w-4 h-4 absolute right-3 top-2.5 text-slate-500 pointer-events-none" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="بحث في المحاضرات، الشرائح، والمراجع..."
-            className="w-full pl-8 pr-9 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-500 focus:outline-none focus:border-teal-500 text-xs"
+            className="w-full pl-8 pr-9 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] placeholder-slate-500 focus:outline-none focus:border-teal-500 text-xs"
           />
           {searchQuery && (
             <button
@@ -253,14 +328,14 @@ export default function StudentMedicalLibrary({
           onClick={() => setShowFilterModal(true)}
           className={`py-2 px-3.5 rounded-xl border font-bold flex items-center justify-center gap-1.5 transition-all shrink-0 ${
             activeFilterCount > 0
-              ? 'bg-teal-600/20 border-teal-500 text-teal-300 ring-1 ring-teal-500/40'
-              : 'bg-slate-950 border-slate-800 text-slate-300 hover:bg-slate-800 hover:text-white'
+              ? 'bg-teal-500/15 border-teal-500 text-teal-300'
+              : 'bg-[var(--bg-input)] border-[var(--border-color)] text-[var(--text-primary)] hover:bg-[var(--bg-elevated)]'
           }`}
         >
           <SlidersHorizontal className="w-3.5 h-3.5 text-teal-400" />
           <span>تصفية وترتيب</span>
           {activeFilterCount > 0 && (
-            <span className="w-4 h-4 rounded-full bg-teal-500 text-slate-950 font-bold text-[10px] flex items-center justify-center">
+            <span className="w-4 h-4 rounded-full bg-teal-500 text-white font-bold text-[10px] flex items-center justify-center">
               {activeFilterCount}
             </span>
           )}
@@ -269,10 +344,10 @@ export default function StudentMedicalLibrary({
 
       {/* Active Filter Indicators Bar */}
       {(selectedSection !== 'all' || sortBy !== 'newest') && (
-        <div className="flex items-center gap-2 flex-wrap text-[11px] bg-slate-900/40 p-2 rounded-xl border border-slate-800/80">
+        <div className="flex items-center gap-2 flex-wrap text-[11px] bg-[var(--bg-card)] p-2.5 rounded-xl border border-[var(--border-color)]">
           <span className="text-slate-400 font-semibold">التصفيات النشطة:</span>
           {selectedSection !== 'all' && (
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-teal-950 border border-teal-800 text-teal-300 font-medium">
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-teal-500/15 border border-teal-500/30 text-teal-300 font-medium">
               <span>القسم: {selectedSection === 'theoretical' ? 'نظري فقط' : 'عملي ومختبر'}</span>
               <button onClick={() => setSelectedSection('all')} className="hover:text-white">
                 <X className="w-3 h-3" />
@@ -280,7 +355,7 @@ export default function StudentMedicalLibrary({
             </span>
           )}
           {sortBy !== 'newest' && (
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-indigo-950 border border-indigo-800 text-indigo-300 font-medium">
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 font-medium">
               <span>
                 الترتيب: {sortBy === 'oldest' ? 'الأقدم أولاً' : sortBy === 'title' ? 'أبجدياً' : 'حسب الحجم'}
               </span>
@@ -303,20 +378,22 @@ export default function StudentMedicalLibrary({
 
       {/* 4. Resources Grid */}
       {filteredResources.length === 0 ? (
-        <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-10 sm:p-12 text-center text-slate-500 text-xs space-y-3">
-          <BookOpen className="w-9 h-9 mx-auto text-slate-600" />
-          <h4 className="font-bold text-slate-300 text-sm">لا توجد مواد تعليمية مطابقة</h4>
+        <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-10 text-center text-slate-500 text-xs space-y-3">
+          <BookOpen className="w-9 h-9 mx-auto text-slate-500" />
+          <h4 className="font-bold text-[var(--text-primary)] text-sm">لا توجد مواد تعليمية مطابقة</h4>
           <p className="max-w-md mx-auto text-slate-400">
             لم نجد محاضرات أو شرائح تطابق معايير البحث أو التصفية الحالية. جرب تغيير نوع المورد أو مسح كلمات البحث.
           </p>
-          {(selectedType !== 'all' || selectedSection !== 'all' || searchQuery) && (
+          {(selectedType !== 'all' || selectedSection !== 'all' || selectedCourseId !== 'all' || searchQuery) && (
             <button
               onClick={() => {
                 setSelectedType('all');
                 setSelectedSection('all');
+                setSelectedCourseId('all');
+                if (onClearCourseFilter) onClearCourseFilter();
                 setSearchQuery('');
               }}
-              className="py-2 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-teal-300 text-xs font-bold transition-colors"
+              className="py-2 px-4 rounded-xl bg-teal-600 text-white text-xs font-bold transition-colors"
             >
               عرض جميع المواد التعليمية
             </button>
@@ -329,20 +406,28 @@ export default function StudentMedicalLibrary({
             const isImage = res.resourceType === 'image';
             const isAudio = res.resourceType === 'audio';
             const isVideo = res.resourceType === 'video';
+            const linkedCourse = courses.find((c) => c.id === res.courseOfferingId);
+            const courseDoctor =
+              linkedCourse?.instructorNameArabic ||
+              (() => {
+                const foundInst = instructors.find((i) => i.courseOfferingId === res.courseOfferingId);
+                return foundInst ? `${foundInst.academicTitle || 'د.'} ${foundInst.instructorNameArabic}` : '';
+              })();
+
             return (
               <div 
                 key={res.id} 
-                className="bg-slate-900/85 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg flex flex-col justify-between hover:border-slate-700 transition-all text-xs group hover:shadow-xl"
+                className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-4 sm:p-5 shadow-sm flex flex-col justify-between transition-all text-xs group overflow-hidden"
               >
                 <div>
                   {/* Top Badges */}
-                  <div className="flex items-center justify-between mb-2.5">
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase font-mono flex items-center gap-1 ${
-                      isPdf ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' :
-                      isImage ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30' :
-                      isAudio ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' :
-                      isVideo ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30' :
-                      'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
+                    <span className={`px-2 py-0.5 rounded-lg text-[10px] font-bold flex items-center gap-1 border ${
+                      isPdf ? 'bg-rose-500/15 text-rose-300 border-rose-500/30' :
+                      isImage ? 'bg-teal-500/15 text-teal-300 border-teal-500/30' :
+                      isAudio ? 'bg-amber-500/15 text-amber-300 border-amber-500/30' :
+                      isVideo ? 'bg-sky-500/15 text-sky-300 border-sky-500/30' :
+                      'bg-indigo-500/15 text-indigo-300 border-indigo-500/30'
                     }`}>
                       {isPdf && <FileText className="w-3 h-3" />}
                       {isImage && <ImageIcon className="w-3 h-3" />}
@@ -354,25 +439,41 @@ export default function StudentMedicalLibrary({
                       </span>
                     </span>
 
-                    <span className="text-[10px] px-2 py-0.5 rounded bg-slate-950 border border-slate-800 text-amber-300 font-mono font-bold">
+                    <span className="text-[10px] px-2 py-0.5 rounded-lg bg-[var(--bg-input)] border border-[var(--border-color)] text-amber-300 font-mono font-bold">
                       {res.fileSizeLabel || '1.8 MB'}
                     </span>
                   </div>
 
-                  <h3 className="font-bold text-white text-sm sm:text-base mb-1.5 leading-snug group-hover:text-teal-300 transition-colors line-clamp-2">
+                  <h3 className="font-bold text-[var(--text-primary)] text-sm sm:text-base mb-1.5 leading-snug group-hover:text-teal-400 transition-colors line-clamp-2">
                     {res.title}
                   </h3>
 
                   {res.description && (
-                    <p className="text-slate-400 text-[11px] line-clamp-2 leading-relaxed mb-3">
+                    <p className="text-slate-400 text-[11px] line-clamp-2 leading-relaxed mb-2.5">
                       {res.description}
                     </p>
                   )}
+
+                  {(linkedCourse || courseDoctor) && (
+                    <div className="mb-2.5 px-2.5 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
+                      {linkedCourse && (
+                        <span className="font-bold text-teal-300 truncate">
+                          {linkedCourse.titleArabic}
+                        </span>
+                      )}
+                      {courseDoctor && (
+                        <span className="inline-flex items-center gap-1 text-[var(--text-primary)] font-semibold">
+                          <Stethoscope className="w-3 h-3 text-teal-400 shrink-0" />
+                          <span>{courseDoctor}</span>
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
 
-                <div className="pt-3 border-t border-slate-800/80 mt-2 space-y-2.5">
+                <div className="pt-3 border-t border-[var(--border-color)] mt-2 space-y-2.5">
                   <div className="flex items-center justify-between text-[10px] text-slate-500">
-                    <span className="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 font-semibold text-slate-300">
+                    <span className="px-2 py-0.5 rounded-md bg-[var(--bg-input)] border border-[var(--border-color)] font-semibold text-[var(--text-primary)]">
                       {res.sectionType === 'theoretical' ? 'نظري' : res.sectionType === 'practical' ? 'عملي ومختبر' : 'عام'}
                     </span>
                     <span className="font-mono text-slate-400">{new Date(res.createdAt).toLocaleDateString('ar-YE')}</span>
@@ -381,7 +482,7 @@ export default function StudentMedicalLibrary({
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => setActivePreviewResource(res)}
-                      className="flex-1 min-h-[42px] py-2 px-3 rounded-xl bg-teal-600/90 hover:bg-teal-500 text-white font-bold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-md shadow-teal-600/20 active:scale-[0.98]"
+                      className="flex-1 min-h-[42px] py-2 px-3 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm active:scale-[0.98]"
                     >
                       <Eye className="w-4 h-4 shrink-0" />
                       <span>{isAudio ? 'استماع للمحاضرة' : 'معاينة وتحميل'}</span>

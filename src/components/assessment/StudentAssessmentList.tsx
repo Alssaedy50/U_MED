@@ -361,14 +361,14 @@ export default function StudentAssessmentList({
     <div className="space-y-5" dir="rtl">
       
       {/* Top Banner & Tabs */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+      <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-4 sm:p-5 shadow-sm space-y-4 overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h2 className="text-lg font-bold text-white flex items-center gap-2">
-              <Trophy className="w-5 h-5 text-amber-400" />
+            <h2 className="text-base sm:text-lg font-bold text-[var(--text-primary)] flex items-center gap-2">
+              <Trophy className="w-5 h-5 text-amber-400 shrink-0" />
               <span>مركز الاختبارات والمسابقات الأكاديمية التنافسية</span>
             </h2>
-            <p className="text-xs text-slate-400 mt-1">
+            <p className="text-xs text-[var(--text-muted)] mt-1">
               اختبارات المواد والمسابقات الطبية مع الترتيب التنافسي، المؤقتات الذكية، ومشاركة الاختبارات التجريبية
             </p>
           </div>
@@ -487,12 +487,12 @@ export default function StudentAssessmentList({
             return (
               <div 
                 key={assessment.id}
-                className={`bg-slate-900 rounded-2xl p-5 shadow-xl transition-all space-y-4 flex flex-col justify-between border ${
+                className={`umed-card bg-[var(--bg-card)] text-[var(--text-primary)] rounded-2xl p-4 sm:p-5 shadow-sm transition-all space-y-4 flex flex-col justify-between border overflow-hidden ${
                   isHighlighted
                     ? activeTab === 'competition'
-                      ? 'border-amber-500 ring-2 ring-amber-500/30 bg-amber-950/15'
-                      : 'border-teal-500 ring-2 ring-teal-500/30 bg-teal-950/15'
-                    : 'border-slate-800 hover:border-slate-700'
+                      ? 'border-amber-500 ring-2 ring-amber-500/30'
+                      : 'border-teal-500 ring-2 ring-teal-500/30'
+                    : 'border-[var(--border-color)] hover:border-[var(--accent-primary)]'
                 }`}
               >
                 <div className="space-y-3">

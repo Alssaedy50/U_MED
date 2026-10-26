@@ -30,7 +30,9 @@ import {
   CourseOffering,
   CourseInstructor,
   BatchNotification,
-  University
+  University,
+  EducationalResource,
+  Assessment
 } from '../../types/umed.ts';
 import { 
   fetchStudentEnrollment,
@@ -45,7 +47,6 @@ import {
   getUserAcademicContext,
   saveUserAcademicContext
 } from '../../services/academicService.ts';
-import AcademicContextBar from '../common/AcademicContextModal.tsx';
 import {
   fetchCourseInstructors,
   fetchBatchNotifications,
@@ -54,7 +55,15 @@ import {
   subscribeToBatchNotifications,
   subscribeToCourseInstructors
 } from '../../services/batchGovernanceService.ts';
-import { resolveResourceFileUrl } from '../../services/resourceService.ts';
+import {
+  resolveResourceFileUrl,
+  fetchEducationalResources,
+  getCachedEducationalResources
+} from '../../services/resourceService.ts';
+import {
+  getPublishedAssessmentsForStudent,
+  getCachedPublishedAssessments
+} from '../../services/assessmentService.ts';
 import {
   syncNotificationsForBatchPosts,
   syncNotificationForEnrollment
@@ -173,6 +182,19 @@ export default function StudentDashboard({
   const [downloadingNotifId, setDownloadingNotifId] = useState<string | null>(null);
   const [showBlockPopup, setShowBlockPopup] = useState<boolean>(false);
   const [activeBatchNotifModal, setActiveBatchNotifModal] = useState<BatchNotification | null>(null);
+  const [selectedCourseFilter, setSelectedCourseFilter] = useState<{ id: string; title: string } | null>(null);
+  const [levelResources, setLevelResources] = useState<EducationalResource[]>(() => {
+    if (!enrollment) return [];
+    return getCachedEducationalResources({
+      universityId: enrollment.universityId,
+      studyLevelId: enrollment.currentStudyLevelId,
+      status: 'published'
+    });
+  });
+  const [levelAssessments, setLevelAssessments] = useState<Assessment[]>(() => {
+    if (!enrollment) return [];
+    return getCachedPublishedAssessments(enrollment.universityId, enrollment.currentStudyLevelId);
+  });
 
   useEffect(() => {
     setInternalTab(activeSection);
@@ -208,14 +230,22 @@ export default function StudentDashboard({
       }
 
       if (effectiveEnrollment && (effectiveEnrollment.status === 'approved' || effectiveEnrollment.status === 'pending')) {
-        const [periods, instList, notifList] = await Promise.all([
+        const [periods, instList, notifList, resList, asmntList] = await Promise.all([
           fetchStudyPeriods(effectiveEnrollment.currentStudyLevelId, effectiveEnrollment.universityId),
           fetchCourseInstructors({ universityId: effectiveEnrollment.universityId, studyLevelId: effectiveEnrollment.currentStudyLevelId }),
-          fetchBatchNotifications({ universityId: effectiveEnrollment.universityId, studyLevelId: effectiveEnrollment.currentStudyLevelId })
+          fetchBatchNotifications({ universityId: effectiveEnrollment.universityId, studyLevelId: effectiveEnrollment.currentStudyLevelId }),
+          fetchEducationalResources({
+            universityId: effectiveEnrollment.universityId,
+            studyLevelId: effectiveEnrollment.currentStudyLevelId,
+            status: 'published'
+          }),
+          getPublishedAssessmentsForStudent(effectiveEnrollment.universityId, effectiveEnrollment.currentStudyLevelId)
         ]);
         setStudyPeriods(periods);
         setInstructors(instList);
         setBatchNotifications(notifList);
+        setLevelResources(resList);
+        setLevelAssessments(asmntList);
         syncNotificationsForBatchPosts(
           uid,
           notifList,
@@ -424,70 +454,53 @@ export default function StudentDashboard({
   return (
     <div className="space-y-5">
       
-      {/* 1. Academic Summary Banner (Strictly scoped to Student's University & Batch) */}
-      <div className="bg-gradient-to-r from-teal-950/80 via-slate-900 to-indigo-950/80 border border-teal-500/30 rounded-2xl p-4 sm:p-5 shadow-xl">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center text-white shadow-lg shadow-teal-500/20 font-black text-xl flex-shrink-0">
-              <Stethoscope className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="font-extrabold text-sm sm:text-base text-white">
-                  د. {displayNameArabic}
-                </h2>
-                {enrollment.status === 'approved' ? (
-                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
-                    عضو موثق بالدفعة ✓
-                  </span>
-                ) : (
-                  <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-bold">
-                    عضو بالدفعة (بانتظار توثيق المندوب)
-                  </span>
-                )}
-                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                  isInternship 
-                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' 
-                    : 'bg-teal-500/20 text-teal-300 border-teal-500/30'
-                }`}>
-                  {isInternship ? 'سنة الامتياز السريرية' : `دفعة المستوى ${enrollment.currentStudyLevelId.replace('lvl-', '')}`}
-                </span>
+      {/* 1. Academic Summary Banner — Shown ONLY on the main 'study' tab so it never crowds Library or Assessments */}
+      {internalTab === 'study' && (
+        <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-4 sm:p-5 shadow-sm overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center text-white shadow-lg shadow-teal-500/20 font-black text-xl flex-shrink-0">
+                <Stethoscope className="w-5 h-5" />
               </div>
-              <p className="text-xs text-slate-300 mt-1">
-                {currentUniversityName} • كلية الطب البشري • نظام البلوكات (MBBS)
-              </p>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="font-extrabold text-sm sm:text-base text-[var(--text-primary)]">
+                    د. {displayNameArabic}
+                  </h2>
+                  {enrollment.status === 'approved' ? (
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
+                      عضو موثق بالدفعة ✓
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-bold">
+                      عضو بالدفعة (بانتظار توثيق المندوب)
+                    </span>
+                  )}
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                    isInternship 
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' 
+                      : 'bg-teal-500/20 text-teal-300 border-teal-500/30'
+                  }`}>
+                    {isInternship ? 'سنة الامتياز السريرية' : `دفعة المستوى ${enrollment.currentStudyLevelId.replace('lvl-', '')}`}
+                  </span>
+                </div>
+                <p className="text-xs text-[var(--text-secondary)] mt-1">
+                  {currentUniversityName} • كلية الطب البشري • نظام البلوكات (MBBS)
+                </p>
+              </div>
             </div>
-          </div>
 
-          <div className="text-right sm:text-left flex items-center gap-2">
-            <div className="bg-slate-950/80 px-3 py-1.5 rounded-xl border border-slate-800 text-xs">
-              <span className="text-slate-500 block text-[10px]">الرقم الأكاديمي:</span>
-              <span className="font-mono text-teal-300 font-bold" dir="ltr">{enrollment.academicStudentNumber}</span>
-            </div>
+            {enrollment.academicStudentNumber && (
+              <div className="text-right sm:text-left flex items-center gap-2">
+                <div className="bg-[var(--bg-elevated)] px-3 py-1.5 rounded-xl border border-[var(--border-color)] text-xs">
+                  <span className="text-[var(--text-muted)] block text-[10px]">رقم الكشف / المعرف بالدفعة:</span>
+                  <span className="font-mono text-teal-300 font-bold" dir="ltr">{enrollment.academicStudentNumber}</span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
-      </div>
-
-      {/* Persistent Academic Context Header & Popup Switcher */}
-      <AcademicContextBar
-        userRole={isAdminPreview ? 'platform_owner' : 'student'}
-        onContextChange={(ctx) => {
-          setEnrollment(prev => {
-            if (!prev) return prev;
-            const updated: StudentEnrollment = {
-              ...prev,
-              universityId: ctx.universityId || prev.universityId,
-              collegeId: ctx.collegeId || prev.collegeId,
-              programId: ctx.programId || prev.programId,
-              currentStudyLevelId: ctx.studyLevelId || prev.currentStudyLevelId
-            };
-            try {
-              localStorage.setItem(`umed_enrollment_${uid}`, JSON.stringify(updated));
-            } catch {}
-            return updated;
-          });
-        }}
-      />
+      )}
 
       {/* SECTION: MEDICAL LIBRARY */}
       {internalTab === 'library' && (
@@ -496,6 +509,9 @@ export default function StudentDashboard({
           programId={enrollment.programId}
           studyLevelId={enrollment.currentStudyLevelId}
           studentNameArabic={displayNameArabic}
+          initialCourseId={selectedCourseFilter?.id}
+          initialCourseTitle={selectedCourseFilter?.title}
+          onClearCourseFilter={() => setSelectedCourseFilter(null)}
         />
       )}
 
@@ -705,34 +721,39 @@ export default function StudentDashboard({
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {courses.map((course) => {
                   const courseDoctors = instructors.filter(i => i.courseOfferingId === course.id);
+                  const courseLecturesCount = levelResources.filter(r => r.courseOfferingId === course.id).length;
+                  const courseExamsCount = levelAssessments.filter(a => a.courseOfferingId === course.id).length;
                   return (
                     <div
                       key={course.id}
-                      onClick={() => switchSection('library')}
-                      className="cursor-pointer p-4 bg-slate-950 rounded-xl border border-slate-800 text-xs space-y-2.5 hover:border-teal-500/50 transition-colors"
+                      onClick={() => {
+                        setSelectedCourseFilter({ id: course.id, title: course.titleArabic });
+                        switchSection('library');
+                      }}
+                      className="umed-card cursor-pointer p-4 bg-[var(--bg-card)] text-[var(--text-primary)] rounded-xl border border-[var(--border-color)] text-xs space-y-2.5 hover:border-teal-500/50 transition-colors overflow-hidden"
                     >
-                      <div className="flex items-center justify-between">
-                        <span className="font-mono text-teal-300 font-bold px-2 py-0.5 rounded bg-slate-900 border border-slate-800">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <span className="font-mono text-teal-300 font-bold px-2 py-0.5 rounded bg-[var(--bg-elevated)] border border-[var(--border-color)]">
                           {course.code}
                         </span>
-                        <span className="text-slate-500 text-[11px] font-mono">{course.creditHours ?? 3} ساعات</span>
+                        <span className="text-[var(--text-muted)] text-[11px] font-mono">{course.creditHours ?? 3} ساعات</span>
                       </div>
 
                       <div>
-                        <div className="font-bold text-white text-sm">{course.titleArabic}</div>
-                        <div className="text-[11px] text-slate-400 mt-0.5" dir="ltr">{course.titleEnglish}</div>
+                        <div className="font-bold text-[var(--text-primary)] text-sm">{course.titleArabic}</div>
+                        <div className="text-[11px] text-[var(--text-muted)] mt-0.5" dir="ltr">{course.titleEnglish}</div>
                       </div>
 
                       {/* Assigned Theoretical & Practical Doctors for this Course */}
-                      {(courseDoctors.length > 0 || course.instructorNameArabic) && (
-                        <div className="p-2.5 rounded-lg bg-slate-900/90 border border-slate-800/90 space-y-1.5">
-                          <div className="text-[10px] font-bold text-slate-400 flex items-center gap-1">
-                            <UserCheck className="w-3 h-3 text-teal-400" />
+                      {(courseDoctors.length > 0 || course.instructorNameArabic) ? (
+                        <div className="p-2.5 rounded-lg bg-[var(--bg-elevated)] border border-[var(--border-color)] space-y-1.5">
+                          <div className="text-[10px] font-bold text-[var(--text-secondary)] flex items-center gap-1">
+                            <Stethoscope className="w-3.5 h-3.5 text-teal-400 shrink-0" />
                             <span>دكتور المادة / مدرسو المقرر:</span>
                           </div>
                           {course.instructorNameArabic && !courseDoctors.some(d => `${d.academicTitle || 'د.'} ${d.instructorNameArabic}`.trim() === course.instructorNameArabic?.trim() || d.instructorNameArabic.trim() === course.instructorNameArabic?.trim()) && (
-                            <div className="flex items-center justify-between text-[11px]">
-                              <span className="text-white font-semibold">
+                            <div className="flex items-center justify-between gap-2 flex-wrap text-[11px]">
+                              <span className="text-[var(--text-primary)] font-bold">
                                 {course.instructorNameArabic}
                               </span>
                               <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-teal-950 text-teal-300 border border-teal-800">
@@ -741,8 +762,8 @@ export default function StudentDashboard({
                             </div>
                           )}
                           {courseDoctors.map(docItem => (
-                            <div key={docItem.id} className="flex items-center justify-between text-[11px]">
-                              <span className="text-white font-semibold">
+                            <div key={docItem.id} className="flex items-center justify-between gap-2 flex-wrap text-[11px]">
+                              <span className="text-[var(--text-primary)] font-bold">
                                 {docItem.academicTitle || 'د.'} {docItem.instructorNameArabic}
                               </span>
                               <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
@@ -761,21 +782,28 @@ export default function StudentDashboard({
                             </div>
                           ))}
                         </div>
+                      ) : (
+                        <div className="text-[11px] text-[var(--text-muted)] flex items-center gap-1">
+                          <Stethoscope className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                          <span>هيئة التدريس بالكلية</span>
+                        </div>
                       )}
 
-                      <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px]">
-                        <div className="flex items-center gap-1.5">
-                          <span className="px-2 py-0.5 rounded bg-teal-950 border border-teal-800 text-teal-300 text-[10px]">
-                            نظري
+                      <div className="pt-2 border-t border-[var(--border-color)] flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="px-2 py-0.5 rounded bg-teal-950 border border-teal-800 text-teal-300 text-[10px] font-bold">
+                            {courseLecturesCount > 0 ? `${courseLecturesCount} محاضرات / ملفات` : 'محاضرات المادة'}
                           </span>
-                          <span className="px-2 py-0.5 rounded bg-indigo-950 border border-indigo-800 text-indigo-300 text-[10px]">
-                            عملي / مختبر
-                          </span>
+                          {courseExamsCount > 0 && (
+                            <span className="px-2 py-0.5 rounded bg-amber-950 border border-amber-800 text-amber-300 text-[10px] font-bold">
+                              {courseExamsCount} اختبارات
+                            </span>
+                          )}
                         </div>
 
-                        <span className="text-teal-400 font-semibold flex items-center gap-1 text-[10px]">
-                          <span>فتح المحاضرات والداتا</span>
-                          <ChevronRight className="w-3 h-3" />
+                        <span className="text-teal-400 font-bold flex items-center gap-1 text-[10px]">
+                          <span>فتح محاضرات المادة</span>
+                          <ChevronRight className="w-3 h-3 rotate-180" />
                         </span>
                       </div>
                     </div>

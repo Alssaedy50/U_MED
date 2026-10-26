@@ -106,8 +106,8 @@ export default function StudentProfile({
       const enr = freshEnr || initialEnrollment || null;
       setEnrollment(enr);
 
-      // Do not load academic resources, blocks, or assessments if student enrollment is not yet approved
-      if (!enr || enr.status !== 'approved') {
+      // Allow both approved and pending batch members to view their profile
+      if (!enr || (enr.status !== 'approved' && enr.status !== 'pending')) {
         setStudyPeriods([]);
         setResources([]);
         setAssessments([]);
@@ -216,10 +216,10 @@ export default function StudentProfile({
     );
   }
 
-  // Strict Enrollment Approval Gate: Students cannot access profile blocks/resources before enrollment is approved
-  if (!enrollment || enrollment.status !== 'approved') {
+  // Students who have joined a batch (approved or pending verification) can view their profile
+  if (!enrollment || (enrollment.status !== 'approved' && enrollment.status !== 'pending')) {
     return (
-      <div className="max-w-xl mx-auto bg-slate-900/90 border border-slate-800 rounded-2xl p-6 sm:p-8 text-center space-y-4 shadow-2xl" dir="rtl">
+      <div className="max-w-xl mx-auto umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-6 sm:p-8 text-center space-y-4 shadow-2xl overflow-hidden" dir="rtl">
         <div className="w-14 h-14 rounded-2xl bg-amber-500/10 text-amber-400 mx-auto flex items-center justify-center">
           <Clock className="w-8 h-8" />
         </div>
@@ -360,19 +360,23 @@ export default function StudentProfile({
   return (
     <div className="space-y-6" dir="rtl">
       {/* 1. Profile Hero Banner & Quick Academic Stats */}
-      <div className="bg-gradient-to-r from-slate-900 via-teal-950/50 to-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+      <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-5 sm:p-6 shadow-sm space-y-5 overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 min-w-0">
             <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center text-white font-black text-2xl shadow-lg shadow-teal-500/20 shrink-0">
               {displayNameArabic.trim().charAt(0) || 'ط'}
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-lg sm:text-xl font-extrabold text-white">
+                <h2 className="text-lg sm:text-xl font-extrabold text-[var(--text-primary)]">
                   د. {displayNameArabic}
                 </h2>
-                <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-bold">
-                  {enrollment?.status === 'approved' ? 'طالب مقيد ومعتمد ✓' : 'قيد غير مكتمل'}
+                <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
+                  enrollment?.status === 'approved'
+                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                    : 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                }`}>
+                  {enrollment?.status === 'approved' ? 'عضو موثق بالدفعة ✓' : 'عضو بالدفعة (بانتظار توثيق المندوب)'}
                 </span>
               </div>
               <p className="text-xs text-slate-300 mt-1 flex items-center gap-1.5">
@@ -692,8 +696,8 @@ export default function StudentProfile({
                 <span className="text-slate-400">الاسم الرباعي:</span>
                 <strong className="text-white">{displayNameArabic}</strong>
               </div>
-              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex justify-between items-center">
-                <span className="text-slate-400">الرقم الأكاديمي:</span>
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex justify-between items-center gap-2 flex-wrap">
+                <span className="text-slate-400">رقم الكشف / المعرف بالدفعة:</span>
                 <span className="font-mono text-teal-300 font-bold" dir="ltr">
                   {enrollment?.academicStudentNumber || 'غير مسجل'}
                 </span>

@@ -172,8 +172,8 @@
 
 /* ============================================================================
    GLOBAL SAFEGUARD OVERRIDES FOR LIGHT & MEDICAL THEMES
-   Automatically transforms hardcoded dark Tailwind utilities so text & cards
-   never vanish on light or clinical cyan surfaces
+   Automatically transforms hardcoded dark Tailwind utilities & gradients so text
+   & cards never vanish or turn dark on light or clinical cyan surfaces
    ============================================================================ */
 
 [data-theme="light"],
@@ -182,83 +182,39 @@
   color: var(--text-primary) !important;
 }
 
-/* 1. App Canvas & Deep Backgrounds -> var(--bg-app) / var(--bg-input) */
-[data-theme="light"] .bg-slate-950,
-[data-theme="light"] .bg-slate-950\/95,
-[data-theme="light"] .bg-slate-950\/90,
-[data-theme="light"] .bg-slate-950\/80,
-[data-theme="light"] .bg-slate-950\/70,
-[data-theme="light"] .bg-slate-950\/60,
-[data-theme="light"] .bg-slate-950\/50,
-[data-theme="light"] .bg-slate-950\/40,
+/* 1. App Canvas & Deep Backgrounds -> var(--bg-input) */
+[data-theme="light"] [class*="bg-slate-950"]:not(.fixed),
 [data-theme="light"] .bg-\[\#0a0f1d\],
 [data-theme="light"] .bg-black\/40,
-[data-theme="medical"] .bg-slate-950,
-[data-theme="medical"] .bg-slate-950\/95,
-[data-theme="medical"] .bg-slate-950\/90,
-[data-theme="medical"] .bg-slate-950\/80,
-[data-theme="medical"] .bg-slate-950\/70,
-[data-theme="medical"] .bg-slate-950\/60,
-[data-theme="medical"] .bg-slate-950\/50,
-[data-theme="medical"] .bg-slate-950\/40,
+[data-theme="medical"] [class*="bg-slate-950"]:not(.fixed),
 [data-theme="medical"] .bg-\[\#0a0f1d\],
 [data-theme="medical"] .bg-black\/40 {
   background-color: var(--bg-input) !important;
+  color: var(--text-primary) !important;
 }
 
 /* Fixed modal overlays keep a translucent dark backdrop in all themes */
-[data-theme="light"] .fixed.inset-0.bg-slate-950\/95,
-[data-theme="light"] .fixed.inset-0.bg-slate-950\/90,
-[data-theme="light"] .fixed.inset-0.bg-slate-950\/85,
-[data-theme="light"] .fixed.inset-0.bg-slate-950\/80,
-[data-theme="light"] .fixed.inset-0.bg-slate-950\/70,
-[data-theme="medical"] .fixed.inset-0.bg-slate-950\/95,
-[data-theme="medical"] .fixed.inset-0.bg-slate-950\/90,
-[data-theme="medical"] .fixed.inset-0.bg-slate-950\/85,
-[data-theme="medical"] .fixed.inset-0.bg-slate-950\/80,
-[data-theme="medical"] .fixed.inset-0.bg-slate-950\/70 {
+[data-theme="light"] .fixed.inset-0[class*="bg-slate-950"],
+[data-theme="medical"] .fixed.inset-0[class*="bg-slate-950"] {
   background-color: rgba(8, 47, 73, 0.55) !important;
 }
 
-/* 2. Cards, Modals, Sidebars & Headers -> var(--bg-card) */
-[data-theme="light"] .bg-slate-900,
-[data-theme="light"] .bg-slate-900\/95,
-[data-theme="light"] .bg-slate-900\/90,
-[data-theme="light"] .bg-slate-900\/80,
-[data-theme="light"] .bg-slate-900\/70,
-[data-theme="light"] .bg-slate-900\/60,
-[data-theme="light"] .bg-slate-900\/50,
-[data-theme="light"] .bg-slate-900\/40,
+/* 2. Cards, Modals, Sidebars & Headers (all opacity variants /85, /80, /70, etc.) -> var(--bg-card) */
+[data-theme="light"] [class*="bg-slate-900"],
 [data-theme="light"] .bg-gray-900,
-[data-theme="medical"] .bg-slate-900,
-[data-theme="medical"] .bg-slate-900\/95,
-[data-theme="medical"] .bg-slate-900\/90,
-[data-theme="medical"] .bg-slate-900\/80,
-[data-theme="medical"] .bg-slate-900\/70,
-[data-theme="medical"] .bg-slate-900\/60,
-[data-theme="medical"] .bg-slate-900\/50,
-[data-theme="medical"] .bg-slate-900\/40,
+[data-theme="medical"] [class*="bg-slate-900"],
 [data-theme="medical"] .bg-gray-900 {
   background-color: var(--bg-card) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
   box-shadow: var(--card-shadow) !important;
 }
 
-/* 3. Elevated Controls & Secondary Buttons -> var(--bg-elevated) */
-[data-theme="light"] .bg-slate-800,
-[data-theme="light"] .bg-slate-800\/90,
-[data-theme="light"] .bg-slate-800\/80,
-[data-theme="light"] .bg-slate-800\/70,
-[data-theme="light"] .bg-slate-800\/60,
-[data-theme="light"] .bg-slate-800\/50,
-[data-theme="light"] .bg-slate-800\/40,
-[data-theme="medical"] .bg-slate-800,
-[data-theme="medical"] .bg-slate-800\/90,
-[data-theme="medical"] .bg-slate-800\/80,
-[data-theme="medical"] .bg-slate-800\/70,
-[data-theme="medical"] .bg-slate-800\/60,
-[data-theme="medical"] .bg-slate-800\/50,
-[data-theme="medical"] .bg-slate-800\/40 {
+/* 3. Elevated Controls & Secondary Buttons (all opacity variants) -> var(--bg-elevated) */
+[data-theme="light"] [class*="bg-slate-800"],
+[data-theme="medical"] [class*="bg-slate-800"] {
   background-color: var(--bg-elevated) !important;
+  color: var(--text-primary) !important;
 }
 
 [data-theme="light"] .hover\:bg-slate-800:hover,
@@ -271,45 +227,101 @@
   background-color: #bae6fd !important;
 }
 
-/* 4. Gradient & Tinted Alert Surfaces in Light & Medical */
-[data-theme="light"] .bg-gradient-to-r,
-[data-theme="light"] .bg-gradient-to-l,
-[data-theme="light"] .bg-gradient-to-b,
-[data-theme="light"] .bg-gradient-to-br,
-[data-theme="medical"] .bg-gradient-to-r,
-[data-theme="medical"] .bg-gradient-to-l,
-[data-theme="medical"] .bg-gradient-to-b,
-[data-theme="medical"] .bg-gradient-to-br {
+/* 4. Dark Gradient Cards -> Clean White/Sky Surface in Light & Medical */
+[data-theme="light"] [class*="from-slate-9"],
+[data-theme="light"] [class*="via-slate-9"],
+[data-theme="light"] [class*="to-slate-9"],
+[data-theme="light"] [class*="from-teal-950"],
+[data-theme="light"] [class*="from-indigo-950"],
+[data-theme="light"] [class*="to-indigo-950"],
+[data-theme="medical"] [class*="from-slate-9"],
+[data-theme="medical"] [class*="via-slate-9"],
+[data-theme="medical"] [class*="to-slate-9"],
+[data-theme="medical"] [class*="from-teal-950"],
+[data-theme="medical"] [class*="from-indigo-950"],
+[data-theme="medical"] [class*="to-indigo-950"] {
   background-image: linear-gradient(135deg, var(--bg-elevated), var(--bg-card)) !important;
+  background-color: var(--bg-card) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
 }
 
+/* Preserve vibrant CTA gradients (from-teal-500 to-emerald-600) */
+[data-theme="light"] .from-teal-500,
+[data-theme="medical"] .from-teal-500 {
+  background-image: linear-gradient(to right, #0284c7, #0d9488) !important;
+  color: #ffffff !important;
+}
+[data-theme="light"] .from-teal-500 *,
+[data-theme="medical"] .from-teal-500 * {
+  color: #ffffff !important;
+}
+
+/* Tinted surfaces & Semantic Soft Badges in Light & Medical */
 [data-theme="light"] [class*="bg-teal-950"],
-[data-theme="medical"] [class*="bg-teal-950"] {
+[data-theme="light"] [class*="bg-teal-500/1"],
+[data-theme="light"] [class*="bg-teal-500/2"],
+[data-theme="medical"] [class*="bg-teal-950"],
+[data-theme="medical"] [class*="bg-teal-500/1"],
+[data-theme="medical"] [class*="bg-teal-500/2"] {
   background-color: #e0f2fe !important;
+  color: #0369a1 !important;
+  border-color: #7dd3fc !important;
 }
 [data-theme="light"] [class*="bg-emerald-950"],
-[data-theme="medical"] [class*="bg-emerald-950"] {
-  background-color: #ecfdf5 !important;
+[data-theme="light"] [class*="bg-emerald-500/1"],
+[data-theme="light"] [class*="bg-emerald-500/2"],
+[data-theme="medical"] [class*="bg-emerald-950"],
+[data-theme="medical"] [class*="bg-emerald-500/1"],
+[data-theme="medical"] [class*="bg-emerald-500/2"] {
+  background-color: #dcfce7 !important;
+  color: #047857 !important;
+  border-color: #6ee7b7 !important;
 }
 [data-theme="light"] [class*="bg-amber-950"],
-[data-theme="medical"] [class*="bg-amber-950"] {
-  background-color: #fffbeb !important;
+[data-theme="light"] [class*="bg-amber-500/1"],
+[data-theme="light"] [class*="bg-amber-500/2"],
+[data-theme="medical"] [class*="bg-amber-950"],
+[data-theme="medical"] [class*="bg-amber-500/1"],
+[data-theme="medical"] [class*="bg-amber-500/2"] {
+  background-color: #fef3c7 !important;
+  color: #b45309 !important;
+  border-color: #fcd34d !important;
 }
 [data-theme="light"] [class*="bg-rose-950"],
-[data-theme="medical"] [class*="bg-rose-950"] {
-  background-color: #fff1f2 !important;
+[data-theme="light"] [class*="bg-rose-500/1"],
+[data-theme="light"] [class*="bg-rose-500/2"],
+[data-theme="medical"] [class*="bg-rose-950"],
+[data-theme="medical"] [class*="bg-rose-500/1"],
+[data-theme="medical"] [class*="bg-rose-500/2"] {
+  background-color: #ffe4e6 !important;
+  color: #be123c !important;
+  border-color: #fda4af !important;
 }
 [data-theme="light"] [class*="bg-indigo-950"],
-[data-theme="medical"] [class*="bg-indigo-950"] {
-  background-color: #eef2ff !important;
+[data-theme="light"] [class*="bg-indigo-500/1"],
+[data-theme="light"] [class*="bg-indigo-500/2"],
+[data-theme="medical"] [class*="bg-indigo-950"],
+[data-theme="medical"] [class*="bg-indigo-500/1"],
+[data-theme="medical"] [class*="bg-indigo-500/2"] {
+  background-color: #e0e7ff !important;
+  color: #3730a3 !important;
+  border-color: #a5b4fc !important;
 }
 [data-theme="light"] [class*="bg-sky-950"],
-[data-theme="medical"] [class*="bg-sky-950"] {
+[data-theme="light"] [class*="bg-sky-500/1"],
+[data-theme="light"] [class*="bg-sky-500/2"],
+[data-theme="medical"] [class*="bg-sky-950"],
+[data-theme="medical"] [class*="bg-sky-500/1"],
+[data-theme="medical"] [class*="bg-sky-500/2"] {
   background-color: #e0f2fe !important;
+  color: #0284c7 !important;
+  border-color: #7dd3fc !important;
 }
 [data-theme="light"] [class*="bg-purple-950"],
 [data-theme="medical"] [class*="bg-purple-950"] {
   background-color: #f3e8ff !important;
+  color: #6b21a8 !important;
 }
 
 /* 5. Typography & High-Contrast Text Overrides */
@@ -343,6 +355,7 @@
 
 /* Keep crisp white text on solid vibrant action buttons & badges */
 [data-theme="light"] .bg-teal-600,
+[data-theme="light"] .bg-teal-600\/90,
 [data-theme="light"] .bg-teal-700,
 [data-theme="light"] .bg-teal-500,
 [data-theme="light"] .bg-emerald-600,
@@ -357,6 +370,7 @@
 [data-theme="light"] .bg-amber-600,
 [data-theme="light"] .bg-amber-500,
 [data-theme="medical"] .bg-teal-600,
+[data-theme="medical"] .bg-teal-600\/90,
 [data-theme="medical"] .bg-teal-700,
 [data-theme="medical"] .bg-teal-500,
 [data-theme="medical"] .bg-emerald-600,
@@ -374,6 +388,7 @@
 }
 
 [data-theme="light"] .bg-teal-600 *,
+[data-theme="light"] .bg-teal-600\/90 *,
 [data-theme="light"] .bg-teal-700 *,
 [data-theme="light"] .bg-teal-500 *,
 [data-theme="light"] .bg-emerald-600 *,
@@ -387,6 +402,7 @@
 [data-theme="light"] .bg-amber-600 *,
 [data-theme="light"] .bg-amber-500 *,
 [data-theme="medical"] .bg-teal-600 *,
+[data-theme="medical"] .bg-teal-600\/90 *,
 [data-theme="medical"] .bg-teal-700 *,
 [data-theme="medical"] .bg-teal-500 *,
 [data-theme="medical"] .bg-emerald-600 *,
@@ -550,44 +566,20 @@
   color: var(--text-primary) !important;
 }
 
-[data-theme="gold"] .bg-slate-950,
-[data-theme="gold"] .bg-slate-950\/95,
-[data-theme="gold"] .bg-slate-950\/90,
-[data-theme="gold"] .bg-slate-950\/80,
-[data-theme="gold"] .bg-slate-950\/70,
-[data-theme="gold"] .bg-slate-950\/60,
-[data-theme="gold"] .bg-slate-950\/50,
-[data-theme="gold"] .bg-slate-950\/40 {
+[data-theme="gold"] [class*="bg-slate-950"]:not(.fixed) {
   background-color: var(--bg-app) !important;
 }
 
-[data-theme="gold"] .fixed.inset-0.bg-slate-950\/95,
-[data-theme="gold"] .fixed.inset-0.bg-slate-950\/90,
-[data-theme="gold"] .fixed.inset-0.bg-slate-950\/85,
-[data-theme="gold"] .fixed.inset-0.bg-slate-950\/80,
-[data-theme="gold"] .fixed.inset-0.bg-slate-950\/70 {
+[data-theme="gold"] .fixed.inset-0[class*="bg-slate-950"] {
   background-color: rgba(12, 10, 6, 0.85) !important;
 }
 
-[data-theme="gold"] .bg-slate-900,
-[data-theme="gold"] .bg-slate-900\/95,
-[data-theme="gold"] .bg-slate-900\/90,
-[data-theme="gold"] .bg-slate-900\/80,
-[data-theme="gold"] .bg-slate-900\/70,
-[data-theme="gold"] .bg-slate-900\/60,
-[data-theme="gold"] .bg-slate-900\/50,
-[data-theme="gold"] .bg-slate-900\/40 {
+[data-theme="gold"] [class*="bg-slate-900"] {
   background-color: var(--bg-card) !important;
   box-shadow: var(--card-shadow) !important;
 }
 
-[data-theme="gold"] .bg-slate-800,
-[data-theme="gold"] .bg-slate-800\/90,
-[data-theme="gold"] .bg-slate-800\/80,
-[data-theme="gold"] .bg-slate-800\/70,
-[data-theme="gold"] .bg-slate-800\/60,
-[data-theme="gold"] .bg-slate-800\/50,
-[data-theme="gold"] .bg-slate-800\/40 {
+[data-theme="gold"] [class*="bg-slate-800"] {
   background-color: var(--bg-elevated) !important;
 }
 
@@ -627,6 +619,7 @@
 
 /* Primary action buttons in Gold Theme use royal gold with dark obsidian text */
 [data-theme="gold"] .bg-teal-600,
+[data-theme="gold"] .bg-teal-600\/90,
 [data-theme="gold"] .bg-amber-600,
 [data-theme="gold"] .bg-amber-500 {
   background-color: var(--accent-primary) !important;
@@ -634,6 +627,7 @@
 }
 
 [data-theme="gold"] .bg-teal-600 *,
+[data-theme="gold"] .bg-teal-600\/90 *,
 [data-theme="gold"] .bg-amber-600 *,
 [data-theme="gold"] .bg-amber-500 * {
   color: var(--accent-text) !important;
@@ -648,16 +642,16 @@
   color: var(--text-primary) !important;
 }
 
-[data-theme="dark"] .bg-slate-950 {
+[data-theme="dark"] [class*="bg-slate-950"]:not(.fixed) {
   background-color: var(--bg-app) !important;
 }
 
-[data-theme="dark"] .bg-slate-900 {
+[data-theme="dark"] [class*="bg-slate-900"] {
   background-color: var(--bg-card) !important;
   box-shadow: var(--card-shadow) !important;
 }
 
-[data-theme="dark"] .bg-slate-800 {
+[data-theme="dark"] [class*="bg-slate-800"] {
   background-color: var(--bg-elevated) !important;
 }
 
@@ -672,3 +666,4 @@
   color: var(--text-primary) !important;
   border-color: var(--border-color) !important;
 }
+
