@@ -1070,31 +1070,42 @@ export default function BulkQuestionImportModal({
     >
       <div className="bg-slate-900 border-0 sm:border sm:border-slate-800 sm:rounded-2xl w-full max-w-5xl h-[100dvh] sm:h-[92dvh] flex flex-col shadow-2xl overflow-hidden">
         
-        {/* Ultra-Compact Single-Row Top Header (Saves >150px on mobile) */}
-        <div className="px-3 py-2.5 sm:px-4 sm:py-3 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <h3 className="text-xs sm:text-sm font-bold text-white truncate">
-              استيراد وإعداد الأسئلة — {bank.titleArabic}
-            </h3>
-            <span
-              className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 border shrink-0 ${
-                isOnline
-                  ? 'bg-emerald-950/80 border-emerald-700/70 text-emerald-300'
-                  : 'bg-amber-950/80 border-amber-700/70 text-amber-300'
-              }`}
+        {/* Responsive Top Header & 3-Step Guided Wizard (Never clips on 360px mobile) */}
+        <div className="px-3 py-2.5 sm:px-4 sm:py-3 bg-slate-950 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center justify-between gap-2 min-w-0 w-full sm:w-auto">
+            <div className="flex items-center gap-2 min-w-0">
+              <h3 className="text-xs sm:text-sm font-bold text-white truncate">
+                استيراد وإعداد الأسئلة — {bank.titleArabic}
+              </h3>
+              <span
+                className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 border shrink-0 ${
+                  isOnline
+                    ? 'bg-emerald-950/80 border-emerald-700/70 text-emerald-300'
+                    : 'bg-amber-950/80 border-amber-700/70 text-amber-300'
+                }`}
+              >
+                {isOnline ? <Wifi className="w-3 h-3 shrink-0" /> : <WifiOff className="w-3 h-3 shrink-0" />}
+                <span>{isOnline ? 'متصل' : 'أوفلاين'}</span>
+              </span>
+            </div>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors sm:hidden shrink-0"
+              title="إغلاق"
             >
-              {isOnline ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-              <span>{isOnline ? 'متصل' : 'أوفلاين'}</span>
-            </span>
+              <X className="w-4 h-4" />
+            </button>
           </div>
 
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center justify-between sm:justify-end gap-1.5 w-full sm:w-auto shrink-0">
             {/* 3-Step Guided Wizard Toggle */}
-            <div className="flex items-center bg-slate-900 p-0.5 rounded-xl border border-slate-800 text-[11px]">
+            <div className="grid grid-cols-3 sm:flex items-center bg-slate-900 p-1 rounded-xl border border-slate-800 text-[11px] w-full sm:w-auto gap-1">
               <button
                 type="button"
                 onClick={() => setStep('setup')}
-                className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                className={`px-2 py-1.5 sm:px-2.5 sm:py-1 rounded-lg font-bold transition-all text-center truncate ${
                   step === 'setup'
                     ? 'bg-teal-600 text-white shadow'
                     : 'text-slate-400 hover:text-white'
@@ -1105,7 +1116,7 @@ export default function BulkQuestionImportModal({
               <button
                 type="button"
                 onClick={() => setStep('content')}
-                className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                className={`px-2 py-1.5 sm:px-2.5 sm:py-1 rounded-lg font-bold transition-all text-center truncate ${
                   step === 'content'
                     ? 'bg-teal-600 text-white shadow'
                     : 'text-slate-400 hover:text-white'
@@ -1119,7 +1130,7 @@ export default function BulkQuestionImportModal({
                   if (drafts.length > 0) setStep('review');
                   else if (rawInput.trim()) handleParseInput();
                 }}
-                className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                className={`px-2 py-1.5 sm:px-2.5 sm:py-1 rounded-lg font-bold transition-all text-center truncate ${
                   step === 'review'
                     ? 'bg-teal-600 text-white shadow'
                     : 'text-slate-400 hover:text-white'
@@ -1132,7 +1143,7 @@ export default function BulkQuestionImportModal({
             <button
               type="button"
               onClick={onClose}
-              className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+              className="hidden sm:flex p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors shrink-0"
               title="إغلاق"
             >
               <X className="w-4 h-4" />
@@ -1367,25 +1378,12 @@ export default function BulkQuestionImportModal({
                 </div>
               )}
 
-              {/* Step 1 Footer CTA */}
-              <div className="pt-2 flex justify-end">
-                <button
-                  type="button"
-                  onClick={() => setStep('content')}
-                  className="py-3 px-6 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold shadow-lg shadow-teal-900/40 flex items-center gap-2 transition-colors"
-                >
-                  <span>متابعة لإدخال وتوليد الأسئلة</span>
-                  <span>←</span>
-                </button>
-              </div>
             </div>
           )}
 
-
-
           {/* STEP 2: CONTENT INPUT & AI GENERATION */}
           {step === 'content' && (
-            <div className="space-y-4">
+            <div className="space-y-4 pt-2">
               {inputSource === 'ai' ? (
                 /* AI Prompt Generation Card & Fast Actions */
                 <div className="p-4 rounded-2xl bg-indigo-950/30 border border-indigo-800/60 space-y-3">
@@ -1436,7 +1434,7 @@ export default function BulkQuestionImportModal({
 
                   <textarea
                     readOnly
-                    dir={examLanguage === 'en' ? 'ltr' : 'rtl'}
+                    dir="auto"
                     value={generatedAiPrompt}
                     rows={4}
                     className="w-full p-3 rounded-xl bg-slate-950/90 border border-indigo-900/80 text-[11px] text-slate-300 font-mono leading-relaxed focus:outline-none"
@@ -1496,7 +1494,7 @@ export default function BulkQuestionImportModal({
                   <span className="text-slate-500 font-mono text-[11px]">{rawInput.length} حرف</span>
                 </div>
                 <textarea
-                  dir={examLanguage === 'en' ? 'ltr' : 'rtl'}
+                  dir="auto"
                   value={rawInput}
                   onChange={(e) => setRawInput(e.target.value)}
                   placeholder={
@@ -1506,27 +1504,6 @@ export default function BulkQuestionImportModal({
                   }
                   className="w-full min-h-[260px] sm:min-h-[340px] p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white leading-relaxed focus:outline-none focus:border-teal-500"
                 />
-              </div>
-
-              {/* Step 2 Bottom Navigation */}
-              <div className="flex items-center justify-between gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setStep('setup')}
-                  className="py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-bold border border-slate-800 transition-colors"
-                >
-                  <span>← رجوع لخطوة الإعداد</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleParseInput(rawInput)}
-                  disabled={!rawInput.trim()}
-                  className="py-3 px-6 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-40 text-white text-xs font-bold shadow-lg shadow-teal-900/40 flex items-center gap-2 transition-colors"
-                >
-                  <span>فحص وتحليل الأسئلة والانتقال للتدقيق والتوقيت</span>
-                  <span>←</span>
-                </button>
               </div>
             </div>
           )}
@@ -1816,9 +1793,9 @@ export default function BulkQuestionImportModal({
                           </div>
                         )}
 
-                        {/* Question Stem Input */}
+                        {/* Question Stem Input (Multi-line spacious textarea with dir="auto") */}
                         <textarea
-                          dir={isEnQuestion ? 'ltr' : 'rtl'}
+                          dir="auto"
                           value={draft.stemArabic}
                           onChange={(e) =>
                             updateDraftItem(draft.tempId, (d) => ({
@@ -1827,16 +1804,16 @@ export default function BulkQuestionImportModal({
                               ...(isEnQuestion ? { stemEnglish: e.target.value } : {})
                             }))
                           }
-                          rows={2}
+                          rows={3}
                           placeholder={isEnQuestion ? 'Medical question stem in English...' : 'نص السؤال الطبي...'}
-                          className="w-full p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-semibold focus:outline-none focus:border-teal-500"
+                          className="w-full min-h-[5.5rem] p-3 rounded-xl bg-slate-900 border border-slate-800 text-xs sm:text-sm text-white font-semibold leading-relaxed focus:outline-none focus:border-teal-500 resize-y"
                         />
 
-                        {/* Bilingual Secondary English Stem (Shown directly on card if bilingual or if stemEnglish differs from stemArabic) */}
+                        {/* Bilingual Secondary English Stem (Multi-line textarea) */}
                         {(qLang === 'bilingual' || (draft.stemEnglish && draft.stemEnglish !== draft.stemArabic)) && (
-                          <input
-                            type="text"
-                            dir="ltr"
+                          <textarea
+                            rows={2}
+                            dir="auto"
                             value={draft.stemEnglish || ''}
                             onChange={(e) =>
                               updateDraftItem(draft.tempId, (d) => ({
@@ -1845,7 +1822,7 @@ export default function BulkQuestionImportModal({
                               }))
                             }
                             placeholder="English question stem (for bilingual mode)..."
-                            className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900/70 border border-indigo-900/60 text-xs text-indigo-200 focus:outline-none focus:border-indigo-400"
+                            className="w-full min-h-[3.25rem] p-2.5 rounded-xl bg-slate-900/70 border border-indigo-900/60 text-xs text-indigo-200 leading-relaxed focus:outline-none focus:border-indigo-400 resize-y"
                           />
                         )}
 
@@ -1861,7 +1838,7 @@ export default function BulkQuestionImportModal({
                             </div>
                             <input
                               type="text"
-                              dir={isEnQuestion ? 'ltr' : 'rtl'}
+                              dir="auto"
                               value={draft.modelAnswerArabic || ''}
                               onChange={(e) =>
                                 updateDraftItem(draft.tempId, (d) => ({
@@ -1891,7 +1868,7 @@ export default function BulkQuestionImportModal({
                               <span className="text-[10px] text-purple-400 font-mono">Model Answer</span>
                             </div>
                             <textarea
-                              dir={isEnQuestion ? 'ltr' : 'rtl'}
+                              dir="auto"
                               value={draft.modelAnswerArabic || ''}
                               onChange={(e) =>
                                 updateDraftItem(draft.tempId, (d) => ({
@@ -1906,7 +1883,7 @@ export default function BulkQuestionImportModal({
                                   ? 'Enter the complete model answer / clinical grading rubric...'
                                   : 'اكتب الإجابة النموذجية الكاملة أو النقاط الطبية الأساسية التي سيتم على أساسها تقييم إجابة الطالب المقالية...'
                               }
-                              className="w-full p-2.5 rounded-lg bg-slate-950 border border-purple-900 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-purple-400 leading-relaxed"
+                              className="w-full p-2.5 rounded-lg bg-slate-950 border border-purple-900 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-purple-400 leading-relaxed resize-y"
                             />
                           </div>
                         )}
@@ -1993,7 +1970,7 @@ export default function BulkQuestionImportModal({
                                         : 'bg-slate-900/90 border-slate-800'
                                     }`}
                                   >
-                                    <div className="flex items-center gap-1.5">
+                                    <div className="flex items-start gap-1.5">
                                       <button
                                         type="button"
                                         onClick={() =>
@@ -2002,7 +1979,7 @@ export default function BulkQuestionImportModal({
                                             correctOptionId: opt.id
                                           }))
                                         }
-                                        className={`px-2.5 py-1 rounded-md text-[11px] font-bold shrink-0 transition-colors ${
+                                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold shrink-0 transition-colors mt-0.5 ${
                                           isCorrect
                                             ? 'bg-teal-600 text-white shadow'
                                             : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
@@ -2012,9 +1989,9 @@ export default function BulkQuestionImportModal({
                                         {isCorrect ? `✓ ${letterDisplay}` : letterDisplay}
                                       </button>
 
-                                      <input
-                                        type="text"
-                                        dir={isEnQuestion ? 'ltr' : 'rtl'}
+                                      <textarea
+                                        rows={2}
+                                        dir="auto"
                                         value={opt.textArabic}
                                         onChange={(e) =>
                                           updateDraftItem(draft.tempId, (d) => ({
@@ -2031,14 +2008,14 @@ export default function BulkQuestionImportModal({
                                           }))
                                         }
                                         placeholder={isEnQuestion ? `Option (${letterDisplay})...` : `الخيار (${letterDisplay})...`}
-                                        className="flex-1 min-w-0 bg-transparent text-xs text-white focus:outline-none px-1"
+                                        className="flex-1 min-w-0 w-full min-h-[3.25rem] p-2 rounded-lg bg-slate-950/60 border border-slate-800 text-xs text-white leading-relaxed focus:outline-none focus:border-teal-500 resize-y"
                                       />
 
                                       {draft.options.length > 2 && (
                                         <button
                                           type="button"
                                           onClick={() => handleRemoveOption(draft.tempId, opt.id)}
-                                          className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 transition-colors"
+                                          className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 transition-colors shrink-0 mt-0.5"
                                           title="حذف هذا الخيار"
                                         >
                                           <X className="w-3.5 h-3.5" />
@@ -2049,7 +2026,7 @@ export default function BulkQuestionImportModal({
                                     {/* Option-Specific Explanation / Rationale */}
                                     <input
                                       type="text"
-                                      dir={isEnQuestion ? 'ltr' : 'rtl'}
+                                      dir="auto"
                                       value={opt.explanationArabic || ''}
                                       onChange={(e) =>
                                         updateDraftItem(draft.tempId, (d) => ({
@@ -2064,7 +2041,7 @@ export default function BulkQuestionImportModal({
                                           ? `Rationale for Option (${letterDisplay}) (optional)...`
                                           : `تعليل الخيار (${letterDisplay}): سبب صحته أو خطئه (اختياري)...`
                                       }
-                                      className="w-full px-2 py-0.5 rounded bg-slate-950/70 border border-slate-800/80 text-[10px] text-slate-300 placeholder:text-slate-600 focus:outline-none focus:border-teal-500"
+                                      className="w-full px-2.5 py-1 rounded-lg bg-slate-950/70 border border-slate-800/80 text-[10px] text-slate-300 placeholder:text-slate-600 focus:outline-none focus:border-teal-500"
                                     />
                                   </div>
                                 );
@@ -2120,6 +2097,7 @@ export default function BulkQuestionImportModal({
                             </div>
 
                             <textarea
+                              dir="auto"
                               value={draft.explanationArabic || ''}
                               onChange={(e) =>
                                 updateDraftItem(draft.tempId, (d) => ({
@@ -2129,7 +2107,7 @@ export default function BulkQuestionImportModal({
                               }
                               rows={2}
                               placeholder="شرح سبب صحة الإجابة المختارة..."
-                              className="w-full p-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-teal-500"
+                              className="w-full p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white leading-relaxed focus:outline-none focus:border-teal-500 resize-y"
                             />
 
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -2379,10 +2357,10 @@ export default function BulkQuestionImportModal({
                     {saving
                       ? 'جاري الاعتماد والحفظ...'
                       : publishMode === 'exam_only'
-                      ? `موافقة ونشر كاختبار أكاديمي فقط (${stats.selectedValid} سؤال)`
+                      ? `اعتماد ونشر كاختبار (${stats.selectedValid})`
                       : publishMode === 'competition_only'
-                      ? `موافقة ونشر كمسابقة طبية فقط (${stats.selectedValid} سؤال)`
-                      : `اعتماد وحفظ في بنك الأسئلة فقط (${stats.selectedValid} سؤال)`}
+                      ? `اعتماد ونشر كمسابقة (${stats.selectedValid})`
+                      : `اعتماد وحفظ (${stats.selectedValid})`}
                   </span>
                 </button>
               </div>

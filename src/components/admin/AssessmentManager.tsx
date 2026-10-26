@@ -864,15 +864,50 @@ export default function AssessmentManager({
     return lvlId === 'lvl-internship' ? 'سنة الامتياز' : `المستوى ${lvlId.replace('lvl-', '')}`;
   };
 
+  const renderBiDiRoleBadge = (role?: UserRole) => {
+    switch (role) {
+      case 'platform_owner':
+        return (
+          <>
+            مالك المنصة العام <span dir="ltr" className="inline-block">(Platform Owner)</span>
+          </>
+        );
+      case 'university_admin':
+        return (
+          <>
+            مالك / مشرف الجامعة <span dir="ltr" className="inline-block">(University Owner)</span>
+          </>
+        );
+      case 'batch_rep':
+        return (
+          <>
+            مندوب الدفعة / المستوى <span dir="ltr" className="inline-block">(Batch Representative)</span>
+          </>
+        );
+      case 'department_head':
+        return (
+          <>
+            رئيس قسم أو مادة <span dir="ltr" className="inline-block">(Department / Subject Head)</span>
+          </>
+        );
+      default:
+        return (
+          <>
+            طالب طب بشري <span dir="ltr" className="inline-block">(Student)</span>
+          </>
+        );
+    }
+  };
+
   return (
     <div className="space-y-6" dir="rtl">
       
       {/* Top Banner */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-wrap items-center justify-between gap-4">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl flex flex-wrap items-center justify-between gap-4">
         <div>
-          <div className="flex flex-wrap items-center gap-2 mb-1">
-            <span className="text-xs px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-semibold">
-              إدارة بنوك الأسئلة والاختبارات ({getRoleLabelArabic(userRole)})
+          <div className="flex flex-wrap items-center gap-2 mb-1.5">
+            <span className="text-xs px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-semibold leading-snug">
+              إدارة بنوك الأسئلة والاختبارات — {renderBiDiRoleBadge(userRole)}
             </span>
             {isBatchScoped && assignedStudyLevelId && (
               <span className="text-xs px-2.5 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30 font-semibold">
@@ -1051,11 +1086,11 @@ export default function AssessmentManager({
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
+            <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2.5 w-full lg:w-auto">
               <button
                 type="button"
                 onClick={() => setShowBankSelectorModal(true)}
-                className="flex-1 sm:flex-initial py-2.5 px-4 min-h-[42px] rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-teal-300 hover:text-white text-xs font-bold flex items-center justify-center gap-2 transition-colors"
+                className="col-span-2 sm:col-span-1 py-2.5 px-4 min-h-[42px] rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-teal-300 hover:text-white text-xs font-bold flex items-center justify-center gap-2 transition-colors"
                 title="فتح نافذة اختيار وإدارة بنوك الأسئلة"
               >
                 <BookOpen className="w-4 h-4 text-teal-400 shrink-0" />
@@ -1065,7 +1100,7 @@ export default function AssessmentManager({
               <button
                 type="button"
                 onClick={() => setShowNewBankForm(!showNewBankForm)}
-                className="flex-1 sm:flex-initial py-2.5 px-4 min-h-[42px] rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center justify-center gap-2 transition-colors shadow-md"
+                className="py-2.5 px-3.5 min-h-[42px] rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md"
               >
                 <Plus className="w-4 h-4 shrink-0" />
                 <span>بنك أسئلة جديد</span>
@@ -1076,15 +1111,15 @@ export default function AssessmentManager({
                   <button
                     type="button"
                     onClick={() => setEditingBank(selectedBank)}
-                    className="py-2.5 px-3.5 min-h-[42px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+                    className="py-2.5 px-3.5 min-h-[42px] rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
                   >
-                    <Edit2 className="w-3.5 h-3.5 text-teal-400" />
+                    <Edit2 className="w-3.5 h-3.5 text-teal-400 shrink-0" />
                     <span>تعديل البنك</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setShowBulkImportModal(true)}
-                    className="py-2.5 px-4 min-h-[42px] rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center justify-center gap-2 transition-colors shadow-lg"
+                    className="py-2.5 px-3.5 min-h-[42px] rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-lg"
                   >
                     <Upload className="w-4 h-4 shrink-0" />
                     <span>استيراد دفعة أسئلة</span>
@@ -1092,7 +1127,7 @@ export default function AssessmentManager({
                   <button
                     type="button"
                     onClick={() => setShowNewQuestionForm(!showNewQuestionForm)}
-                    className="py-2.5 px-4 min-h-[42px] rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center justify-center gap-2 transition-colors shadow-md"
+                    className="py-2.5 px-3.5 min-h-[42px] rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md"
                   >
                     <Plus className="w-4 h-4 shrink-0" />
                     <span>سؤال يدوي</span>
@@ -1321,95 +1356,127 @@ export default function AssessmentManager({
                   </form>
                 )}
 
-                <div className="space-y-4">
-                  {bankQuestions.map((q, idx) => (
-                    <div key={q.id} className="p-4 sm:p-5 rounded-2xl bg-slate-950 border border-slate-800 space-y-3.5 hover:border-slate-700 transition-all">
-                      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
-                        <div className="space-y-1.5 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-xs font-extrabold px-2.5 py-1 rounded-lg bg-teal-500/15 border border-teal-500/30 text-teal-300">
-                              سؤال #{idx + 1} ({q.points} نقاط)
-                            </span>
-                            {q.syncStatus === 'pending_sync' ? (
-                              <span className="px-2.5 py-0.5 rounded-lg bg-amber-950/80 border border-amber-700/70 text-amber-300 text-xs font-semibold">
-                                محفوظ محلياً — بانتظار المزامنة
+                {bankQuestions.length === 0 && !showNewQuestionForm ? (
+                  <div className="p-6 text-center rounded-xl bg-slate-950/70 border border-slate-800 space-y-3">
+                    <p className="text-xs text-slate-400">
+                      لا توجد أسئلة مضافة في هذا البنك حتى الآن. يمكنك استيراد أو توليد دفعة أسئلة كاملة أو إضافة سؤال يدوياً.
+                    </p>
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowBulkImportModal(true)}
+                        className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 shadow"
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>فتح واضع الاختبار الذكي / استيراد أسئلة</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowNewQuestionForm(true)}
+                        className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold flex items-center gap-1.5"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>إضافة سؤال يدوي</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {bankQuestions.map((q, idx) => (
+                      <div key={q.id} className="p-4 sm:p-5 rounded-2xl bg-slate-950 border border-slate-800 space-y-3.5 hover:border-slate-700 transition-all">
+                        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                          <div className="space-y-1.5 flex-1 min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-xs font-extrabold px-2.5 py-1 rounded-lg bg-teal-500/15 border border-teal-500/30 text-teal-300">
+                                سؤال #{idx + 1} ({q.points} نقاط)
                               </span>
-                            ) : (
-                              <span className="px-2.5 py-0.5 rounded-lg bg-emerald-950/60 border border-emerald-800/60 text-emerald-300 text-xs font-semibold">
-                                متزامن سحابياً ✓
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-sm sm:text-base font-bold text-white leading-relaxed">{q.stemArabic}</p>
-                          {q.stemEnglish && <p className="text-xs text-slate-400 font-mono" dir="ltr">{q.stemEnglish}</p>}
-                        </div>
-
-                        <div className="flex items-center gap-2 shrink-0 pt-1 sm:pt-0">
-                          <button
-                            type="button"
-                            onClick={() => openEditQuestionModal(q)}
-                            className="px-3.5 py-2 min-h-[38px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 transition-colors"
-                          >
-                            <Edit2 className="w-3.5 h-3.5 text-teal-400" />
-                            <span>تعديل</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => deleteQuestion(q.id, selectedBank.id).then(() => setBankQuestions(prev => prev.filter(item => item.id !== q.id)))}
-                            className="px-3.5 py-2 min-h-[38px] rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-900/50 text-rose-300 text-xs font-bold flex items-center gap-1.5 transition-colors"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            <span>حذف</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
-                        {q.options.map((o, optIdx) => {
-                          const optionLetters = ['أ', 'ب', 'ج', 'د', 'هـ'];
-                          const isCorrect = o.id === q.correctOptionId;
-                          return (
-                            <div
-                              key={o.id}
-                              className={`p-3 rounded-xl border transition-all ${
-                                isCorrect 
-                                  ? 'bg-teal-950/70 border-teal-500/80 text-teal-200 font-bold shadow-sm'
-                                  : 'bg-slate-900/60 border-slate-800 text-slate-300'
-                              }`}
-                            >
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="flex items-center gap-2">
-                                  <span className={`w-5 h-5 rounded-full flex items-center justify-center font-bold text-xs ${
-                                    isCorrect ? 'bg-teal-500 text-slate-950' : 'bg-slate-800 text-slate-400'
-                                  }`}>
-                                    {optionLetters[optIdx] || optIdx + 1}
-                                  </span>
-                                  <span>{o.textArabic}</span>
-                                </div>
-                                {isCorrect && (
-                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/40">
-                                    الإجابة الصحيحة ✓
-                                  </span>
-                                )}
-                              </div>
-                              {q.optionExplanations?.[o.id] && (
-                                <div className="text-[11px] font-normal text-slate-400 mt-2 pt-1.5 border-t border-slate-800">
-                                  {q.optionExplanations[o.id]}
-                                </div>
+                              {q.syncStatus === 'pending_sync' ? (
+                                <span className="px-2.5 py-0.5 rounded-lg bg-amber-950/80 border border-amber-700/70 text-amber-300 text-xs font-semibold">
+                                  محفوظ محلياً — بانتظار المزامنة
+                                </span>
+                              ) : (
+                                <span className="px-2.5 py-0.5 rounded-lg bg-emerald-950/60 border border-emerald-800/60 text-emerald-300 text-xs font-semibold">
+                                  متزامن سحابياً ✓
+                                </span>
                               )}
                             </div>
-                          );
-                        })}
-                      </div>
+                            <p dir="auto" className="text-sm sm:text-base font-bold text-white leading-relaxed break-words">
+                              {q.stemArabic}
+                            </p>
+                            {q.stemEnglish && q.stemEnglish !== q.stemArabic && (
+                              <p className="text-xs text-slate-400 font-mono leading-relaxed break-words" dir="ltr">
+                                {q.stemEnglish}
+                              </p>
+                            )}
+                          </div>
 
-                      {q.explanationArabic && (
-                        <div className="text-xs text-slate-300 bg-slate-900/70 p-3 rounded-xl border border-slate-800">
-                          <strong className="text-teal-400">التعليل الطبي المعتمد:</strong> {q.explanationArabic}
+                          <div className="flex items-center gap-2 shrink-0 pt-1 sm:pt-0">
+                            <button
+                              type="button"
+                              onClick={() => openEditQuestionModal(q)}
+                              className="px-3.5 py-2 min-h-[38px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                            >
+                              <Edit2 className="w-3.5 h-3.5 text-teal-400" />
+                              <span>تعديل</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => deleteQuestion(q.id, selectedBank.id).then(() => setBankQuestions(prev => prev.filter(item => item.id !== q.id)))}
+                              className="px-3.5 py-2 min-h-[38px] rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-900/50 text-rose-300 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>حذف</span>
+                            </button>
+                          </div>
                         </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+                          {q.options.map((o, optIdx) => {
+                            const optionLetters = ['أ', 'ب', 'ج', 'د', 'هـ'];
+                            const isCorrect = o.id === q.correctOptionId;
+                            return (
+                              <div
+                                key={o.id}
+                                className={`p-3 rounded-xl border transition-all ${
+                                  isCorrect 
+                                    ? 'bg-teal-950/70 border-teal-500/80 text-teal-200 font-bold shadow-sm'
+                                    : 'bg-slate-900/60 border-slate-800 text-slate-300'
+                                }`}
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="flex items-start gap-2 min-w-0 flex-1">
+                                    <span className={`w-5 h-5 rounded-full flex items-center justify-center font-bold text-xs shrink-0 mt-0.5 ${
+                                      isCorrect ? 'bg-teal-500 text-slate-950' : 'bg-slate-800 text-slate-400'
+                                    }`}>
+                                      {optionLetters[optIdx] || optIdx + 1}
+                                    </span>
+                                    <span dir="auto" className="leading-relaxed break-words flex-1">{o.textArabic}</span>
+                                  </div>
+                                  {isCorrect && (
+                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/40 shrink-0">
+                                      الإجابة الصحيحة ✓
+                                    </span>
+                                  )}
+                                </div>
+                                {q.optionExplanations?.[o.id] && (
+                                  <div dir="auto" className="text-[11px] font-normal text-slate-400 mt-2 pt-1.5 border-t border-slate-800 leading-relaxed">
+                                    {q.optionExplanations[o.id]}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {q.explanationArabic && (
+                          <div dir="auto" className="text-xs text-slate-300 bg-slate-900/70 p-3 rounded-xl border border-slate-800 leading-relaxed">
+                            <strong className="text-teal-400">التعليل الطبي المعتمد:</strong> {q.explanationArabic}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
 
               </div>
             ) : (
@@ -2073,7 +2140,7 @@ export default function AssessmentManager({
               </div>
             </div>
 
-            <div className="p-4 overflow-y-auto space-y-2.5 flex-1">
+            <div className="p-4 overflow-y-auto space-y-3 flex-1">
               {banks.length === 0 ? (
                 <div className="p-8 text-center text-slate-400 text-xs">
                   لا توجد بنوك أسئلة مطابقة للمستوى الدراسي الحالي. اضغط "بنك جديد" لإنشاء بنك.
@@ -2086,37 +2153,27 @@ export default function AssessmentManager({
                       await handleSelectBank(b);
                       setShowBankSelectorModal(false);
                     }}
-                    className={`w-full text-right p-4 rounded-xl border text-xs transition-all cursor-pointer ${
+                    className={`w-full text-right p-4 rounded-2xl border text-xs transition-all cursor-pointer flex flex-col gap-3 ${
                       selectedBank?.id === b.id
                         ? 'bg-teal-950/70 border-teal-500 text-teal-200 shadow-lg'
                         : 'bg-slate-950/80 border-slate-800 text-slate-300 hover:border-slate-700'
                     }`}
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="space-y-1">
-                        <div className="font-bold text-sm text-white flex items-center gap-2">
-                          <span>{b.titleArabic}</span>
-                          {selectedBank?.id === b.id && (
-                            <span className="px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 text-[10px] font-bold">
-                              البنك النشط ✓
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="inline-block px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] font-bold text-teal-300">
-                            اللغة: {b.language === 'en' ? 'English' : b.language === 'bilingual' ? 'ثنائي اللغة' : 'العربية'}
+                    {/* Row 1: Active Status Badge (Right) + Action Buttons (Left) */}
+                    <div className="flex items-center justify-between gap-2 flex-wrap w-full">
+                      <div>
+                        {selectedBank?.id === b.id ? (
+                          <span className="px-2.5 py-1 rounded-full bg-teal-500/20 border border-teal-500/40 text-teal-300 text-[11px] font-bold inline-flex items-center gap-1">
+                            <span>البنك النشط حالياً ✓</span>
                           </span>
-                          <span className="inline-block px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] font-bold text-amber-300">
-                            النمط: {b.questionTypeMode === 'mcq' ? 'اختيارات فقط' : b.questionTypeMode === 'true_false' ? 'صح وخطأ فقط' : b.questionTypeMode === 'fill_blank' ? 'إكمال الفراغ فقط' : b.questionTypeMode === 'essay' ? 'مقالي فقط' : 'بنك هجين شامل'}
+                        ) : (
+                          <span className="px-2.5 py-1 rounded-full bg-slate-900 border border-slate-800 text-slate-400 text-[10px] font-semibold">
+                            اضغط لاختيار البنك
                           </span>
-                          {b.studyLevelId && (
-                            <span className="inline-block px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] text-indigo-300">
-                              {getLevelLabel(b.studyLevelId)}
-                            </span>
-                          )}
-                        </div>
+                        )}
                       </div>
-                      <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+
+                      <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                         <button
                           type="button"
                           onClick={async () => {
@@ -2124,9 +2181,9 @@ export default function AssessmentManager({
                             setShowBankSelectorModal(false);
                             setShowBulkImportModal(true);
                           }}
-                          className="px-2.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold flex items-center gap-1"
+                          className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold flex items-center gap-1.5 shadow-sm transition-colors"
                         >
-                          <Upload className="w-3 h-3" />
+                          <Upload className="w-3.5 h-3.5 shrink-0" />
                           <span>واضع الاختبار الذكي</span>
                         </button>
                         <button
@@ -2135,7 +2192,7 @@ export default function AssessmentManager({
                             setShowBankSelectorModal(false);
                             setEditingBank(b);
                           }}
-                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
+                          className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-colors"
                           title="تعديل البنك"
                         >
                           <Edit2 className="w-3.5 h-3.5" />
@@ -2143,32 +2200,59 @@ export default function AssessmentManager({
                         <button
                           type="button"
                           onClick={() => setConfirmDeleteBankId(b.id)}
-                          className="p-1.5 rounded-lg bg-rose-950/50 hover:bg-rose-900/70 text-rose-400"
+                          className="p-2 rounded-xl bg-rose-950/50 hover:bg-rose-900/70 text-rose-400 border border-rose-900/50 transition-colors"
                           title="حذف البنك"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </div>
-                    {b.descriptionArabic && <div className="text-[11px] text-slate-400 mt-1">{b.descriptionArabic}</div>}
+
+                    {/* Row 2: Full-Width Bank Title & Description (Never Squeezed) */}
+                    <div className="w-full space-y-1">
+                      <div dir="auto" className="font-bold text-base sm:text-lg text-white leading-relaxed break-words w-full">
+                        {b.titleArabic}
+                      </div>
+                      {b.descriptionArabic && (
+                        <div dir="auto" className="text-xs text-slate-400 leading-relaxed break-words w-full">
+                          {b.descriptionArabic}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Row 3: Metadata Badges Footer */}
+                    <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-800/70 w-full">
+                      <span className="inline-block px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-bold text-teal-300">
+                        اللغة: {b.language === 'en' ? 'English' : b.language === 'bilingual' ? 'ثنائي اللغة' : 'العربية'}
+                      </span>
+                      <span className="inline-block px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-bold text-amber-300">
+                        النمط: {b.questionTypeMode === 'mcq' ? 'اختيارات فقط' : b.questionTypeMode === 'true_false' ? 'صح وخطأ فقط' : b.questionTypeMode === 'fill_blank' ? 'إكمال الفراغ فقط' : b.questionTypeMode === 'essay' ? 'مقالي فقط' : 'بنك هجين شامل'}
+                      </span>
+                      {b.studyLevelId && (
+                        <span className="inline-block px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-semibold text-indigo-300">
+                          {getLevelLabel(b.studyLevelId)}
+                        </span>
+                      )}
+                    </div>
+
                     {confirmDeleteBankId === b.id && (
                       <div
                         onClick={(e) => e.stopPropagation()}
-                        className="mt-3 p-2.5 rounded-lg bg-rose-950/70 border border-rose-800 flex items-center justify-between gap-2"
+                        className="mt-1 p-3 rounded-xl bg-rose-950/70 border border-rose-800 flex items-center justify-between gap-2"
                       >
-                        <span className="text-[11px] text-rose-200 font-bold">تأكيد حذف البنك وأسئلته؟</span>
+                        <span className="text-xs text-rose-200 font-bold">تأكيد حذف البنك وأسئلته؟</span>
                         <div className="flex items-center gap-1.5">
                           <button
                             type="button"
                             onClick={() => handleDeleteBank(b.id)}
-                            className="px-2.5 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-bold"
+                            className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold"
                           >
                             نعم، احذف
                           </button>
                           <button
                             type="button"
                             onClick={() => setConfirmDeleteBankId(null)}
-                            className="px-2 py-1 rounded bg-slate-800 text-slate-300 text-[11px]"
+                            className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs"
                           >
                             إلغاء
                           </button>

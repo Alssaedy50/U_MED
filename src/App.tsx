@@ -151,41 +151,90 @@ export default function App() {
     startAccountVerification
   } = useAuth();
 
-  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+  type UmedTheme = 'medical' | 'gold' | 'light' | 'dark';
+
+  const [theme, setThemeState] = useState<UmedTheme>(() => {
     try {
-      const savedTheme = localStorage.getItem('umed_theme_mode');
-      if (savedTheme === 'light') return false;
-      return true;
+      const saved = localStorage.getItem('umed-theme') as UmedTheme | null;
+      if (saved === 'medical' || saved === 'gold' || saved === 'light' || saved === 'dark') {
+        return saved;
+      }
     } catch (e) {}
-    return true;
+    return 'medical';
   });
 
-  const toggleThemeMode = (dark: boolean) => {
-    setIsDarkMode(dark);
-    document.documentElement.classList.remove('theme-vibrant', 'theme-midnight');
+  const [themeMenuOpen, setThemeMenuOpen] = useState<boolean>(false);
+
+  const isDarkMode = theme === 'dark' || theme === 'gold';
+
+  const setTheme = (nextTheme: UmedTheme) => {
+    setThemeState(nextTheme);
+    setThemeMenuOpen(false);
     try {
-      localStorage.setItem('umed_theme_mode', dark ? 'dark' : 'light');
+      localStorage.setItem('umed-theme', nextTheme);
     } catch (e) {}
   };
 
   useEffect(() => {
-    const savedTheme = localStorage.getItem('umed_theme_mode');
-    if (savedTheme === 'vibrant') {
-      document.documentElement.classList.add('dark', 'theme-vibrant');
-      document.documentElement.classList.remove('theme-light', 'theme-midnight');
-    } else if (savedTheme === 'midnight') {
-      document.documentElement.classList.add('dark', 'theme-midnight');
-      document.documentElement.classList.remove('theme-light', 'theme-vibrant');
-    } else if (isDarkMode) {
+    document.documentElement.setAttribute('data-theme', theme);
+    document.documentElement.classList.remove('dark', 'theme-light', 'theme-vibrant', 'theme-midnight');
+    document.body.classList.remove('theme-light');
+    if (theme === 'dark' || theme === 'gold') {
       document.documentElement.classList.add('dark');
-      document.documentElement.classList.remove('theme-light', 'theme-vibrant', 'theme-midnight');
-      document.body.classList.remove('theme-light');
-    } else {
-      document.documentElement.classList.remove('dark', 'theme-vibrant', 'theme-midnight');
-      document.documentElement.classList.add('theme-light');
-      document.body.classList.add('theme-light');
     }
-  }, [isDarkMode]);
+    try {
+      localStorage.setItem('umed-theme', theme);
+    } catch (e) {}
+  }, [theme]);
+
+  const THEME_OPTIONS: {
+    id: UmedTheme;
+    label: string;
+    subtitle: string;
+    icon: React.ComponentType<{ className?: string }>;
+  }[] = [
+    { id: 'medical', label: 'طبي', subtitle: 'سماوي سريري مريح', icon: Stethoscope },
+    { id: 'gold', label: 'ذهبي', subtitle: 'فخامة ملكية داكنة', icon: Crown },
+    { id: 'light', label: 'نهاري', subtitle: 'تباين نهاري ساطع', icon: Sun },
+    { id: 'dark', label: 'غامق', subtitle: 'ليلي عميق للتركيز', icon: Moon }
+  ];
+
+  const activeThemeOption = THEME_OPTIONS.find((t) => t.id === theme) || THEME_OPTIONS[0];
+
+  const renderBiDiRoleLabel = (role?: UserRole) => {
+    switch (role) {
+      case 'platform_owner':
+        return (
+          <>
+            مالك المنصة العام <span dir="ltr" className="inline-block">(Platform Owner)</span>
+          </>
+        );
+      case 'university_admin':
+        return (
+          <>
+            مالك / مشرف الجامعة <span dir="ltr" className="inline-block">(University Owner)</span>
+          </>
+        );
+      case 'batch_rep':
+        return (
+          <>
+            مندوب الدفعة / المستوى <span dir="ltr" className="inline-block">(Batch Representative)</span>
+          </>
+        );
+      case 'department_head':
+        return (
+          <>
+            رئيس قسم أو مادة <span dir="ltr" className="inline-block">(Department / Subject Head)</span>
+          </>
+        );
+      default:
+        return (
+          <>
+            طالب طب بشري <span dir="ltr" className="inline-block">(Student)</span>
+          </>
+        );
+    }
+  };
 
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
   const [authTab, setAuthTab] = useState<'login' | 'register'>('login');
@@ -776,11 +825,7 @@ export default function App() {
 
   return (
     <div
-      className={`min-h-screen ${
-        isDarkMode
-          ? 'theme-dark bg-slate-950 text-slate-100'
-          : 'theme-light bg-slate-50 text-slate-900'
-      } transition-colors duration-200`}
+      className="min-h-screen bg-[var(--bg-app)] text-[var(--text-primary)] transition-colors duration-200"
       dir="rtl"
     >
       <GlobalNotificationWatcher
@@ -1796,8 +1841,8 @@ export default function App() {
               {/* LEADERSHIP NAVIGATION ITEMS (Platform Owner, University Owner, Batch Rep, Dept Head) */}
               {isAdminMode && (
                 <div className="space-y-1">
-                  <div className="px-3 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                    إدارة الجامعة والدفعة ({getRoleLabelArabic(activeRole)})
+                  <div className="px-3 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider leading-relaxed">
+                    إدارة الجامعة والدفعة — {renderBiDiRoleLabel(activeRole)}
                   </div>
 
                   {isOwnerMode && (
@@ -1949,22 +1994,48 @@ export default function App() {
                 </button>
               </div>
 
+              {/* Quick 4-Theme Selector inside Sidebar Drawer */}
+              <div className="pt-2 border-t border-slate-800 space-y-2">
+                <div className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                  مظهر المنصة (4 ثيمات)
+                </div>
+                <div className="grid grid-cols-4 gap-1 px-1">
+                  {THEME_OPTIONS.map((opt) => {
+                    const IconComp = opt.icon;
+                    const isActive = theme === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setTheme(opt.id)}
+                        className={`py-1.5 px-1 rounded-xl text-[10px] font-bold flex flex-col items-center justify-center gap-1 border transition-all ${
+                          isActive
+                            ? 'bg-teal-600 text-white border-teal-500 shadow-sm'
+                            : 'bg-slate-950/70 text-slate-300 border-slate-800 hover:bg-slate-800'
+                        }`}
+                      >
+                        <IconComp className="w-3.5 h-3.5 shrink-0" />
+                        <span>{opt.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               <PWASidebarInstallCard />
             </div>
 
-            {/* Sidebar User Card Footer */}
+            {/* Sidebar User Card Footer (Stacked vertically so long names and phone numbers never clip) */}
             <div className="p-3.5 border-t border-slate-800 bg-slate-950/60 space-y-2.5">
-              <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="text-xs font-bold text-white truncate">
-                    {userProfile?.displayNameArabic || user.displayName || 'مستخدم UMED'}
-                  </div>
-                  <div className="text-[10px] text-slate-400 font-mono truncate" dir="ltr">
-                    {formatUserIdentifier(user.email, userProfile?.phone)}
-                  </div>
+              <div className="flex flex-col items-start gap-1.5">
+                <div className="text-xs font-bold text-white leading-snug break-words w-full">
+                  {userProfile?.displayNameArabic || user.displayName || 'مستخدم UMED'}
+                </div>
+                <div className="text-[11px] text-slate-400 font-mono break-all" dir="ltr">
+                  {formatUserIdentifier(user.email, userProfile?.phone)}
                 </div>
                 <span
-                  className={`px-2 py-0.5 rounded-md text-[10px] font-bold shrink-0 ${
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold leading-snug ${
                     isOwnerMode
                       ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                       : isAdminMode
@@ -1972,12 +2043,12 @@ export default function App() {
                       : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
                   }`}
                 >
-                  {getRoleLabelArabic(activeRole)}
+                  {renderBiDiRoleLabel(activeRole)}
                 </span>
               </div>
               <button
                 onClick={logout}
-                className="w-full py-1.5 px-2.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/50 text-rose-300 border border-rose-800/50 text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors"
+                className="w-full py-2 px-2.5 rounded-xl bg-rose-950/40 hover:bg-rose-900/50 text-rose-300 border border-rose-800/50 text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors"
               >
                 <LogOut className="w-3.5 h-3.5" />
                 <span>تسجيل الخروج من الحساب</span>
@@ -1990,7 +2061,7 @@ export default function App() {
             
             {/* Clean Contextual Top Bar (Zero Telemetry Clutter) */}
             <header className="sticky top-0 z-30 bg-slate-900/90 backdrop-blur border-b border-slate-800 px-3.5 py-2.5 sm:px-6 sm:py-3">
-              <div className="max-w-6xl mx-auto flex items-center justify-between gap-2.5">
+              <div className="max-w-6xl mx-auto flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <button
                     onClick={() => setSidebarOpen(true)}
@@ -2005,7 +2076,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
                   {isAuthorizedAdmin && (
                     <button
                       onClick={() => {
@@ -2018,7 +2089,7 @@ export default function App() {
                           setActiveTab('student_dashboard');
                         }
                       }}
-                      className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-colors ${
+                      className={`px-2.5 sm:px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-colors ${
                         activeRole === 'student'
                           ? 'bg-teal-600/20 hover:bg-teal-600/30 text-teal-300 border-teal-500/40'
                           : 'bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border-indigo-500/40'
@@ -2027,19 +2098,21 @@ export default function App() {
                     >
                       {activeRole === 'student' ? (
                         <>
-                          <ShieldCheck className="w-3.5 h-3.5 text-teal-400" />
-                          <span>العودة لبوابة الإدارة</span>
+                          <ShieldCheck className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                          <span className="hidden xs:inline sm:inline">العودة للإدارة</span>
                         </>
                       ) : (
                         <>
-                          <GraduationCap className="w-3.5 h-3.5 text-indigo-400" />
+                          <GraduationCap className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
                           <span className="hidden sm:inline">معاينة كطالب</span>
                         </>
                       )}
                     </button>
                   )}
 
-                  <PWAHeaderControls />
+                  <div className="hidden sm:block">
+                    <PWAHeaderControls />
+                  </div>
 
                   <button
                     onClick={() => setIsNotificationModalOpen(true)}
@@ -2054,69 +2127,65 @@ export default function App() {
                     )}
                   </button>
 
-                  {/* Multi-Theme Selector Dropdown / Buttons */}
-                  <div className="relative flex items-center gap-1 bg-slate-800 p-1 rounded-xl border border-slate-700">
+                  {/* Single Active Theme Button with Popover Menu */}
+                  <div className="relative">
                     <button
                       type="button"
-                      onClick={() => toggleThemeMode(true)}
-                      className={`p-1.5 rounded-lg text-xs font-bold transition-all ${
-                        isDarkMode && !document.documentElement.classList.contains('theme-vibrant') && !document.documentElement.classList.contains('theme-midnight')
-                          ? 'bg-teal-600 text-white shadow'
-                          : 'text-slate-400 hover:text-white'
-                      }`}
-                      title="ثيم طبي كلاسيكي (Dark Teal)"
+                      onClick={() => setThemeMenuOpen((prev) => !prev)}
+                      className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs"
+                      title="تغيير مظهر وثيم المنصة"
                     >
-                      <Moon className="w-4 h-4 text-teal-300" />
+                      {(() => {
+                        const ActiveIcon = activeThemeOption.icon;
+                        return <ActiveIcon className="w-4 h-4 text-teal-400 shrink-0" />;
+                      })()}
+                      <span>{activeThemeOption.label}</span>
+                      <span className="text-[10px] opacity-70">▾</span>
                     </button>
 
-                    <button
-                      type="button"
-                      onClick={() => toggleThemeMode(false)}
-                      className={`p-1.5 rounded-lg text-xs font-bold transition-all ${
-                        !isDarkMode
-                          ? 'bg-white text-slate-900 shadow'
-                          : 'text-slate-400 hover:text-white'
-                      }`}
-                      title="ثيم طبي إشراقي (Light Clean)"
-                    >
-                      <Sun className="w-4 h-4 text-amber-500" />
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsDarkMode(true);
-                        document.documentElement.classList.add('theme-vibrant');
-                        document.documentElement.classList.remove('theme-light', 'theme-midnight');
-                        try { localStorage.setItem('umed_theme_mode', 'vibrant'); } catch {}
-                      }}
-                      className={`p-1.5 rounded-lg text-xs font-bold transition-all ${
-                        document.documentElement.classList.contains('theme-vibrant')
-                          ? 'bg-indigo-600 text-white shadow'
-                          : 'text-slate-400 hover:text-white'
-                      }`}
-                      title="طابع شبابي حيوي (Vibrant Medical)"
-                    >
-                      <Sparkles className="w-4 h-4 text-indigo-300" />
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsDarkMode(true);
-                        document.documentElement.classList.add('theme-midnight');
-                        document.documentElement.classList.remove('theme-light', 'theme-vibrant');
-                        try { localStorage.setItem('umed_theme_mode', 'midnight'); } catch {}
-                      }}
-                      className={`p-1.5 rounded-lg text-xs font-bold transition-all ${
-                        document.documentElement.classList.contains('theme-midnight')
-                          ? 'bg-emerald-600 text-white shadow'
-                          : 'text-slate-400 hover:text-white'
-                      }`}
-                      title="نمط المستشفيات المظلم (Midnight Vault)"
-                    >
-                      <ShieldCheck className="w-4 h-4 text-emerald-300" />
-                    </button>
+                    {themeMenuOpen && (
+                      <>
+                        <div
+                          className="fixed inset-0 z-40"
+                          onClick={() => setThemeMenuOpen(false)}
+                        />
+                        <div
+                          className="absolute left-0 top-full mt-2 w-48 rounded-2xl bg-slate-900 border border-slate-700 shadow-2xl p-1.5 z-50 space-y-1"
+                          dir="rtl"
+                        >
+                          <div className="px-2.5 py-1 text-[10px] font-bold text-slate-400 border-b border-slate-800">
+                            اختر مظهر المنصة
+                          </div>
+                          {THEME_OPTIONS.map((opt) => {
+                            const IconComp = opt.icon;
+                            const isSelected = theme === opt.id;
+                            return (
+                              <button
+                                key={opt.id}
+                                type="button"
+                                onClick={() => setTheme(opt.id)}
+                                className={`w-full px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-between gap-2 transition-all ${
+                                  isSelected
+                                    ? 'bg-teal-600 text-white shadow-sm'
+                                    : 'text-slate-200 hover:bg-slate-800'
+                                }`}
+                              >
+                                <div className="flex items-center gap-2">
+                                  <IconComp className="w-4 h-4 shrink-0" />
+                                  <div className="text-right">
+                                    <div>{opt.label}</div>
+                                    <div className={`text-[10px] font-normal ${isSelected ? 'text-white/80' : 'text-slate-400'}`}>
+                                      {opt.subtitle}
+                                    </div>
+                                  </div>
+                                </div>
+                                {isSelected && <Check className="w-4 h-4 shrink-0" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
@@ -2392,58 +2461,46 @@ export default function App() {
                   {/* 0. Installable App (PWA) & Offline Auto-Sync Panel */}
                   <PWASettingsCard />
                   
-                  {/* 1. Theme & Appearance Settings (الوضع الليلي والنهاري) */}
+                  {/* 1. Theme & Appearance Settings (4 ثيمات احترافية) */}
                   <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
                     <div className="pb-3 border-b border-slate-800">
                       <h2 className="text-base font-bold text-white flex items-center gap-2">
-                        {isDarkMode ? <Moon className="w-5 h-5 text-indigo-400" /> : <Sun className="w-5 h-5 text-amber-400" />}
-                        <span>إعدادات المظهر والعرض (الوضع الليلي / النهاري)</span>
+                        <Sparkles className="w-5 h-5 text-teal-400" />
+                        <span>إعدادات المظهر والثيمات (طبي / ذهبي / نهاري / غامق)</span>
                       </h2>
                       <p className="text-xs text-slate-400 mt-0.5">
-                        اختر نمط الإضاءة المناسب للقراءة والمذاكرة الطبية مع تباين كامل للنصوص والبطاقات
+                        اختر المظهر اللوني المفضل لديك مع تباين كامل للنصوص والبطاقات وحفظ تلقائي لاختيارك
                       </p>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                      <button
-                        onClick={() => toggleThemeMode(true)}
-                        className={`p-4 rounded-xl border text-right transition-all flex items-center justify-between ${
-                          isDarkMode
-                            ? 'bg-teal-600/20 border-teal-500 text-white font-bold shadow-md'
-                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-xl bg-slate-800 flex items-center justify-center text-indigo-400">
-                            <Moon className="w-5 h-5" />
-                          </div>
-                          <div>
-                            <div className="text-sm font-bold text-white">الوضع الليلي (الداكن)</div>
-                            <div className="text-[11px] text-slate-400">مريح للعين في الإضاءة المنخفضة</div>
-                          </div>
-                        </div>
-                        {isDarkMode && <CheckCircle2 className="w-5 h-5 text-teal-400 shrink-0" />}
-                      </button>
-
-                      <button
-                        onClick={() => toggleThemeMode(false)}
-                        className={`p-4 rounded-xl border text-right transition-all flex items-center justify-between ${
-                          !isDarkMode
-                            ? 'bg-teal-600/20 border-teal-500 text-white font-bold shadow-md'
-                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-xl bg-amber-500/20 flex items-center justify-center text-amber-400">
-                            <Sun className="w-5 h-5" />
-                          </div>
-                          <div>
-                            <div className="text-sm font-bold text-white">الوضع النهاري (الفاتح)</div>
-                            <div className="text-[11px] text-slate-400">خلفية فاتحة عالية الوضوح للقراءة النهارية</div>
-                          </div>
-                        </div>
-                        {!isDarkMode && <CheckCircle2 className="w-5 h-5 text-teal-400 shrink-0" />}
-                      </button>
+                      {THEME_OPTIONS.map((opt) => {
+                        const IconComp = opt.icon;
+                        const isSelected = theme === opt.id;
+                        return (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => setTheme(opt.id)}
+                            className={`p-4 rounded-xl border text-right transition-all flex items-center justify-between ${
+                              isSelected
+                                ? 'bg-teal-600/20 border-teal-500 text-white font-bold shadow-md'
+                                : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="w-9 h-9 rounded-xl bg-slate-800 flex items-center justify-center text-teal-400 shrink-0">
+                                <IconComp className="w-5 h-5" />
+                              </div>
+                              <div>
+                                <div className="text-sm font-bold text-white">ثيم {opt.label}</div>
+                                <div className="text-[11px] text-slate-400">{opt.subtitle}</div>
+                              </div>
+                            </div>
+                            {isSelected && <CheckCircle2 className="w-5 h-5 text-teal-400 shrink-0" />}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -2631,7 +2688,7 @@ export default function App() {
                       <div className="flex flex-wrap justify-between items-center gap-2">
                         <span className="text-slate-400">الوضع والصلاحية النشطة:</span>
                         <span className="font-bold text-amber-400">
-                          {getRoleLabelArabic(activeRole)}
+                          {renderBiDiRoleLabel(activeRole)}
                           {roleDoc?.assignedUniversityId && activeRole !== 'platform_owner' ? ` • (${roleDoc.assignedUniversityId})` : ''}
                           {roleDoc?.assignedStudyLevelId ? ` • (${roleDoc.assignedStudyLevelId})` : ''}
                         </span>
