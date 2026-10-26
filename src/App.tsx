@@ -45,7 +45,8 @@ import {
   Bell,
   Share2,
   Check,
-  Download
+  Download,
+  Sparkles
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext.tsx';
 import { UserRole, AuditLog, StudentEnrollment } from './types/umed.ts';
@@ -154,25 +155,33 @@ export default function App() {
     try {
       const savedTheme = localStorage.getItem('umed_theme_mode');
       if (savedTheme === 'light') return false;
-      if (savedTheme === 'dark') return true;
+      return true;
     } catch (e) {}
     return true;
   });
 
   const toggleThemeMode = (dark: boolean) => {
     setIsDarkMode(dark);
+    document.documentElement.classList.remove('theme-vibrant', 'theme-midnight');
     try {
       localStorage.setItem('umed_theme_mode', dark ? 'dark' : 'light');
     } catch (e) {}
   };
 
   useEffect(() => {
-    if (isDarkMode) {
+    const savedTheme = localStorage.getItem('umed_theme_mode');
+    if (savedTheme === 'vibrant') {
+      document.documentElement.classList.add('dark', 'theme-vibrant');
+      document.documentElement.classList.remove('theme-light', 'theme-midnight');
+    } else if (savedTheme === 'midnight') {
+      document.documentElement.classList.add('dark', 'theme-midnight');
+      document.documentElement.classList.remove('theme-light', 'theme-vibrant');
+    } else if (isDarkMode) {
       document.documentElement.classList.add('dark');
-      document.documentElement.classList.remove('theme-light');
+      document.documentElement.classList.remove('theme-light', 'theme-vibrant', 'theme-midnight');
       document.body.classList.remove('theme-light');
     } else {
-      document.documentElement.classList.remove('dark');
+      document.documentElement.classList.remove('dark', 'theme-vibrant', 'theme-midnight');
       document.documentElement.classList.add('theme-light');
       document.body.classList.add('theme-light');
     }
@@ -2045,17 +2054,70 @@ export default function App() {
                     )}
                   </button>
 
-                  <button
-                    onClick={() => toggleThemeMode(!isDarkMode)}
-                    className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
-                    title={isDarkMode ? 'التبديل إلى الوضع النهاري الفاتح' : 'التبديل إلى الوضع الليلي الداكن'}
-                  >
-                    {isDarkMode ? (
-                      <Sun className="w-4 h-4 text-amber-400" />
-                    ) : (
-                      <Moon className="w-4 h-4 text-indigo-400" />
-                    )}
-                  </button>
+                  {/* Multi-Theme Selector Dropdown / Buttons */}
+                  <div className="relative flex items-center gap-1 bg-slate-800 p-1 rounded-xl border border-slate-700">
+                    <button
+                      type="button"
+                      onClick={() => toggleThemeMode(true)}
+                      className={`p-1.5 rounded-lg text-xs font-bold transition-all ${
+                        isDarkMode && !document.documentElement.classList.contains('theme-vibrant') && !document.documentElement.classList.contains('theme-midnight')
+                          ? 'bg-teal-600 text-white shadow'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                      title="ثيم طبي كلاسيكي (Dark Teal)"
+                    >
+                      <Moon className="w-4 h-4 text-teal-300" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => toggleThemeMode(false)}
+                      className={`p-1.5 rounded-lg text-xs font-bold transition-all ${
+                        !isDarkMode
+                          ? 'bg-white text-slate-900 shadow'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                      title="ثيم طبي إشراقي (Light Clean)"
+                    >
+                      <Sun className="w-4 h-4 text-amber-500" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsDarkMode(true);
+                        document.documentElement.classList.add('theme-vibrant');
+                        document.documentElement.classList.remove('theme-light', 'theme-midnight');
+                        try { localStorage.setItem('umed_theme_mode', 'vibrant'); } catch {}
+                      }}
+                      className={`p-1.5 rounded-lg text-xs font-bold transition-all ${
+                        document.documentElement.classList.contains('theme-vibrant')
+                          ? 'bg-indigo-600 text-white shadow'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                      title="طابع شبابي حيوي (Vibrant Medical)"
+                    >
+                      <Sparkles className="w-4 h-4 text-indigo-300" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsDarkMode(true);
+                        document.documentElement.classList.add('theme-midnight');
+                        document.documentElement.classList.remove('theme-light', 'theme-vibrant');
+                        try { localStorage.setItem('umed_theme_mode', 'midnight'); } catch {}
+                      }}
+                      className={`p-1.5 rounded-lg text-xs font-bold transition-all ${
+                        document.documentElement.classList.contains('theme-midnight')
+                          ? 'bg-emerald-600 text-white shadow'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                      title="نمط المستشفيات المظلم (Midnight Vault)"
+                    >
+                      <ShieldCheck className="w-4 h-4 text-emerald-300" />
+                    </button>
+                  </div>
                 </div>
               </div>
             </header>

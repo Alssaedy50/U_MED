@@ -281,3 +281,40 @@
 .theme-light textarea::placeholder {
   color: #94a3b8 !important;
 }
+
+/* ============================================================================
+   UMED Youth Vibrant Medical Theme (.theme-vibrant)
+   ============================================================================ */
+.theme-vibrant {
+  background-color: #0f172a !important;
+  color: #f8fafc !important;
+}
+.theme-vibrant .bg-slate-900 {
+  background-color: #1e1b4b !important;
+  border-color: #4f46e5 !important;
+}
+.theme-vibrant .bg-slate-950 {
+  background-color: #090d16 !important;
+}
+.theme-vibrant .bg-slate-800 {
+  background-color: #312e81 !important;
+}
+
+/* ============================================================================
+   UMED Midnight Neon Dark Vault Theme (.theme-midnight)
+   ============================================================================ */
+.theme-midnight {
+  background-color: #020617 !important;
+  color: #e2e8f0 !important;
+}
+.theme-midnight .bg-slate-900 {
+  background-color: #09090b !important;
+  border-color: #059669 !important;
+}
+.theme-midnight .bg-slate-950 {
+  background-color: #000000 !important;
+}
+.theme-midnight .bg-slate-800 {
+  background-color: #18181b !important;
+}
+

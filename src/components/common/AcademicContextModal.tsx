@@ -198,7 +198,7 @@ export function AcademicContextBar({
             <button
               type="button"
               onClick={() => handleUpdateSelection({ strictScope: !context.strictScope })}
-              className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1.5 transition-all ${
+              className={`px-3 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1.5 transition-all ${
                 context.strictScope
                   ? 'bg-emerald-950/70 border-emerald-700/60 text-emerald-300'
                   : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
@@ -207,15 +207,6 @@ export function AcademicContextBar({
             >
               <Filter className="w-3 h-3" />
               <span>{context.strictScope ? 'عزل بيانات مستواي: مفعل ✓' : 'عرض جميع المستويات'}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => openModalOnTab('level')}
-              className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold flex items-center gap-1.5 transition-colors"
-            >
-              <SlidersHorizontal className="w-3.5 h-3.5 text-teal-400" />
-              <span>تخصيص المستوى والبلوك</span>
             </button>
           </div>
         </div>

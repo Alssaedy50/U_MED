@@ -72,7 +72,6 @@ import {
   getUserAcademicContext,
   saveUserAcademicContext
 } from '../../services/academicService.ts';
-import AcademicContextBar from '../common/AcademicContextModal.tsx';
 
 type EntityType = 'university' | 'college' | 'program' | 'level' | 'period' | 'course';
 
@@ -944,25 +943,6 @@ export default function AcademicStructureManager({
           </div>
         )}
       </div>
-
-      {/* Persistent Academic Context Bar */}
-      <AcademicContextBar
-        userRole={userRole}
-        assignedUniversityId={assignedUniversityId}
-        assignedStudyLevelId={assignedStudyLevelId}
-        onContextChange={(ctx) => {
-          const foundUniv = universities.find(u => u.id === ctx.universityId);
-          if (foundUniv) setSelectedUniversity(foundUniv);
-          const foundCol = colleges.find(c => c.id === ctx.collegeId);
-          if (foundCol) setSelectedCollege(foundCol);
-          const foundProg = programs.find(p => p.id === ctx.programId);
-          if (foundProg) setSelectedProgram(foundProg);
-          const foundLvl = studyLevels.find(l => l.id === ctx.studyLevelId);
-          if (foundLvl) setSelectedLevel(foundLvl);
-          const foundBlk = studyPeriods.find(p => p.id === ctx.studyPeriodId);
-          if (foundBlk) setSelectedPeriod(foundBlk);
-        }}
-      />
 
       {activeViewMode === 'analytics' ? (
         <AcademicAnalyticsDashboard

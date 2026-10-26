@@ -1020,17 +1020,9 @@ export default function AssessmentManager({
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 mt-1">
-                  <button
-                    type="button"
-                    onClick={() => setShowBankSelectorModal(true)}
-                    className="text-base sm:text-lg font-black text-white hover:text-teal-300 transition-colors flex items-center gap-2 text-right"
-                    title="اضغط لفتح نافذة اختيار وإدارة بنوك الأسئلة"
-                  >
-                    <span>{selectedBank ? selectedBank.titleArabic : 'اختر بنك أسئلة من النافذة المنبثقة'}</span>
-                    <span className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-teal-600 text-teal-300 hover:text-white text-xs font-bold transition-colors">
-                      تبديل البنك ▾
-                    </span>
-                  </button>
+                  <h3 className="text-base sm:text-lg font-black text-white">
+                    {selectedBank ? selectedBank.titleArabic : 'لم يتم اختيار بنك أسئلة'}
+                  </h3>
                 </div>
                 {selectedBank && (
                   <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[11px] text-slate-400">
@@ -1063,10 +1055,11 @@ export default function AssessmentManager({
               <button
                 type="button"
                 onClick={() => setShowBankSelectorModal(true)}
-                className="flex-1 sm:flex-initial py-2.5 px-4 min-h-[42px] rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-bold flex items-center justify-center gap-2 transition-colors"
+                className="flex-1 sm:flex-initial py-2.5 px-4 min-h-[42px] rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-teal-300 hover:text-white text-xs font-bold flex items-center justify-center gap-2 transition-colors"
+                title="فتح نافذة اختيار وإدارة بنوك الأسئلة"
               >
                 <BookOpen className="w-4 h-4 text-teal-400 shrink-0" />
-                <span>قائمة بنوك الأسئلة ({banks.length})</span>
+                <span>تبديل وإدارة البنوك ({banks.length}) ▾</span>
               </button>
 
               <button
