@@ -1,129 +1,108 @@
-# UMED Design System & Mobile UX Overhaul — 4-Theme Architecture, Unified Footers & BiDi Remediation
+# خطة التنفيذ الهندسية الشاملة: تحديثات منصة UMED (إدارة الدفعة، المقررات، الأسئلة الديناميكية، وتجربة الجوال)
 
-This plan details the overhaul of the UMED medical education platform to deliver a resilient 4-Theme System (`medical`, `gold`, `light`, `dark`), a compact single-button popover theme switcher in the top bar, unified single-footer modal workflows, and responsive RTL/LTR (BiDi) layout fixes across 360px–1440px viewports.
+## 1. نظرة عامة والقرارات المعتمدة (Product & Architecture Overview)
+تهدف هذه الخطة إلى تنفيذ 5 تحسينات هيكلية وتجريبية في منصة **UMED** مع الحفاظ الكامل على نظام الثيمات الأربعة (`medical | gold | light | dark`) وعدم المساس بأي ميزة قائمة:
 
-## User Review & Critical Decisions
-
-> [!IMPORTANT]
-> The following product and UX decisions incorporate your confirmed preferences and the architectural requirements from your specification.
-
-- **Confirmed Decision 1 — Default Theme (`medical`)**: First-time visitors with no stored preference in `localStorage` (`'umed-theme'`) will default to the **Medical (`طبي`)** theme (Clinical Cyan/Teal on crisp daylight medical surfaces with deep clinical navy typography `#082f49`).
-- **Confirmed Decision 2 — Compact Single-Button Popover Theme Switcher**: The top header bar will display **only one compact button** showing the currently active theme's icon and Arabic label (`طبي`, `ذهبي`, `نهاري`, or `غامق`). Clicking this button opens a floating popover menu containing all 4 themes with live color swatches and checkmarks, keeping the mobile top bar clean and uncluttered.
-- **Confirmed Decision 3 — Unified Sticky Modal Footer**: All duplicate inline step navigation buttons at the bottom of Step 1 and Step 2 inside the Bulk Question Import wizard will be removed so that only the single sticky bottom modal footer controls step progression, with a concise Step 3 primary label (`اعتماد وحفظ (${stats.selectedValid})`).
-
----
-
-## 1. Overview & Core Concept
-
-- **What It Does**: Establishes a token-driven 4-theme CSS architecture on `document.documentElement.setAttribute('data-theme', theme)` backed by automatic safeguard overrides for legacy Tailwind dark utility classes, while fixing mobile card squeezing, single-line question clipping, duplicate action footers, and RTL/LTR parenthesis reversals.
-- **Target Audience / Persona**: Medical students, batch representatives, department heads, university admins, and the platform owner across Yemeni medical colleges using 360px–412px mobile phones and desktop workstations.
-- **Key Value**: Guarantees 100% WCAG AA+ legibility and card border visibility across all four themes (`medical`, `gold`, `light`, `dark`), prevents vertical 1-word-per-line text crushing in question bank cards, and ensures English USMLE-style clinical stems and options render with natural multi-line LTR alignment alongside Arabic RTL UI controls.
-
----
-
-## 2. User Experience & Visual Design
-
-### Key User Flows
-1. **Instant Theme Switching via Header Popover**:
-   - The user sees a single active theme button in the top header (e.g., `طبي`).
-   - Tapping the button opens an elevated popover menu listing all four themes (`طبي`, `ذهبي`, `نهاري`, `غامق`).
-   - Selecting any theme immediately updates `document.documentElement.setAttribute('data-theme', theme)`, persists `'umed-theme'` in `localStorage`, and closes the popover.
-2. **Question Bank Selection & Management on Mobile**:
-   - The Question Bank management toolbar uses a responsive `grid-cols-2 sm:grid-cols-3 gap-2.5` layout where `"تبديل وإدارة البنوك"` spans full width on mobile (`col-span-2 sm:col-span-1`) so its label never wraps into vertical columns.
-   - Inside the Bank Selector modal, each bank card stacks vertically (`flex flex-col gap-3 p-4`): Row 1 houses the `"البنك النشط"` status badge and action buttons (`واضع الاختبار الذكي`, Edit, Delete); Row 2 gives 100% width to the bank title and description; Row 3 displays language, question mode, and study level badges.
-3. **3-Step Bulk Question Import & Review**:
-   - The top stepper bar (`1. الإعداد والمصدر | 2. إدخال الأسئلة | 3. التدقيق`) and online status indicator fit cleanly on 360px screens without horizontal overflow.
-   - Step 1 and Step 2 scroll smoothly into a single sticky bottom footer without duplicate inline buttons.
-   - Step 3 renders multi-line `<textarea rows={2} dir="auto">` inputs for English stems and answer options, plus a `min-h-[5.5rem]` Arabic/primary stem `<textarea dir="auto">`, ensuring long clinical descriptions never clip.
-
-### Visual Identity & Theme Tokens
-Each theme is bound to `[data-theme="<name>"]` on `<html>` with strict surface, border, and contrast tokens:
-
-- **`medical` (طبي — Clinical Cyan/Teal — Default)**:
-  - `--bg-app: #eef6f9` | `--bg-card: #ffffff` | `--bg-elevated: #e0f2fe` | `--bg-input: #f0f9ff`
-  - `--text-primary: #082f49` | `--text-secondary: #0369a1` | `--text-muted: #475569`
-  - `--border-color: #7dd3fc` | `--accent-primary: #0284c7` | `--accent-text: #ffffff`
-  - `--card-shadow: 0 4px 14px rgba(2, 132, 199, 0.08)`
-- **`gold` (ذهبي — Royal Luxury Obsidian & Gold)**:
-  - `--bg-app: #0c0a06` | `--bg-card: #16120a` | `--bg-elevated: #241d10` | `--bg-input: #1c160c`
-  - `--text-primary: #fef3c7` | `--text-secondary: #fbbf24` | `--text-muted: #d6c39c`
-  - `--border-color: #5c471c` | `--accent-primary: #eab308` | `--accent-text: #0c0a06`
-  - `--card-shadow: 0 6px 20px rgba(234, 179, 8, 0.12)`
-- **`light` (نهاري — High-Contrast Daylight)**:
-  - `--bg-app: #f1f5f9` | `--bg-card: #ffffff` | `--bg-elevated: #e2e8f0` | `--bg-input: #f8fafc`
-  - `--text-primary: #0f172a` | `--text-secondary: #334155` | `--text-muted: #64748b`
-  - `--border-color: #cbd5e1` | `--accent-primary: #0d9488` | `--accent-text: #ffffff`
-  - `--card-shadow: 0 4px 12px rgba(15, 23, 42, 0.06)`
-- **`dark` (غامق — Deep Midnight Slate)**:
-  - `--bg-app: #060b14` | `--bg-card: #0f172a` | `--bg-elevated: #1e293b` | `--bg-input: #090e1a`
-  - `--text-primary: #f8fafc` | `--text-secondary: #38bdf8` | `--text-muted: #94a3b8`
-  - `--border-color: #334155` | `--accent-primary: #10b981` | `--accent-text: #060b14`
-  - `--card-shadow: 0 6px 20px rgba(0, 0, 0, 0.45)`
-
-### Typography & BiDi Discipline
-- Arabic UI and prose use `Cairo` and `IBM Plex Sans Arabic`; English medical terms, counters, and timers use `JetBrains Mono` with `tabular-nums`.
-- All question stems, option fields, explanations, and AI output textareas apply `dir="auto"` so English sentences align LTR with trailing `?` on the right while Arabic sentences align RTL.
-- Role badges with English parentheticals such as `(Platform Owner)` are isolated inside `<span dir="ltr" className="inline-block">(Platform Owner)</span>` to eliminate `((Platform Owner)` BiDi bracket reversal.
+1. **إصلاح خروج الأزرار خارج الشاشة على اليسار في الجوال (RTL Horizontal Overflow Fix)**:
+   - احتواء أزرار الإجراءات الأربع داخل بطاقات المستخدمين في `PlatformUsersManager.tsx` (`تعديل البيانات`، `توثيق / إلغاء التوثيق`، `أرشفة`، `حذف سحابي`) داخل شبكة متجاوبة `grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 w-full pt-2` لضمان عدم خروج أي زر عن إطار البطاقة على شاشات `360px`.
+   - ضبط أزرار الإجراءات والحذف والأرشفة داخل بطاقات `AcademicStructureManager.tsx` مع `overflow-hidden` و `flex-wrap`.
+2. **حذف تبويب ولوحة "مؤشرات نمو القيد ونتائج التقييمات الأكاديمية" نهائياً**:
+   - إزالة زر التبويب واستدعاء مكون `AcademicAnalyticsDashboard` من `AcademicStructureManager.tsx` بحيث تفتح الصفحة مباشرة على إدارة الهيكل الأكاديمي والبلوكات والمقررات الدراسية وسلة المحذوفات.
+3. **إضافة خيار "دكتور المادة / مدرس المقرر" وحفظه التلقائي**:
+   - تحديث نموذج `CourseOffering` في `src/types/umed.ts` بإضافة `instructorId?: string` و `instructorNameArabic?: string`.
+   - إضافة حقل اختيار/كتابة **"دكتور المادة / مدرس المقرر"** في نافذتي (إضافة مقرر دراسي جديد) و(تعديل المقرر الدراسي) في `AcademicStructureManager.tsx`.
+   - **قرار معتمد**: عند كتابة اسم دكتور جديد يدوياً أثناء إضافة أو تعديل مقرر دراسي، يتم حفظه تلقائياً في قائمة دكاترة الدفعة (`courseInstructors`) لسهولة اختياره لاحقاً، مع عرض اسم الدكتور بوضوح داخل بطاقة المقرر للمشرف والطالب.
+4. **مرونة كاملة وديناميكية في إعدادات توليد واستيراد الأسئلة (العدد، النوع، عدد الخيارات 2–10، اللغة)**:
+   - تحديث `BulkQuestionImportModal.tsx` و `AssessmentManager.tsx` و `api/index.ts` و `mcqBulkParser.ts`:
+     - قراءة الإعدادات الافتراضية ديناميكياً من بنك الأسئلة المختار (`selectedBank`).
+     - فتح حقول إدخال رقمية حرة (`0` إلى `500`) لإجمالي الأسئلة ولكل نوع (`MCQ`، `True/False`، `Essay`، `Fill in the Blank`) مع أزرار اختصار سريعة ووضع "ديناميكي حسب المحتوى".
+     - استبدال حصر الخيارات بـ (4 أو 5 فقط) بأزرار سريعة (`2, 3, 4, 5, 6`) مع حقل رقمي مخصص يقبل من **`2` إلى `10` خيارات** (`A..J`) في الواجهة والـ Backend.
+5. **تحويل هوية "القيد الأكاديمي" إلى "توثيق انضمام طلاب الدفعة"**:
+   - تعديل المسميات والنصوص في `App.tsx` و `EnrollmentApprovalManager.tsx` و `RegisterEnrollment.tsx` و `StudentDashboard.tsx` لتعبر عن منصة طلابية لتنظيم محاضرات الدفعة والتنافس الودي:
+     - تحويل المسميات إلى **"توثيق انضمام طلاب الدفعة"** و **"تأكيد انتماء الطالب للدفعة"** و **"الرقم التعريفي للطالب / رقم الكشف بالدفعة"**.
+   - **قرار معتمد**: فتح المحاضرات والاختبارات التدريبية للزميل فور اختيار دفعته مع إظهار شارة ودية تشير إلى أن عضويته **"بانتظار توثيق مندوب الدفعة"**، وإتاحة نتائج الاختبارات التدريبية والتنافسية للطلاب فوراً دائماً دون أي حجب.
 
 ---
 
-## 3. Key Product Decisions & Trade-Offs
+## 2. المخطط المعماري وتدفق البيانات (System Architecture & Flow)
 
-- **Decision 1: CSS Custom Properties + Global Utility Overrides vs. Component-by-Component Class Rewrites**
-  - *Chosen Approach*: Combine semantic CSS variables (`--bg-app`, `--bg-card`, `--text-primary`, `--border-color`, `--accent-primary`, `--accent-text`) with comprehensive `[data-theme="medical"]`, `[data-theme="light"]`, `[data-theme="gold"]`, and `[data-theme="dark"]` safeguard overrides targeting hardcoded Tailwind classes (`bg-slate-950`, `bg-slate-900`, `bg-slate-800`, `text-white`, `text-slate-200`, `border-slate-800`, etc.).
-  - *Why*: Ensures every screen, modal, badge, and input across the entire application adapts immediately without any white-on-white text or invisible card borders.
-  - *Alternatives Considered*: Only updating classes in a few components, which would leave child modals and secondary views broken when switching to `medical` or `light` themes.
-
-- **Decision 2: Single-Button Popover Theme Selector in Header**
-  - *Chosen Approach*: Render a single button in the top bar displaying the active theme icon and label; clicking toggles a compact dropdown menu with the 4 theme options (with outside-click dismissal).
-  - *Why*: Directly fulfills your preference while reclaiming horizontal space in the mobile header so the page title and notification bell never crowd or overflow on 360px viewports.
-
-- **Decision 3: Multi-Line Textareas with `dir="auto"` for Medical Options**
-  - *Chosen Approach*: Convert single-line `<input type="text">` elements for English question stems and MCQ answer options in Step 3 into `<textarea rows={2} dir="auto">` with `min-h-[3.25rem] resize-y leading-relaxed`, and expand the primary stem `<textarea dir="auto">` to `min-h-[5.5rem]`.
-  - *Why*: Clinical vignettes and anatomical option names frequently exceed 40 characters; multi-line textareas prevent horizontal clipping on mobile screens.
-
----
-
-## 4. Technical Architecture & Data Strategy
-
-### Architecture & Component Diagram
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                     Document Root (<html data-theme="...">)              │
-│   Theme Engine: localStorage('umed-theme') -> 'medical' (default)        │
-│   Palettes: [medical] | [gold] | [light] | [dark] + Global CSS Overrides │
-└───────────────────┬──────────────────────────────────┬───────────────────┘
-                    │                                  │
-                    ▼                                  ▼
-┌───────────────────────────────────────┐  ┌───────────────────────────────┐
-│        Top Header & RTL Drawer        │  │   Assessment Manager Console  │
-│  • Single Active Theme Button         │  │  • Responsive 2/3-Col Toolbar │
-│    └─► Popover: طبي | ذهبي | نهاري | غامق │  │  • 3-Row Vertical Bank Cards  │
-│  • Decluttered Mobile Actions         │  │  • BiDi-Safe Role Badges      │
-│  • Vertical Stacked Drawer User Card  │  │  • Zero Empty Bottom Boxes    │
-└───────────────────────────────────────┘  └───────────────┬───────────────┘
-                                                           │
-                                                           ▼
-                                           ┌───────────────────────────────┐
-                                           │  Bulk Question Import Wizard  │
-                                           │  • Compact 360px Stepper Bar  │
-                                           │  • Step 1 & 2: No Inline Nav  │
-                                           │  • Step 3: Multi-line Options │
-                                           │    with dir="auto" Textareas  │
-                                           │  • Single Sticky Modal Footer │
-                                           │    ("اعتماد وحفظ (N)")         │
-                                           └───────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│                        UMED Student & Batch Platform                       │
+├──────────────────────────────────────┬─────────────────────────────────────┤
+│   إدارة المقررات ودكاترة الدفعة       │     توليد واستيراد الأسئلة الذكي     │
+│  (AcademicStructureManager.tsx)      │ (BulkQuestionImportModal / API)     │
+│  • إزالة لوحة المؤشرات البيانية       │  • وراثة لغة ونوع البنك المختار     │
+│  • اختيار دكتور من قائمة الدفعة       │  • عدد أسئلة مفتوح (1 - 500)       │
+│    أو كتابة اسم جديد + حفظ تلقائي     │  • توزيع حر (MCQ/TF/Essay/Blank)   │
+│    في courseInstructors             │  • خيارات MCQ مرنة (2 - 10 خيارات) │
+├──────────────────────────────────────┼─────────────────────────────────────┤
+│     توثيق انضمام زملاء الدفعة        │    تجربة الطالب الفورية والجوال      │
+│  (EnrollmentApprovalManager.tsx)     │ (StudentDashboard / UsersManager)   │
+│  • قائمة توثيق زملاء الدفعة          │  • دخول فوري للمحاضرات والاختبارات  │
+│  • تأكيد الانتماء أو رفض خارج الدفعة │    فور اختيار الدفعة + شارة التوثيق │
+│  • نتائج الاختبارات متاحة دائماً      │  • شبكة أزرار 2×2 متجاوبة على 360px│
+└──────────────────────────────────────┴─────────────────────────────────────┘
 ```
 
-### Interactive Component & State Mapping
-- **Theme State & Popover (`App`)**:
-  - `theme` state initialized from `localStorage.getItem('umed-theme')` (validating `'medical' | 'gold' | 'light' | 'dark'`, defaulting to `'medical'`).
-  - `themeMenuOpen` boolean state controls the header popover menu; selecting an option invokes `handleSelectTheme(newTheme)`, updates `data-theme` on `document.documentElement`, syncs `isDarkMode` (`theme === 'dark' || theme === 'gold'`), and closes the popover.
-  - Navigation Drawer footer stacks user display name, LTR phone/email identifier, and `<span dir="ltr">(Platform Owner)</span>` role badge vertically (`flex-col items-start gap-1.5`).
-- **Bank Management & Cards (`AssessmentManager`)**:
-  - Toolbar buttons use `grid grid-cols-2 sm:grid-cols-3 gap-2.5` with `col-span-2 sm:col-span-1` on `"تبديل وإدارة البنوك"`.
-  - Bank selector cards use a 3-row vertical stack (`flex flex-col gap-3 p-4`) with stop-propagation action handlers for `"واضع الاختبار الذكي"`, Edit, and Delete.
-- **Wizard Stepper, Multi-Line Review & Sticky Footer (`BulkQuestionImportModal`)**:
-  - Inline bottom navigation blocks in Step 1 and Step 2 are removed; the unified sticky bottom footer handles all step transitions (`setup` -> `content` -> `review` -> save).
-  - Step 2 content container includes proper top padding so the AI prompt studio card and direct generation button are never obscured.
-  - Step 3 stem and option inputs use `<textarea dir="auto">` with full bidirectional text support and concise footer action labels.
+---
+
+## 3. تحديثات نماذج البيانات والـ Backend (Data Models & API Updates)
+
+### أ. تحديث `CourseOffering` في `src/types/umed.ts`
+- إضافة الحقول الاختيارية التالية لواجهة `CourseOffering`:
+  - `instructorId?: string;` (معرف الدكتور في مجموعة `courseInstructors` إن وجد)
+  - `instructorNameArabic?: string;` (الاسم المعروض لدكتور المادة، مثل: `د. أحمد المنصوري`)
+
+### ب. تحديث نقطة النهاية `/api/ai/generate-questions` في `api/index.ts` ومحلل `src/services/mcqBulkParser.ts`
+- إلغاء القيد الثابت `Number(optionsCount) === 5 ? 5 : 4` واستبداله بـ `Math.min(Math.max(Number(optionsCount) || 4, 2), 10)` لدعم توليد واستيراد من **خيارين (`A, B`) حتى 10 خيارات (`A..J`)**.
+- رفع الحد الأقصى لإجمالي الأسئلة وتوزيع الأنواع (`mcqCount`, `trueFalseCount`, `essayCount`, `fillBlankCount`) ليقبل أعداداً مفتوحة حتى `500` سؤال، مع احترام اللغة المختارة (`ar` | `en` | `bilingual`) بدقة.
+
+---
+
+## 4. خارطة المكونات والتفاعلات (Component & File Execution Plan)
+
+### 1) `src/components/admin/PlatformUsersManager.tsx`
+- **إصلاح أزرار بطاقة المستخدم في الجوال**:
+  - تعديل حاوية رأس البطاقة إلى `flex flex-col lg:flex-row lg:items-start justify-between gap-3`.
+  - تحويل حاوية الأزرار الأربع (`تعديل البيانات`، `توثيق / إلغاء التوثيق`، `أرشفة`، `حذف سحابي`) إلى `grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 w-full lg:w-auto pt-2 border-t border-slate-800/70 lg:border-t-0 lg:pt-0` مع تصغير الحشوات النصية في الشاشات الصغيرة لضمان احتوائها بنسبة 100% داخل البطاقة.
+- **تحديث مصطلحات التوثيق**:
+  - تغيير نصوص الفلاتر والشارات من `"موثق القيد"` / `"توثيق القيد"` إلى **"عضو موثق بالدفعة"** / **"توثيق بالدفعة"**، وتغيير `"رقم القيد الأكاديمي"` إلى **"الرقم التعريفي / رقم الكشف بالدفعة"**.
+
+### 2) `src/components/admin/AcademicStructureManager.tsx`
+- **حذف لوحة المؤشرات البيانية (`AcademicAnalyticsDashboard`)**:
+  - حذف استيراد `AcademicAnalyticsDashboard` وحذف زر التبويب `"مؤشرات نمو القيد ونتائج التقييمات الأكاديمية (Recharts Data Viz)"`.
+  - عرض الهيكل الأكاديمي والبلوكات والمقررات الدراسية مباشرة مع زر للتبديل إلى سلة المحذوفات والأرشيف (`archive`).
+- **إصلاح احتواء الأزرار في الجوال**:
+  - إضافة `overflow-hidden` للبطاقات وضبط حاويات أزرار الإجراءات (`تعديل`، `أرشفة`، `حذف`) لتكون `flex flex-wrap items-center gap-1.5` داخل حدود البطاقة.
+- **إضافة حقل "دكتور المادة / مدرس المقرر" مع الحفظ التلقائي**:
+  - جلب قائمة دكاترة الدفعة عبر `fetchCourseInstructors` من `src/services/batchGovernanceService.ts`.
+  - في نافذتي **إضافة مقرر دراسي جديد** و**تعديل المقرر الدراسي**: إضافة قائمة اختيار من دكاترة الدفعة المسجلين + إمكانية كتابة اسم دكتور جديد مباشرة.
+  - عند حفظ المقرر باسم دكتور جديد غير موجود مسبقاً في قائمة الدفعة، يتم استدعاء `saveCourseInstructor` تلقائياً لحفظه في قائمة دكاترة الدفعة.
+  - عرض شارة أنيقة باسم دكتور المادة (`د. ...`) داخل بطاقة كل مقرر دراسي.
+
+### 3) `src/components/admin/BulkQuestionImportModal.tsx` و `src/components/admin/AssessmentManager.tsx`
+- **ربط الإعدادات الافتراضية ببنك الأسئلة المختار (`selectedBank`)**:
+  - عند اختيار بنك أسئلة، تتحدث اللغة الافتراضية (`bankLanguage`) ونمط الأسئلة (`bankQuestionType`) تلقائياً من خصائص البنك مع بقائها قابلة للتغيير الفوري.
+- **عدادات أسئلة مفتوحة وديناميكية**:
+  - توفير أزرار سريعة (`5, 10, 15, 20, 30, 50, 100` + `"ديناميكي حسب المحتوى"`) إلى جانب حقل رقمي حر (`min="1" max="500"`) لإجمالي الأسئلة.
+  - عند اختيار وضع التشكيل المخصص أو الهجين، توفير 4 حقول رقمية حرة (`min="0" max="500"`) لكل نوع: `اختيار من متعدد (MCQ)`، `صح وخطأ (True/False)`، `مقالي / سريري (Essay)`، و`أكمل الفراغ (Fill in the Blank)`.
+- **خيارات MCQ مرنة (من 2 إلى 10 خيارات)**:
+  - استبدال أزرار (4 أو 5 خيارات فقط) بشريط أزرار سريعة (`2`, `3`, `4`, `5`, `6`) + حقل رقمي مخصص (`2` إلى `10`) لتوليد واستيراد الأسئلة بأي عدد خيارات مطلوب.
+
+### 4) `src/App.tsx`، `src/components/admin/EnrollmentApprovalManager.tsx`، `src/components/student/RegisterEnrollment.tsx`، و `src/components/student/StudentDashboard.tsx`
+- **تحديث هوية الانضمام للدفعة**:
+  - تغيير عنوان التبويب في `App.tsx` إلى **"توثيق انضمام طلاب الدفعة"**.
+  - تحديث `EnrollmentApprovalManager.tsx` ليصبح **"قائمة توثيق زملاء الدفعة"** (`تأكيد انتماء الطالب للدفعة` / `رفض طلب خارج الدفعة`) وإزالة أي عبارات تتحدث عن قفل القيد الجامعي أو حجب النتائج.
+  - تحديث `RegisterEnrollment.tsx` ليصبح نموذج **"بطاقة الانضمام للدفعة الدراسية"** مع حقل **"الرقم التعريفي للطالب / رقم الكشف بالدفعة (اختياري)"**.
+- **الفتح الفوري للمحاضرات والاختبارات التدريبية للزميل فور اختيار دفعته**:
+  - في `StudentDashboard.tsx` و `App.tsx`: بمجرد اختيار الطالب لدفعته (`batchId` / `levelId` أو تسجيل بيانات انضمامه للدفعة)، تُفتح له محاضرات الدفعة والمكتبة والاختبارات التدريبية فوراً مع عرض شارة توضيحية ودية إذا كانت عضويته لا تزال **"بانتظار توثيق مندوب الدفعة"**، مع عرض اسم **دكتور المادة** على بطاقات المقررات الدراسية، وإتاحة نتائج الاختبارات التدريبية والتنافسية دائماً فور انتهاء الاختبار.
+
+---
+
+## 5. التحقق والاختبار (Verification Criteria)
+- فحص بطاقات المستخدمين والهيكل الأكاديمي على عرض جوال `360px` (RTL) والتأكد من احتواء جميع الأزرار داخل البطاقات بنسبة 100%.
+- التأكد من اختفاء تبويب ومكون `AcademicAnalyticsDashboard` بالكامل من `AcademicStructureManager`.
+- تجربة إضافة وتعديل مقرر دراسي مع اختيار أو كتابة اسم دكتور جديد والتحقق من حفظه تلقائياً في قائمة دكاترة الدفعة وظهوره في بطاقة المقرر.
+- تجربة توليد واستيراد أسئلة بأعداد مخصصة وخيارات MCQ متغيرة (`2` إلى `10` خيارات) وبلغات مختلفة (`ar`, `en`, `bilingual`).
+- التحقق من بناء المشروع بالكامل عبر `compile_applet` بدون أي أخطاء TypeScript أو أخطاء بناء.

@@ -455,7 +455,7 @@ export default function App() {
   );
   const isOwnerMode = Boolean(isAuthorizedAdmin && activeRole === 'platform_owner' && realRole === 'platform_owner');
   const isUniversityAdminOrOwner = Boolean(
-    isAuthorizedAdmin && (activeRole === 'platform_owner' || activeRole === 'university_admin')
+    isAuthorizedAdmin && (activeRole === 'platform_owner' || activeRole === 'university_admin' || activeRole === 'batch_rep')
   );
 
   const refreshAdminData = async () => {
@@ -498,11 +498,14 @@ export default function App() {
     return () => unsub();
   }, [user?.uid]);
 
-  const isStudentApproved = studentEnrollment?.status === 'approved' || isAuthorizedAdmin;
+  const isStudentApproved =
+    studentEnrollment?.status === 'approved' ||
+    studentEnrollment?.status === 'pending' ||
+    isAuthorizedAdmin;
 
   // Strict Workspace Isolation:
   // 1) When in Student Mode (!isAdminMode), block access to all admin tabs
-  // 2) Gate approved-only student tabs until enrollment is approved
+  // 2) Gate student tabs if enrollment was explicitly rejected
   // 3) When in Leadership Mode (isAdminMode), default to 'roles' or 'enrollment_queue' if currently on a student tab
   // 4) Block 'users_manager' and 'backup_restore' for anyone except Platform Owner
   useEffect(() => {
@@ -519,7 +522,7 @@ export default function App() {
         (activeTab === 'student_profile' || activeTab === 'student_library' || activeTab === 'student_assessments') &&
         !isAuthorizedAdmin &&
         studentEnrollment &&
-        studentEnrollment.status !== 'approved'
+        studentEnrollment.status === 'rejected'
       ) {
         setActiveTab('student_dashboard');
       }
@@ -769,7 +772,7 @@ export default function App() {
           subtitle: 'عرض وتعديل وتوثيق وأرشفة وحذف وتصدير بيانات الحسابات مع المزامنة الفورية في السحابة'
         };
       case 'enrollment_queue':
-        return { title: 'اعتماد طلبات القيد الأكاديمي', subtitle: 'مراجعة واعتماد قيد الطلاب الجدد وطلبات تعديل البيانات' };
+        return { title: 'توثيق انضمام طلاب الدفعة', subtitle: 'التحقق من انتماء الطلاب المنضمين للدفعة وتوثيق عضويتهم الأكاديمية' };
       case 'academic':
         return { title: 'الهيكل الأكاديمي، البلوكات، والمواد', subtitle: 'إدارة الكليات، المستويات، البلوكات، والمقررات الدراسية' };
       case 'content_manager':
@@ -1881,7 +1884,7 @@ export default function App() {
                       }`}
                     >
                       <Users className="w-4 h-4 shrink-0" />
-                      <span>اعتماد طلبات القيد</span>
+                      <span>توثيق طلاب الدفعة</span>
                     </button>
                   )}
 
@@ -2919,7 +2922,7 @@ export default function App() {
                       }`}
                     >
                       <Users className="w-4 h-4 mb-0.5" />
-                      <span className="text-[10px] leading-tight">الطلبات</span>
+                      <span className="text-[10px] leading-tight">توثيق الدفعة</span>
                     </button>
 
                     <button

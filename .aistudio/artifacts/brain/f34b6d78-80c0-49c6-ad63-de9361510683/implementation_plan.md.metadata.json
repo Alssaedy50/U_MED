@@ -1,6 +1,6 @@
 {
-  "summary":  "Comprehensive architectural and UX implementation plan for the UMED 4-Theme Design System (Medical, Gold, Light, Dark), single-button popover theme switcher in the top header, elimination of duplicate modal footers and empty containers, and full resolution of mobile layout and BiDi RTL/LTR text bugs.",
-  "updatedAt":  "2026-10-26T10:09:48.445469292Z",
+  "summary":  "خطة التنفيذ الهندسية الشاملة لتحديثات منصة UMED: إصلاح تجاوز الأزرار أفقياً في الجوال، إزالة لوحة المؤشرات البيانية، ربط دكتور المادة بالمقررات الدراسية مع الحفظ التلقائي، التخصيص الديناميكي المفتوح لتوليد واستيراد الأسئلة (العدد، النوع، الخيارات 2-10، اللغة)، وتحويل هوية القيد إلى توثيق انضمام زملاء الدفعة مع فتح المحاضرات والاختبارات التدريبية فور اختيار الدفعة.",
+  "updatedAt":  "2026-10-26T11:12:08.319622984Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

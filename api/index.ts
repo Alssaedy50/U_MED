@@ -899,11 +899,11 @@ app.post('/api/admin/generate-smart-exam', requireAdmin, async (req: Authenticat
       batchName,
       durationMinutes: Number(durationMinutes) || 30,
       questionDurationSeconds: Number(questionDurationSeconds) || 45,
-      mcqCount: Math.min(Math.max(Number(mcqCount) || 5, 0), 50),
-      optionsCount: Number(optionsCount) === 5 ? 5 : 4,
-      trueFalseCount: Math.min(Math.max(Number(trueFalseCount) || 0, 0), 30),
-      essayCount: Math.min(Math.max(Number(essayCount) || 0, 0), 20),
-      fillBlankCount: Math.min(Math.max(Number(fillBlankCount) || 0, 0), 30),
+      mcqCount: Math.min(Math.max(Number(mcqCount) || 0, 0), 500),
+      optionsCount: Math.min(Math.max(Number(optionsCount) || 4, 2), 10),
+      trueFalseCount: Math.min(Math.max(Number(trueFalseCount) || 0, 0), 500),
+      essayCount: Math.min(Math.max(Number(essayCount) || 0, 0), 500),
+      fillBlankCount: Math.min(Math.max(Number(fillBlankCount) || 0, 0), 500),
       difficultyMix,
       includeOptionRationales: Boolean(includeOptionRationales)
     });
@@ -1234,9 +1234,8 @@ app.post('/api/assessments/submit-attempt', optionalAuth, (req: AuthenticatedReq
 
     const percentage = totalPoints > 0 ? Math.round((score / totalPoints) * 100) : 0;
     const nowIso = now.toISOString();
-    const policy = storedAssessment?.resultReleasePolicy || resultReleasePolicy || 'immediate';
     const isGuestPreview = Boolean(req.body?.isGuestPreview || uid === 'guest');
-    const isReleased = isGuestPreview ? true : policy === 'immediate';
+    const isReleased = true;
 
     const computedDurationSeconds =
       typeof req.body?.durationSeconds === 'number' && req.body.durationSeconds >= 0
@@ -1420,20 +1419,11 @@ app.get('/api/assessments/results', optionalAuth, (req: AuthenticatedRequest, re
     list = list.filter((r: any) => r.uid === queryUid);
   }
 
-  // If not admin, mask results that are not yet released
-  if (!isAdmin) {
-    list = list.map((r: any) => {
-      if (!r.isReleased) {
-        return {
-          ...r,
-          score: 0,
-          percentage: 0,
-          isPendingRelease: true
-        };
-      }
-      return r;
-    });
-  }
+  // Always ensure student practice/competition results are released and visible immediately
+  list = list.map((r: any) => ({
+    ...r,
+    isReleased: true
+  }));
 
   res.json({ results: list });
 });

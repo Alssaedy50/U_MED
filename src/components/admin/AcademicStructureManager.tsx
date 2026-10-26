@@ -24,11 +24,10 @@ import {
   Trash2,
   ToggleLeft,
   ToggleRight,
-  BarChart3,
   Archive,
-  ArchiveRestore
+  ArchiveRestore,
+  UserCheck
 } from 'lucide-react';
-import AcademicAnalyticsDashboard from './AcademicAnalyticsDashboard.tsx';
 import { 
   University, 
   College, 
@@ -36,9 +35,14 @@ import {
   StudyLevel, 
   StudyPeriod, 
   CourseOffering,
+  CourseInstructor,
   StageType,
   UserRole
 } from '../../types/umed.ts';
+import {
+  fetchCourseInstructors,
+  saveCourseInstructor
+} from '../../services/batchGovernanceService.ts';
 import { 
   fetchUniversities, 
   subscribeToUniversities,
@@ -115,9 +119,10 @@ export default function AcademicStructureManager({
   const [selectedPeriod, setSelectedPeriod] = useState<StudyPeriod | null>(null);
 
   const [courses, setCourses] = useState<CourseOffering[]>([]);
+  const [batchInstructors, setBatchInstructors] = useState<CourseInstructor[]>([]);
 
   // UI State
-  const [activeViewMode, setActiveViewMode] = useState<'hierarchy' | 'analytics' | 'archive'>('hierarchy');
+  const [activeViewMode, setActiveViewMode] = useState<'hierarchy' | 'archive'>('hierarchy');
   const [archivedPeriods, setArchivedPeriods] = useState<StudyPeriod[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [seedLoading, setSeedLoading] = useState<boolean>(false);
@@ -190,7 +195,9 @@ export default function AcademicStructureManager({
     titleArabic: '',
     titleEnglish: '',
     code: '',
-    creditHours: 3
+    creditHours: 3,
+    instructorId: '',
+    instructorNameArabic: ''
   });
 
   // Load universities on mount (Strictly scoped for University Owner & Batch Rep + Saved User Context)
@@ -333,12 +340,19 @@ export default function AcademicStructureManager({
       fetchArchivedStudyPeriods(selectedLevel.id).then((archived) => {
         setArchivedPeriods(archived);
       });
+      if (selectedUniversity) {
+        fetchCourseInstructors({
+          universityId: selectedUniversity.id,
+          studyLevelId: selectedLevel.id
+        }).then(setBatchInstructors).catch(() => setBatchInstructors([]));
+      }
     } else {
       setStudyPeriods([]);
       setSelectedPeriod(null);
       setArchivedPeriods([]);
+      setBatchInstructors([]);
     }
-  }, [selectedLevel]);
+  }, [selectedLevel, selectedUniversity]);
 
   // Cascading Load: Courses when Period changes
   useEffect(() => {
@@ -620,9 +634,49 @@ export default function AcademicStructureManager({
     try {
       const rawHours = Number(editingCourse.creditHours);
       const creditHours = !isNaN(rawHours) && rawHours >= 1 ? Math.min(Math.floor(rawHours), 20) : 3;
+      const trimmedInstructorName = (editingCourse.instructorNameArabic || '').trim();
+      let resolvedInstructorId = editingCourse.instructorId || '';
+
+      if (trimmedInstructorName && selectedUniversity && selectedLevel) {
+        const existingInst = batchInstructors.find(
+          (inst) =>
+            inst.id === resolvedInstructorId ||
+            inst.instructorNameArabic.trim() === trimmedInstructorName ||
+            `${inst.academicTitle} ${inst.instructorNameArabic}`.trim() === trimmedInstructorName
+        );
+        if (existingInst) {
+          resolvedInstructorId = existingInst.id;
+        } else {
+          const newInstId = `inst-${Date.now().toString(36)}`;
+          const newInst: CourseInstructor = {
+            id: newInstId,
+            universityId: selectedUniversity.id,
+            studyLevelId: selectedLevel.id,
+            studyPeriodId: editingCourse.studyPeriodId || selectedPeriod?.id,
+            courseOfferingId: editingCourse.id,
+            courseTitleArabic: editingCourse.titleArabic,
+            instructorNameArabic: trimmedInstructorName.replace(/^(أ\.د\.|أ\.م\.د\.|د\.)\s*/, ''),
+            academicTitle: trimmedInstructorName.startsWith('أ.د.')
+              ? 'أ.د.'
+              : trimmedInstructorName.startsWith('أ.م.د.')
+              ? 'أ.م.د.'
+              : 'د.',
+            teachingType: 'both',
+            createdBy: userRole,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+          const savedInst = await saveCourseInstructor(newInst, userRole);
+          setBatchInstructors((prev) => [...prev.filter((i) => i.id !== savedInst.id), savedInst]);
+          resolvedInstructorId = savedInst.id;
+        }
+      }
+
       const updatedCourse: CourseOffering = {
         ...editingCourse,
-        creditHours
+        creditHours,
+        instructorId: resolvedInstructorId || undefined,
+        instructorNameArabic: trimmedInstructorName || undefined
       };
       await saveCourseOffering(updatedCourse);
       setCourses(courses.map(c => c.id === updatedCourse.id ? updatedCourse : c));
@@ -801,6 +855,44 @@ export default function AcademicStructureManager({
       const id = `crs-${Date.now().toString(36)}`;
       const rawHours = Number(courseForm.creditHours);
       const creditHours = !isNaN(rawHours) && rawHours >= 1 ? Math.min(Math.floor(rawHours), 20) : 3;
+      const trimmedInstructorName = (courseForm.instructorNameArabic || '').trim();
+      let resolvedInstructorId = courseForm.instructorId || '';
+
+      if (trimmedInstructorName) {
+        const existingInst = batchInstructors.find(
+          (inst) =>
+            inst.id === resolvedInstructorId ||
+            inst.instructorNameArabic.trim() === trimmedInstructorName ||
+            `${inst.academicTitle} ${inst.instructorNameArabic}`.trim() === trimmedInstructorName
+        );
+        if (existingInst) {
+          resolvedInstructorId = existingInst.id;
+        } else {
+          const newInstId = `inst-${Date.now().toString(36)}`;
+          const newInst: CourseInstructor = {
+            id: newInstId,
+            universityId: selectedUniversity.id,
+            studyLevelId: selectedLevel.id,
+            studyPeriodId: selectedPeriod.id,
+            courseOfferingId: id,
+            courseTitleArabic: courseForm.titleArabic,
+            instructorNameArabic: trimmedInstructorName.replace(/^(أ\.د\.|أ\.م\.د\.|د\.)\s*/, ''),
+            academicTitle: trimmedInstructorName.startsWith('أ.د.')
+              ? 'أ.د.'
+              : trimmedInstructorName.startsWith('أ.م.د.')
+              ? 'أ.م.د.'
+              : 'د.',
+            teachingType: 'both',
+            createdBy: userRole,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+          const savedInst = await saveCourseInstructor(newInst, userRole);
+          setBatchInstructors((prev) => [...prev.filter((i) => i.id !== savedInst.id), savedInst]);
+          resolvedInstructorId = savedInst.id;
+        }
+      }
+
       const newCourse: CourseOffering = {
         id,
         studyPeriodId: selectedPeriod.id,
@@ -811,12 +903,21 @@ export default function AcademicStructureManager({
         titleEnglish: courseForm.titleEnglish,
         code: courseForm.code,
         creditHours,
+        instructorId: resolvedInstructorId || undefined,
+        instructorNameArabic: trimmedInstructorName || undefined,
         isActive: true
       };
       await saveCourseOffering(newCourse);
       setCourses([...courses, newCourse]);
       setShowAddCourseModal(false);
-      setCourseForm({ titleArabic: '', titleEnglish: '', code: '', creditHours: 3 });
+      setCourseForm({
+        titleArabic: '',
+        titleEnglish: '',
+        code: '',
+        creditHours: 3,
+        instructorId: '',
+        instructorNameArabic: ''
+      });
       setStatusMessage({ type: 'success', text: `تمت إضافة مقرر ${newCourse.titleArabic} بنجاح (${creditHours} ساعات معتمدة)` });
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: err.message });
@@ -883,9 +984,9 @@ export default function AcademicStructureManager({
         </div>
       )}
 
-      {/* View Switcher: Hierarchy Manager vs Data Visualizations (Recharts) */}
+      {/* View Switcher: Hierarchy Manager vs Archive */}
       <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/80 p-2.5 rounded-2xl border border-slate-800 shadow-md">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => setActiveViewMode('hierarchy')}
             className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
@@ -896,21 +997,6 @@ export default function AcademicStructureManager({
           >
             <Layers className="w-4 h-4" />
             <span>إدارة الهيكل الأكاديمي والبلوكات</span>
-          </button>
-          
-          <button
-            onClick={() => setActiveViewMode('analytics')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
-              activeViewMode === 'analytics'
-                ? 'bg-teal-600 text-white shadow-md shadow-teal-500/20'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <BarChart3 className="w-4 h-4 text-teal-300" />
-            <span>مؤشرات نمو القيد ونتائج التقييمات الأكاديمية</span>
-            <span className="px-1.5 py-0.5 rounded bg-teal-500/20 text-teal-300 text-[10px] font-mono">
-              Recharts Data Viz
-            </span>
           </button>
 
           <button
@@ -944,12 +1030,7 @@ export default function AcademicStructureManager({
         )}
       </div>
 
-      {activeViewMode === 'analytics' ? (
-        <AcademicAnalyticsDashboard
-          selectedUniversity={selectedUniversity}
-          studyLevels={studyLevels}
-        />
-      ) : activeViewMode === 'archive' ? (
+      {activeViewMode === 'archive' ? (
         <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800">
             <div>
@@ -1402,59 +1483,77 @@ export default function AcademicStructureManager({
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-                  {courses.map((course) => (
-                    <div key={course.id} className="p-4 sm:p-5 bg-slate-950 rounded-2xl border border-slate-800 text-xs flex flex-col justify-between gap-3.5 hover:border-slate-700 transition-all">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-teal-300 font-mono font-bold text-xs">
-                            {course.code}
-                          </span>
-                          <span className="font-bold text-white text-sm sm:text-base">{course.titleArabic}</span>
-                          {course.titleEnglish && (
-                            <span className="text-slate-400 text-xs" dir="ltr">({course.titleEnglish})</span>
+                  {courses.map((course) => {
+                    const matchedInst = batchInstructors.find(
+                      (i) => i.id === course.instructorId || i.courseOfferingId === course.id
+                    );
+                    const displayInstructorName =
+                      course.instructorNameArabic ||
+                      (matchedInst ? `${matchedInst.academicTitle} ${matchedInst.instructorNameArabic}` : '');
+
+                    return (
+                      <div key={course.id} className="p-4 sm:p-5 bg-slate-950 rounded-2xl border border-slate-800 text-xs flex flex-col justify-between gap-3.5 hover:border-slate-700 transition-all overflow-hidden">
+                        <div className="space-y-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 flex-wrap min-w-0">
+                              <span className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-teal-300 font-mono font-bold text-xs">
+                                {course.code}
+                              </span>
+                              <span className="font-bold text-white text-sm sm:text-base break-words">{course.titleArabic}</span>
+                              {course.titleEnglish && (
+                                <span className="text-slate-400 text-xs break-all" dir="ltr">({course.titleEnglish})</span>
+                              )}
+                            </div>
+                            <span className="text-slate-400 font-mono text-xs px-2 py-0.5 rounded bg-slate-900 border border-slate-800 shrink-0">{course.creditHours ?? 3} ساعات</span>
+                          </div>
+
+                          {displayInstructorName && (
+                            <div className="flex items-center gap-1.5 text-[11px] text-teal-300 bg-teal-950/30 border border-teal-500/30 px-2.5 py-1 rounded-lg w-fit max-w-full">
+                              <UserCheck className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                              <span className="truncate">دكتور المقرر: <strong>{displayInstructorName}</strong></span>
+                            </div>
                           )}
                         </div>
-                        <span className="text-slate-400 font-mono text-xs px-2 py-0.5 rounded bg-slate-900 border border-slate-800">{course.creditHours ?? 3} ساعات</span>
-                      </div>
 
-                      <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2.5">
-                        <span className={`text-xs font-bold flex items-center gap-1.5 ${course.isActive ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          <span className={`w-2 h-2 rounded-full ${course.isActive ? 'bg-emerald-400' : 'bg-rose-400'}`}></span>
-                          {course.isActive ? 'مقرر نشط' : 'مقرر معطل'}
-                        </span>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <button
-                            type="button"
-                            onClick={() => setEditingCourse(course)}
-                            className="text-slate-200 hover:text-white px-3 py-1.5 min-h-[38px] rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 font-bold flex items-center gap-1.5 transition-colors"
-                          >
-                            <Edit2 className="w-3.5 h-3.5 text-indigo-400" />
-                            <span>تعديل</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              toggleCourseOfferingActive(course.id, course.isActive).then(() => {
-                                setCourses(courses.map(c => c.id === course.id ? { ...c, isActive: !c.isActive } : c));
-                              });
-                            }}
-                            className="text-slate-200 hover:text-white px-3 py-1.5 min-h-[38px] rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 font-bold flex items-center gap-1.5 transition-colors"
-                          >
-                            {course.isActive ? <ToggleRight className="w-4 h-4 text-emerald-400" /> : <ToggleLeft className="w-4 h-4 text-slate-500" />}
-                            <span>{course.isActive ? 'تعطيل' : 'تفعيل'}</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleAttemptDelete('course', course.id, course.titleArabic, course.isActive)}
-                            className="text-rose-400 hover:text-rose-200 px-3 py-1.5 min-h-[38px] rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-900/50 font-bold flex items-center gap-1.5 transition-colors"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            <span>حذف</span>
-                          </button>
+                        <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2.5">
+                          <span className={`text-xs font-bold flex items-center gap-1.5 ${course.isActive ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            <span className={`w-2 h-2 rounded-full ${course.isActive ? 'bg-emerald-400' : 'bg-rose-400'}`}></span>
+                            {course.isActive ? 'مقرر نشط' : 'مقرر معطل'}
+                          </span>
+                          <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto justify-end">
+                            <button
+                              type="button"
+                              onClick={() => setEditingCourse(course)}
+                              className="text-slate-200 hover:text-white px-3 py-1.5 min-h-[38px] rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 font-bold flex items-center justify-center gap-1.5 transition-colors flex-1 sm:flex-initial"
+                            >
+                              <Edit2 className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                              <span>تعديل</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                toggleCourseOfferingActive(course.id, course.isActive).then(() => {
+                                  setCourses(courses.map(c => c.id === course.id ? { ...c, isActive: !c.isActive } : c));
+                                });
+                              }}
+                              className="text-slate-200 hover:text-white px-3 py-1.5 min-h-[38px] rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 font-bold flex items-center justify-center gap-1.5 transition-colors flex-1 sm:flex-initial"
+                            >
+                              {course.isActive ? <ToggleRight className="w-4 h-4 text-emerald-400 shrink-0" /> : <ToggleLeft className="w-4 h-4 text-slate-500 shrink-0" />}
+                              <span>{course.isActive ? 'تعطيل' : 'تفعيل'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleAttemptDelete('course', course.id, course.titleArabic, course.isActive)}
+                              className="text-rose-400 hover:text-rose-200 px-3 py-1.5 min-h-[38px] rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-900/50 font-bold flex items-center justify-center gap-1.5 transition-colors flex-1 sm:flex-initial"
+                            >
+                              <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                              <span>حذف</span>
+                            </button>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1669,26 +1768,26 @@ export default function AcademicStructureManager({
                         setSelectedPeriod(period);
                         setActivePopupList(null);
                       }}
-                      className={`p-4 rounded-xl border cursor-pointer transition-all text-xs flex flex-wrap items-center justify-between gap-3 ${
+                      className={`p-4 rounded-xl border cursor-pointer transition-all text-xs flex flex-wrap items-center justify-between gap-3 overflow-hidden ${
                         selectedPeriod?.id === period.id
                           ? 'bg-teal-500/20 border-teal-400 text-white shadow-md'
                           : 'bg-slate-950/80 border-slate-800 text-slate-300 hover:border-slate-700'
                       }`}
                     >
-                      <div>
-                        <div className="font-bold text-sm sm:text-base flex items-center gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="font-bold text-sm sm:text-base flex flex-wrap items-center gap-2">
                           <span className="px-2 py-0.5 rounded-lg bg-slate-900 text-teal-300 font-mono text-xs font-bold border border-teal-500/30">{period.code}</span>
-                          <span>{period.titleArabic}</span>
+                          <span className="break-words">{period.titleArabic}</span>
                         </div>
-                        <div className="text-xs text-slate-400 mt-1" dir="ltr">{period.titleEnglish}</div>
+                        <div className="text-xs text-slate-400 mt-1 break-all" dir="ltr">{period.titleEnglish}</div>
                       </div>
-                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end" onClick={(e) => e.stopPropagation()}>
                         <button
                           type="button"
                           onClick={() => { setActivePopupList(null); setEditingPeriod(period); }}
-                          className="px-3 py-2 min-h-[38px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold flex items-center gap-1.5 transition-colors"
+                          className="px-3 py-2 min-h-[38px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold flex items-center justify-center gap-1.5 transition-colors flex-1 sm:flex-initial"
                         >
-                          <Edit2 className="w-3.5 h-3.5 text-teal-400" />
+                          <Edit2 className="w-3.5 h-3.5 text-teal-400 shrink-0" />
                           <span>تعديل</span>
                         </button>
                         <button
@@ -1698,17 +1797,17 @@ export default function AcademicStructureManager({
                             setActivePopupList(null);
                             handleArchivePeriod(period.id, true);
                           }}
-                          className="px-3 py-2 min-h-[38px] rounded-xl bg-amber-950/40 hover:bg-amber-900/60 border border-amber-900/50 text-amber-300 font-bold flex items-center gap-1.5 transition-colors"
+                          className="px-3 py-2 min-h-[38px] rounded-xl bg-amber-950/40 hover:bg-amber-900/60 border border-amber-900/50 text-amber-300 font-bold flex items-center justify-center gap-1.5 transition-colors flex-1 sm:flex-initial"
                         >
-                          <Archive className="w-3.5 h-3.5" />
+                          <Archive className="w-3.5 h-3.5 shrink-0" />
                           <span>أرشفة</span>
                         </button>
                         <button
                           type="button"
                           onClick={() => handleAttemptDelete('period', period.id, period.titleArabic, period.isActive)}
-                          className="px-3 py-2 min-h-[38px] rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-900/50 text-rose-300 font-bold flex items-center gap-1.5 transition-colors"
+                          className="px-3 py-2 min-h-[38px] rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-900/50 text-rose-300 font-bold flex items-center justify-center gap-1.5 transition-colors flex-1 sm:flex-initial"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 className="w-3.5 h-3.5 shrink-0" />
                           <span>حذف</span>
                         </button>
                       </div>
@@ -2342,6 +2441,58 @@ export default function AcademicStructureManager({
                 </div>
               </div>
 
+              {/* Course Instructor Selection & Auto-Save Field */}
+              <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2">
+                <label className="block text-slate-200 font-bold flex items-center justify-between gap-2">
+                  <span>دكتور المادة / مدرس المقرر (اختياري):</span>
+                  <span className="text-[10px] text-teal-400 font-normal">يُحفظ تلقائياً في قائمة دكاترة الدفعة</span>
+                </label>
+
+                {batchInstructors.length > 0 && (
+                  <select
+                    value={courseForm.instructorId || ''}
+                    onChange={(e) => {
+                      const instId = e.target.value;
+                      if (!instId) {
+                        setCourseForm({ ...courseForm, instructorId: '' });
+                        return;
+                      }
+                      const found = batchInstructors.find((i) => i.id === instId);
+                      if (found) {
+                        setCourseForm({
+                          ...courseForm,
+                          instructorId: found.id,
+                          instructorNameArabic: `${found.academicTitle} ${found.instructorNameArabic}`.trim()
+                        });
+                      }
+                    }}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs focus:outline-none focus:border-teal-500"
+                  >
+                    <option value="">-- اختر من دكاترة الدفعة المسجلين أو اكتب اسماً جديداً بالأسفل --</option>
+                    {batchInstructors.map((inst) => (
+                      <option key={inst.id} value={inst.id}>
+                        {inst.academicTitle} {inst.instructorNameArabic}
+                        {inst.specialization ? ` (${inst.specialization})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                <input
+                  type="text"
+                  value={courseForm.instructorNameArabic || ''}
+                  onChange={(e) =>
+                    setCourseForm({
+                      ...courseForm,
+                      instructorNameArabic: e.target.value,
+                      instructorId: ''
+                    })
+                  }
+                  placeholder="أو اكتب اسم دكتور المادة يدوياً (مثال: أ.د. يحيى الريوي)"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white focus:outline-none focus:border-teal-500"
+                />
+              </div>
+
               <div className="pt-3 flex justify-end gap-2">
                 <button
                   type="button"
@@ -2912,6 +3063,58 @@ export default function AcademicStructureManager({
                     })}
                   </div>
                 </div>
+              </div>
+
+              {/* Edit Course Instructor Selection & Auto-Save Field */}
+              <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2">
+                <label className="block text-slate-200 font-bold flex items-center justify-between gap-2">
+                  <span>دكتور المادة / مدرس المقرر:</span>
+                  <span className="text-[10px] text-indigo-400 font-normal">يُحفظ تلقائياً في دكاترة الدفعة</span>
+                </label>
+
+                {batchInstructors.length > 0 && (
+                  <select
+                    value={editingCourse.instructorId || ''}
+                    onChange={(e) => {
+                      const instId = e.target.value;
+                      if (!instId) {
+                        setEditingCourse({ ...editingCourse, instructorId: '' });
+                        return;
+                      }
+                      const found = batchInstructors.find((i) => i.id === instId);
+                      if (found) {
+                        setEditingCourse({
+                          ...editingCourse,
+                          instructorId: found.id,
+                          instructorNameArabic: `${found.academicTitle} ${found.instructorNameArabic}`.trim()
+                        });
+                      }
+                    }}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="">-- اختر من دكاترة الدفعة المسجلين أو اكتب اسماً جديداً بالأسفل --</option>
+                    {batchInstructors.map((inst) => (
+                      <option key={inst.id} value={inst.id}>
+                        {inst.academicTitle} {inst.instructorNameArabic}
+                        {inst.specialization ? ` (${inst.specialization})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                <input
+                  type="text"
+                  value={editingCourse.instructorNameArabic || ''}
+                  onChange={(e) =>
+                    setEditingCourse({
+                      ...editingCourse,
+                      instructorNameArabic: e.target.value,
+                      instructorId: ''
+                    })
+                  }
+                  placeholder="أو اكتب اسم دكتور المادة يدوياً (مثال: أ.د. يحيى الريوي)"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white focus:outline-none focus:border-indigo-500"
+                />
               </div>
 
               <div className="pt-3 flex justify-end gap-2">

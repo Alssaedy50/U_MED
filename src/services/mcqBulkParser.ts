@@ -31,7 +31,9 @@ export const CANONICAL_OPTION_IDS = [
   'opt-e',
   'opt-f',
   'opt-g',
-  'opt-h'
+  'opt-h',
+  'opt-i',
+  'opt-j'
 ] as const;
 
 export function getOptionIdByIndex(index: number): string {
@@ -243,14 +245,20 @@ export function resolveCanonicalOptionId(
   if (lower === 'opt-h' || lower === 'h' || cleaned === 'ح' || lower === '8' || lower === 'option h' || cleaned === 'خيار ح') {
     return options[7]?.id || 'opt-h';
   }
+  if (lower === 'opt-i' || lower === 'i' || cleaned === 'ط' || lower === '9' || lower === 'option i' || cleaned === 'خيار ط') {
+    return options[8]?.id || 'opt-i';
+  }
+  if (lower === 'opt-j' || lower === 'j' || cleaned === 'ي' || lower === '10' || lower === 'option j' || cleaned === 'خيار ي') {
+    return options[9]?.id || 'opt-j';
+  }
 
   // Extract leading letter/number from patterns like "A) ...", "ب - ...", "(ج)", "هـ."
-  const prefixMatch = cleaned.match(/^[([\s]*([A-Ha-hأابجدتثهـهو1-8])[)\].\-:\s]*$/u);
+  const prefixMatch = cleaned.match(/^[([\s]*([A-Ja-jأابجدتثهـهوزحطي]|10|[1-9])[)\].\-:\s]*$/u);
   if (prefixMatch) {
     return resolveCanonicalOptionId(prefixMatch[1], options);
   }
 
-  const leadingTokenMatch = cleaned.match(/^(?:خيار|الخيار|option)?\s*[\(\[]?([A-Ha-hأابجدتثهـهو1-8])[\)\].\-:](?:\s|$)/iu);
+  const leadingTokenMatch = cleaned.match(/^(?:خيار|الخيار|option)?\s*[\(\[]?([A-Ja-jأابجدتثهـهوزحطي]|10|[1-9])[\)\].\-:](?:\s|$)/iu);
   if (leadingTokenMatch) {
     return resolveCanonicalOptionId(leadingTokenMatch[1], options);
   }
@@ -1763,13 +1771,28 @@ export interface AiPromptGeneratorConfig {
   durationMinutes?: number;
   questionDurationSeconds?: number;
   mcqCount?: number;
-  optionsCount?: 4 | 5;
+  optionsCount?: number;
   trueFalseCount?: number;
   essayCount?: number;
   fillBlankCount?: number;
   difficultyMix?: 'balanced' | 'clinical_usmle' | 'foundational';
   includeOptionRationales?: boolean;
 }
+
+const ALL_EN_OPTION_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
+const ALL_AR_OPTION_LETTERS = ['أ', 'ب', 'ج', 'د', 'هـ', 'و', 'ز', 'ح', 'ط', 'ي'];
+const ALL_AR_ORDINALS = [
+  'الأول',
+  'الثاني',
+  'الثالث',
+  'الرابع',
+  'الخامس',
+  'السادس',
+  'السابع',
+  'الثامن',
+  'التاسع',
+  'العاشر'
+];
 
 /**
  * Generates a crystal-clear, highly structured, professional AI Prompt
@@ -1795,13 +1818,15 @@ export function buildProfessionalAiPrompt(config: AiPromptGeneratorConfig): stri
     durationMinutes = 30,
     questionDurationSeconds = 45,
     mcqCount = 10,
-    optionsCount = 4,
+    optionsCount: rawOptionsCount = 4,
     trueFalseCount = 2,
     essayCount = 1,
     fillBlankCount = 2,
     difficultyMix = 'clinical_usmle',
     includeOptionRationales = true
   } = config;
+
+  const optionsCount = Math.min(Math.max(Number(rawOptionsCount) || 4, 2), 10);
 
   // Compute effective question counts when fixed count mode is selected
   const effectiveMcq = questionTypeMode === 'mcq' ? (mcqCount || 15) : questionTypeMode === 'hybrid' ? mcqCount : 0;
@@ -1814,6 +1839,9 @@ export function buildProfessionalAiPrompt(config: AiPromptGeneratorConfig): stri
   const includeTfExample = questionTypeMode === 'true_false' || (questionTypeMode === 'hybrid' && (isDynamicQuestionCount || effectiveTf > 0));
   const includeFillBlankExample = questionTypeMode === 'fill_blank' || (questionTypeMode === 'hybrid' && effectiveFillBlank > 0);
   const includeEssayExample = questionTypeMode === 'essay' || (questionTypeMode === 'hybrid' && (isDynamicQuestionCount || effectiveEssay > 0));
+
+  const optionLettersEn = ALL_EN_OPTION_LETTERS.slice(0, optionsCount);
+  const optionLettersAr = ALL_AR_OPTION_LETTERS.slice(0, optionsCount);
 
   if (language === 'en') {
     const resolvedTopic = topic.trim() || blockName.trim() || '[Insert Medical Topic / Lecture / Block Here]';
@@ -1841,8 +1869,7 @@ export function buildProfessionalAiPrompt(config: AiPromptGeneratorConfig): stri
       : `Fixed Target Count (Total: ${totalRequested} Questions):
   ${effectiveMcq > 0 ? `* Multiple Choice Questions (MCQ - ${optionsCount} options): ${effectiveMcq} questions\n  ` : ''}${effectiveTf > 0 ? `* True / False Questions: ${effectiveTf} questions\n  ` : ''}${effectiveFillBlank > 0 ? `* Fill-in-the-Blank Questions: ${effectiveFillBlank} questions\n  ` : ''}${effectiveEssay > 0 ? `* Clinical Essay Questions: ${effectiveEssay} questions` : ''}`.trim();
 
-    const optionLetters = optionsCount === 5 ? ['A', 'B', 'C', 'D', 'E'] : ['A', 'B', 'C', 'D'];
-    const optionTemplateLines = optionLetters
+    const optionTemplateLines = optionLettersEn
       .map(
         (ltr, i) =>
           `${ltr}) [Option ${ltr} text]${i === 1 ? ' *' : ''}${
@@ -1946,6 +1973,17 @@ ${mode === 'generate_new' ? `Now, generate the questions dynamically for Level (
       ? `عدد ديناميكي مفتوح وشامل (غير مقيد بعدد ثابت — ولّد أو استخرج كافة الأسئلة اللازمة لتغطية جميع النقاط العلمية والسريرية للمحاضرة أو البلوك بشكل وافٍ)`
       : `عدد محدد (${totalRequested} سؤال إجمالاً: ${effectiveMcq} اختيارات، ${effectiveTf} صح وخطأ، ${effectiveFillBlank} إكمال فراغ، ${effectiveEssay} مقالي)`;
 
+    const biOptionLines = optionLettersAr
+      .map(
+        (arLtr, i) =>
+          `${arLtr}) [الخيار ${ALL_AR_ORDINALS[i] || i + 1} بالعربية / Option ${optionLettersEn[i]} in English]${i === 1 ? ' *' : ''}${
+            includeOptionRationales
+              ? ` (التعليل: ${i === 1 ? 'صحيح لأن...' : 'سبب صحة أو خطأ هذا الخيار'})`
+              : ''
+          }`
+      )
+      .join('\n');
+
     return `أنت بروفيسور في التعليم الطبي وخبير معتمد في صياغة الامتحانات الطبية ثنائية اللغة (العربية + الإنجليزية) لمنصة UMED الطبية.
 ${
   mode === 'generate_new'
@@ -1980,14 +2018,7 @@ ${
     ? `
 1. [نص السؤال أو الحالة السريرية باللغة العربية الفصحى]
 [Exact English clinical vignette / question stem on the second line]
-أ) [الخيار الأول بالعربية / Option A in English]${includeOptionRationales ? ' (التعليل: سبب صحة أو خطأ هذا الخيار)' : ''}
-ب) [الخيار الثاني بالعربية / Option B in English] *${includeOptionRationales ? ' (التعليل: صحيح لأن...)' : ''}
-ج) [الخيار الثالث بالعربية / Option C in English]${includeOptionRationales ? ' (التعليل: سبب صحة أو خطأ هذا الخيار)' : ''}
-د) [الخيار الرابع بالعربية / Option D in English]${includeOptionRationales ? ' (التعليل: سبب صحة أو خطأ هذا الخيار)' : ''}${
-        optionsCount === 5
-          ? `\nهـ) [الخيار الخامس بالعربية / Option E in English]${includeOptionRationales ? ' (التعليل: سبب صحة أو خطأ هذا الخيار)' : ''}`
-          : ''
-      }
+${biOptionLines}
 الإجابة: ب
 التعليل: [التعليل الطبي الشامل للسؤال باللغتين أو بالعربية مع المصطلحات الإنجليزية]
 `
@@ -2053,6 +2084,17 @@ ${mode === 'generate_new' ? `ابدأ الآن بتوليد الأسئلة لم�
     : `عدد مخصص ومحدد (الإجمالي: ${totalRequested} سؤال):
   ${effectiveMcq > 0 ? `* أسئلة اختيار من متعدد (MCQ - ${optionsCount} خيارات): ${effectiveMcq} سؤال\n  ` : ''}${effectiveTf > 0 ? `* أسئلة صواب وخطأ (صح وخطأ): ${effectiveTf} سؤال\n  ` : ''}${effectiveFillBlank > 0 ? `* أسئلة إكمال الفراغ: ${effectiveFillBlank} سؤال\n  ` : ''}${effectiveEssay > 0 ? `* أسئلة مقالية سريرية: ${effectiveEssay} سؤال` : ''}`.trim();
 
+  const arOptionLines = optionLettersAr
+    .map(
+      (arLtr, i) =>
+        `${arLtr}) [نص الخيار ${ALL_AR_ORDINALS[i] || i + 1}${i === 1 ? ' الصحيح' : ''}]${i === 1 ? ' *' : ''}${
+          includeOptionRationales
+            ? ` (التعليل: ${i === 1 ? 'صحيح لأن...' : 'سبب خطأ هذا الخيار طبياً'})`
+            : ''
+        }`
+    )
+    .join('\n');
+
   return `أنت بروفيسور في التعليم الطبي وخبير معتمد في إعداد بنوك الأسئلة والامتحانات الطبية لمنصة UMED.
 ${
   mode === 'generate_new'
@@ -2087,14 +2129,7 @@ ${
   includeMcqExample
     ? `
 1. [نص السؤال الطبي أو الحالة السريرية بوضوح]
-أ) [نص الخيار الأول]${includeOptionRationales ? ' (التعليل: سبب خطأ هذا الخيار طبياً)' : ''}
-ب) [نص الخيار الثاني الصحيح] *${includeOptionRationales ? ' (التعليل: صحيح لأن...)' : ''}
-ج) [نص الخيار الثالث]${includeOptionRationales ? ' (التعليل: سبب خطأ هذا الخيار طبياً)' : ''}
-د) [نص الخيار الرابع]${includeOptionRationales ? ' (التعليل: سبب خطأ هذا الخيار طبياً)' : ''}${
-        optionsCount === 5
-          ? `\nهـ) [نص الخيار الخامس]${includeOptionRationales ? ' (التعليل: سبب خطأ هذا الخيار طبياً)' : ''}`
-          : ''
-      }
+${arOptionLines}
 الإجابة: ب
 التعليل: [التعليل الطبي الشامل للسؤال في سطرين يوضح آلية الإجابة الصحيحة وأهم الفروقات التشخيصية]
 `

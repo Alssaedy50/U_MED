@@ -215,6 +215,8 @@ export interface CourseOffering {
   titleArabic: string;
   titleEnglish?: string;
   creditHours?: number;
+  instructorId?: string;
+  instructorNameArabic?: string;
   isActive: boolean;
 }
 

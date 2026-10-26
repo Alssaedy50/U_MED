@@ -197,7 +197,7 @@ export default function StudentDashboard({
       ]);
       setUniversities(univList);
       const effectiveEnrollment =
-        enr && enr.status === 'approved'
+        enr && (enr.status === 'approved' || enr.status === 'pending')
           ? enr
           : isAdminPreview
           ? buildAdminPreviewEnrollment()
@@ -207,7 +207,7 @@ export default function StudentDashboard({
         onEnrollmentStatusChange(effectiveEnrollment);
       }
 
-      if (effectiveEnrollment && effectiveEnrollment.status === 'approved') {
+      if (effectiveEnrollment && (effectiveEnrollment.status === 'approved' || effectiveEnrollment.status === 'pending')) {
         const [periods, instList, notifList] = await Promise.all([
           fetchStudyPeriods(effectiveEnrollment.currentStudyLevelId, effectiveEnrollment.universityId),
           fetchCourseInstructors({ universityId: effectiveEnrollment.universityId, studyLevelId: effectiveEnrollment.currentStudyLevelId }),
@@ -253,7 +253,7 @@ export default function StudentDashboard({
 
   // Subscribe in real-time to Batch Notifications, Course Instructors, and Academic Structure
   useEffect(() => {
-    if (!enrollment || enrollment.status !== 'approved') return;
+    if (!enrollment || (enrollment.status !== 'approved' && enrollment.status !== 'pending')) return;
 
     const unsubNotifs = subscribeToBatchNotifications(
       enrollment.universityId,
@@ -378,7 +378,7 @@ export default function StudentDashboard({
         <div className="p-4 bg-teal-950/30 border border-teal-800/50 rounded-2xl text-xs text-teal-300 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-amber-300 flex-shrink-0" />
-            <span>مرحباً بك د. {displayNameArabic}! يرجى إتمام تسجيل بيانات القيد الأكاديمي لمرة واحدة لتخصيص مقرراتك الدراسية حسب جامعتك ودفعتك.</span>
+            <span>مرحباً بك د. {displayNameArabic}! اختر جامعتك ودفعتك الدراسية لفتح محاضرات ومقررات واختبارات دفعتك فوراً.</span>
           </div>
         </div>
         <RegisterEnrollment
@@ -389,60 +389,6 @@ export default function StudentDashboard({
             loadStudentData();
           }}
         />
-      </div>
-    );
-  }
-
-  if (enrollment.status === 'pending') {
-    return (
-      <div className="max-w-xl mx-auto bg-slate-900/90 border border-slate-800 rounded-2xl p-6 sm:p-8 text-center space-y-4 shadow-2xl">
-        <div className="w-14 h-14 rounded-2xl bg-amber-500/10 text-amber-400 mx-auto flex items-center justify-center">
-          <Clock className="w-8 h-8" />
-        </div>
-        <div>
-          <span className="text-xs px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold inline-block mb-2">
-            طلب القيد قيد المراجعة والاعتماد
-          </span>
-          <h2 className="text-lg font-bold text-white">
-            مرحباً د. {displayNameArabic}
-          </h2>
-          <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-            تم استلام طلب قيدك الأكاديمي برقم <code className="text-teal-300 font-mono" dir="ltr">{enrollment.academicStudentNumber}</code> في {getUniversityName(enrollment.universityId)}، وسيتم تفعيل وصولك للمقررات والاختبارات الخاصة بدفعتك فور مراجعة واعتماد الطلب من قبل إدارة الجامعة.
-          </p>
-        </div>
-
-        <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 text-xs text-right space-y-2">
-          <div className="flex justify-between border-b border-slate-800 pb-1.5">
-            <span className="text-slate-400">الجامعة المستقلة:</span>
-            <span className="text-slate-200 font-semibold">{getUniversityName(enrollment.universityId)}</span>
-          </div>
-          <div className="flex justify-between border-b border-slate-800 pb-1.5">
-            <span className="text-slate-400">الدفعة / المستوى المطلوب:</span>
-            <span className="text-teal-300 font-semibold">
-              {enrollment.currentStudyLevelId === 'lvl-internship' ? 'سنة الامتياز (سريري)' : `المستوى ${enrollment.currentStudyLevelId.replace('lvl-', '')}`}
-            </span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-slate-400">تاريخ الإرسال:</span>
-            <span className="text-slate-400 font-mono">{new Date(enrollment.enrolledAt || enrollment.requestedAt || Date.now()).toLocaleDateString('ar-YE')}</span>
-          </div>
-        </div>
-
-        <div className="flex flex-col sm:flex-row gap-2.5">
-          <button
-            onClick={() => loadStudentData(true)}
-            className="flex-1 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center justify-center gap-2 transition-colors shadow-lg shadow-teal-600/20"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>تحديث حالة القيد الآن</span>
-          </button>
-          <button
-            onClick={() => setEnrollment(null)}
-            className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center justify-center gap-2 transition-colors border border-slate-700"
-          >
-            <span>تعديل بيانات طلب القيد</span>
-          </button>
-        </div>
       </div>
     );
   }
@@ -490,9 +436,15 @@ export default function StudentDashboard({
                 <h2 className="font-extrabold text-sm sm:text-base text-white">
                   د. {displayNameArabic}
                 </h2>
-                <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
-                  قيد معتمد ✓
-                </span>
+                {enrollment.status === 'approved' ? (
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
+                    عضو موثق بالدفعة ✓
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-bold">
+                    عضو بالدفعة (بانتظار توثيق المندوب)
+                  </span>
+                )}
                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
                   isInternship 
                     ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' 
@@ -772,12 +724,22 @@ export default function StudentDashboard({
                       </div>
 
                       {/* Assigned Theoretical & Practical Doctors for this Course */}
-                      {courseDoctors.length > 0 && (
+                      {(courseDoctors.length > 0 || course.instructorNameArabic) && (
                         <div className="p-2.5 rounded-lg bg-slate-900/90 border border-slate-800/90 space-y-1.5">
                           <div className="text-[10px] font-bold text-slate-400 flex items-center gap-1">
                             <UserCheck className="w-3 h-3 text-teal-400" />
-                            <span>دكاترة المادة المعتمدون:</span>
+                            <span>دكتور المادة / مدرسو المقرر:</span>
                           </div>
+                          {course.instructorNameArabic && !courseDoctors.some(d => `${d.academicTitle || 'د.'} ${d.instructorNameArabic}`.trim() === course.instructorNameArabic?.trim() || d.instructorNameArabic.trim() === course.instructorNameArabic?.trim()) && (
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="text-white font-semibold">
+                                {course.instructorNameArabic}
+                              </span>
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-teal-950 text-teal-300 border border-teal-800">
+                                مدرس المقرر
+                              </span>
+                            </div>
+                          )}
                           {courseDoctors.map(docItem => (
                             <div key={docItem.id} className="flex items-center justify-between text-[11px]">
                               <span className="text-white font-semibold">

@@ -138,6 +138,12 @@ export default function BulkQuestionImportModal({
   const [questionTypeMode, setQuestionTypeMode] = useState<BankQuestionTypeMode>(
     bank.questionTypeMode || 'hybrid'
   );
+
+  // Sync language and questionTypeMode dynamically whenever the active bank changes
+  useEffect(() => {
+    if (bank.language) setExamLanguage(bank.language);
+    if (bank.questionTypeMode) setQuestionTypeMode(bank.questionTypeMode);
+  }, [bank.id, bank.language, bank.questionTypeMode]);
   const [rawInput, setRawInput] = useState<string>('');
   const [sourceFormat, setSourceFormat] = useState<'auto' | 'text' | 'csv' | 'json'>('auto');
   const [defaultPoints, setDefaultPoints] = useState<number>(5);
@@ -201,7 +207,7 @@ export default function BulkQuestionImportModal({
   // Dynamic question count by default (unbounded unless user explicitly chooses custom count)
   const [isDynamicQuestionCount, setIsDynamicQuestionCount] = useState<boolean>(true);
   const [aiMcqCount, setAiMcqCount] = useState<number>(10);
-  const [aiOptionsCount, setAiOptionsCount] = useState<4 | 5>(4);
+  const [aiOptionsCount, setAiOptionsCount] = useState<number>(4);
   const [aiTfCount, setAiTfCount] = useState<number>(2);
   const [aiEssayCount, setAiEssayCount] = useState<number>(1);
   const [aiFillBlankCount, setAiFillBlankCount] = useState<number>(2);
@@ -217,8 +223,8 @@ export default function BulkQuestionImportModal({
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const ARABIC_LETTERS = ['أ', 'ب', 'ج', 'د', 'هـ', 'و', 'ز', 'ح'];
-  const ENGLISH_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+  const ARABIC_LETTERS = ['أ', 'ب', 'ج', 'د', 'هـ', 'و', 'ز', 'ح', 'ط', 'ي'];
+  const ENGLISH_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
 
   // Automatically infer study level & block if user types e.g. "بلوك دم سنة ثانية" in aiTopic or publishTitle
   useEffect(() => {
@@ -770,7 +776,7 @@ export default function BulkQuestionImportModal({
 
   const handleAddOption = (tempId: string) => {
     updateDraftItem(tempId, (d) => {
-      if (d.options.length >= 8) return d;
+      if (d.options.length >= 10) return d;
       const nextIdx = d.options.length;
       const optId = `opt-${String.fromCharCode(97 + nextIdx)}`;
       return {
@@ -1364,14 +1370,24 @@ export default function BulkQuestionImportModal({
                     <div className="p-2.5 rounded-xl bg-slate-950/80 border border-indigo-900/60">
                       <span className="text-[10px] text-slate-400 block">نظام عدد الأسئلة:</span>
                       <span className="font-bold text-teal-300 block mt-0.5">
-                        {isDynamicQuestionCount ? 'ديناميكي مفتوح (شامل للموضوع)' : `${aiMcqCount} MCQ / مخصص`}
+                        {isDynamicQuestionCount
+                          ? 'ديناميكي مفتوح (شامل للموضوع)'
+                          : questionTypeMode === 'mcq'
+                          ? `${aiMcqCount} سؤال اختيار من متعدد`
+                          : questionTypeMode === 'true_false'
+                          ? `${aiTfCount} سؤال صح وخطأ`
+                          : questionTypeMode === 'fill_blank'
+                          ? `${aiFillBlankCount} سؤال إكمال فراغ`
+                          : questionTypeMode === 'essay'
+                          ? `${aiEssayCount} سؤال مقالي`
+                          : `${aiMcqCount + aiTfCount + aiFillBlankCount + aiEssayCount} سؤال هجين مخصص`}
                       </span>
                     </div>
 
                     <div className="p-2.5 rounded-xl bg-slate-950/80 border border-indigo-900/60">
                       <span className="text-[10px] text-slate-400 block">العمق العلمي والخيارات:</span>
                       <span className="font-bold text-amber-300 block mt-0.5">
-                        {aiDifficultyMix === 'clinical_usmle' ? 'حالات USMLE سريرية' : 'متوازن'} · {aiOptionsCount} خيارات
+                        {aiDifficultyMix === 'clinical_usmle' ? 'حالات USMLE سريرية' : aiDifficultyMix === 'foundational' ? 'مفاهيم أساسية' : 'متوازن'} · {aiOptionsCount} خيارات لكل MCQ
                       </span>
                     </div>
                   </div>
@@ -2504,11 +2520,13 @@ export default function BulkQuestionImportModal({
             <div className="p-5 space-y-4 overflow-y-auto text-xs">
               {/* Question Count Calibration */}
               <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <div className="font-bold text-white text-xs">طريقة تحديد عدد الأسئلة</div>
                     <div className="text-[11px] text-slate-400">
-                      {isDynamicQuestionCount ? 'توليد تلقائي ديناميكي غير محدود حسب كثافة المحتوى الطبي' : 'تحديد يدوي دقيق لكل نمط'}
+                      {isDynamicQuestionCount
+                        ? 'توليد تلقائي ديناميكي غير محدود حسب كثافة المحتوى الطبي'
+                        : 'تحديد حر ومفتوح لعدد الأسئلة في كل نمط (حتى 500 سؤال)'}
                     </div>
                   </div>
                   <button
@@ -2520,86 +2538,152 @@ export default function BulkQuestionImportModal({
                         : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
                     }`}
                   >
-                    {isDynamicQuestionCount ? 'ديناميكي تلقائي' : 'تخصيص يدوي'}
+                    {isDynamicQuestionCount ? 'ديناميكي تلقائي ✓' : 'تخصيص عدد محدد'}
                   </button>
+                </div>
+
+                {/* Quick Presets for Question Count */}
+                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                  <span className="text-[10px] text-slate-400 ml-1">اختيار سريع للعدد:</span>
+                  <button
+                    type="button"
+                    onClick={() => setIsDynamicQuestionCount(true)}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${
+                      isDynamicQuestionCount
+                        ? 'bg-teal-600/25 border-teal-500 text-teal-300'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    شامل تلقائي
+                  </button>
+                  {[5, 10, 15, 20, 30, 50, 100].map((preset) => {
+                    const isPresetActive =
+                      !isDynamicQuestionCount &&
+                      ((questionTypeMode === 'true_false' && aiTfCount === preset) ||
+                        (questionTypeMode === 'fill_blank' && aiFillBlankCount === preset) ||
+                        (questionTypeMode === 'essay' && aiEssayCount === preset) ||
+                        ((questionTypeMode === 'mcq' || questionTypeMode === 'hybrid') && aiMcqCount === preset));
+                    return (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => {
+                          setIsDynamicQuestionCount(false);
+                          if (questionTypeMode === 'true_false') {
+                            setAiTfCount(preset);
+                          } else if (questionTypeMode === 'fill_blank') {
+                            setAiFillBlankCount(preset);
+                          } else if (questionTypeMode === 'essay') {
+                            setAiEssayCount(preset);
+                          } else {
+                            setAiMcqCount(preset);
+                          }
+                        }}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold border transition-all ${
+                          isPresetActive
+                            ? 'bg-indigo-600/30 border-indigo-500 text-indigo-200'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        {preset}
+                      </button>
+                    );
+                  })}
                 </div>
 
                 {!isDynamicQuestionCount && (
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-800/80">
                     <div>
-                      <label className="block text-slate-400 text-[10px] mb-1">MCQ (خيارات):</label>
+                      <label className="block text-slate-300 text-[10px] mb-1 font-semibold">MCQ (اختيارات):</label>
                       <input
                         type="number"
-                        min={1}
-                        max={150}
+                        min={0}
+                        max={500}
                         value={aiMcqCount}
-                        onChange={(e) => setAiMcqCount(Math.max(1, Number(e.target.value)))}
-                        className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-white text-center font-bold"
+                        onChange={(e) => setAiMcqCount(Math.min(500, Math.max(0, Number(e.target.value) || 0)))}
+                        className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-white text-center font-mono font-bold focus:outline-none focus:border-indigo-500"
                       />
                     </div>
                     <div>
-                      <label className="block text-slate-400 text-[10px] mb-1">صح / خطأ:</label>
+                      <label className="block text-slate-300 text-[10px] mb-1 font-semibold">صح / خطأ:</label>
                       <input
                         type="number"
                         min={0}
-                        max={100}
+                        max={500}
                         value={aiTfCount}
-                        onChange={(e) => setAiTfCount(Math.max(0, Number(e.target.value)))}
-                        className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-white text-center font-bold"
+                        onChange={(e) => setAiTfCount(Math.min(500, Math.max(0, Number(e.target.value) || 0)))}
+                        className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-white text-center font-mono font-bold focus:outline-none focus:border-indigo-500"
                       />
                     </div>
                     <div>
-                      <label className="block text-slate-400 text-[10px] mb-1">إكمال الفراغ:</label>
+                      <label className="block text-slate-300 text-[10px] mb-1 font-semibold">إكمال الفراغ:</label>
                       <input
                         type="number"
                         min={0}
-                        max={100}
+                        max={500}
                         value={aiFillBlankCount}
-                        onChange={(e) => setAiFillBlankCount(Math.max(0, Number(e.target.value)))}
-                        className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-white text-center font-bold"
+                        onChange={(e) => setAiFillBlankCount(Math.min(500, Math.max(0, Number(e.target.value) || 0)))}
+                        className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-white text-center font-mono font-bold focus:outline-none focus:border-indigo-500"
                       />
                     </div>
                     <div>
-                      <label className="block text-slate-400 text-[10px] mb-1">مقالي / سريري:</label>
+                      <label className="block text-slate-300 text-[10px] mb-1 font-semibold">مقالي / سريري:</label>
                       <input
                         type="number"
                         min={0}
-                        max={50}
+                        max={500}
                         value={aiEssayCount}
-                        onChange={(e) => setAiEssayCount(Math.max(0, Number(e.target.value)))}
-                        className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-white text-center font-bold"
+                        onChange={(e) => setAiEssayCount(Math.min(500, Math.max(0, Number(e.target.value) || 0)))}
+                        className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-white text-center font-mono font-bold focus:outline-none focus:border-indigo-500"
                       />
                     </div>
                   </div>
                 )}
               </div>
 
-              {/* Options Count */}
-              <div>
-                <label className="block text-slate-300 font-bold mb-1.5">عدد خيارات الأسئلة متعددة الخيارات:</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setAiOptionsCount(4)}
-                    className={`py-2 px-3 rounded-xl border text-center transition-all ${
-                      aiOptionsCount === 4
-                        ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300 font-bold'
-                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
-                    }`}
-                  >
-                    4 خيارات (A, B, C, D)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAiOptionsCount(5)}
-                    className={`py-2 px-3 rounded-xl border text-center transition-all ${
-                      aiOptionsCount === 5
-                        ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300 font-bold'
-                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
-                    }`}
-                  >
-                    5 خيارات (A, B, C, D, E)
-                  </button>
+              {/* Options Count (Dynamic 2 to 10 options) */}
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="block text-slate-200 font-bold">
+                    عدد خيارات سؤال الاختيار من متعدد (2 إلى 10 خيارات):
+                  </label>
+                  <span className="px-2 py-0.5 rounded-lg bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-mono text-[11px] font-bold">
+                    {aiOptionsCount} خيارات ({ENGLISH_LETTERS.slice(0, aiOptionsCount).join(', ')})
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {[2, 3, 4, 5, 6, 7, 8].map((optCnt) => (
+                    <button
+                      key={optCnt}
+                      type="button"
+                      onClick={() => setAiOptionsCount(optCnt)}
+                      className={`py-1.5 px-3 rounded-xl border text-center font-bold transition-all ${
+                        aiOptionsCount === optCnt
+                          ? 'bg-indigo-600/25 border-indigo-500 text-indigo-200 shadow-sm'
+                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-white'
+                      }`}
+                    >
+                      {optCnt} خيارات
+                    </button>
+                  ))}
+
+                  <div className="flex items-center gap-1.5 mr-auto">
+                    <span className="text-[11px] text-slate-400">عدد مخصص:</span>
+                    <input
+                      type="number"
+                      min={2}
+                      max={10}
+                      value={aiOptionsCount}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        if (!isNaN(val)) {
+                          setAiOptionsCount(Math.min(10, Math.max(2, Math.floor(val))));
+                        }
+                      }}
+                      className="w-16 px-2 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-white text-center font-mono font-bold focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
                 </div>
               </div>
 

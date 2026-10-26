@@ -275,17 +275,17 @@ export default function EnrollmentApprovalManager({
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span className="text-xs px-2.5 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30 font-semibold">
-              إدارة القبول والتسجيل الأكاديمي
+              توثيق انضمام طلاب الدفعة والعضوية الأكاديمية
             </span>
             <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-400 font-mono">
-              Enrollment & Change Requests
+              Batch Member Verification
             </span>
           </div>
           <h2 className="text-lg sm:text-xl font-bold text-white">
-            مراجعة واعتماد قيود الطلاب وطلبات التعديل الأكاديمي
+            توثيق انضمام زملاء الدفعة وطلبات تحديث المستوى
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
-            اعتماد وتعديل وحذف سجلات قيد الطلاب، ومراجعة طلبات ترقية المستوى الدراسي أو تصحيح الرقم الجامعي.
+            التأكد من أن الحسابات المنضمة للدفعة تخص طلاب الدفعة الفعليين وتوثيق عضويتهم أو تعديل مستواهم الدراسي.
           </p>
         </div>
 
@@ -300,7 +300,7 @@ export default function EnrollmentApprovalManager({
               }`}
             >
               <GraduationCap className="w-4 h-4 shrink-0" />
-              <span>سجلات القيد ({enrollments.length})</span>
+              <span>قائمة أعضاء الدفعة ({enrollments.length})</span>
             </button>
             <button
               onClick={() => setActiveView('change_requests')}
@@ -311,7 +311,7 @@ export default function EnrollmentApprovalManager({
               }`}
             >
               <FileEdit className="w-4 h-4 shrink-0" />
-              <span>طلبات التعديل الأكاديمي ({changeRequests.length})</span>
+              <span>طلبات تحديث المستوى ({changeRequests.length})</span>
               {pendingChangeRequestsCount > 0 && (
                 <span className="px-1.5 py-0.2 rounded-full bg-amber-400 text-slate-950 text-[10px] font-extrabold">
                   {pendingChangeRequestsCount}
@@ -325,7 +325,7 @@ export default function EnrollmentApprovalManager({
             className="py-2 px-3.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-lg shadow-teal-600/20"
           >
             <UserPlus className="w-3.5 h-3.5" />
-            <span>+ إضافة واعتماد طالب جديد</span>
+            <span>+ إضافة وتوثيق طالب بالدفعة</span>
           </button>
 
           <button
@@ -361,7 +361,7 @@ export default function EnrollmentApprovalManager({
                 }`}
               >
                 <Clock className="w-3.5 h-3.5" />
-                <span>بانتظار الاعتماد ({enrollments.filter(e => e.status === 'pending').length})</span>
+                <span>بانتظار توثيق الدفعة ({enrollments.filter(e => e.status === 'pending').length})</span>
               </button>
 
               <button
@@ -371,7 +371,7 @@ export default function EnrollmentApprovalManager({
                 }`}
               >
                 <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>المعتمدون ({enrollments.filter(e => e.status === 'approved').length})</span>
+                <span>أعضاء الدفعة الموثقون ({enrollments.filter(e => e.status === 'approved').length})</span>
               </button>
 
               <button
@@ -381,7 +381,7 @@ export default function EnrollmentApprovalManager({
                 }`}
               >
                 <XCircle className="w-3.5 h-3.5" />
-                <span>المرفوضون ({enrollments.filter(e => e.status === 'rejected').length})</span>
+                <span>خارج الدفعة / مرفوض ({enrollments.filter(e => e.status === 'rejected').length})</span>
               </button>
 
               <button
@@ -438,19 +438,19 @@ export default function EnrollmentApprovalManager({
                       {item.status === 'pending' && (
                         <span className="px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold flex items-center gap-1">
                           <Clock className="w-3.5 h-3.5" />
-                          <span>قيد المراجعة</span>
+                          <span>بانتظار توثيق المندوب</span>
                         </span>
                       )}
                       {item.status === 'approved' && (
                         <span className="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold flex items-center gap-1">
                           <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>معتمد رسمياً</span>
+                          <span>عضو موثق بالدفعة ✓</span>
                         </span>
                       )}
                       {item.status === 'rejected' && (
                         <span className="px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 font-bold flex items-center gap-1">
                           <XCircle className="w-3.5 h-3.5" />
-                          <span>مرفوض</span>
+                          <span>خارج الدفعة</span>
                         </span>
                       )}
 
@@ -553,7 +553,7 @@ export default function EnrollmentApprovalManager({
                             disabled={actionLoading === item.id}
                             className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-rose-950/40 hover:text-rose-300 text-slate-400 border border-slate-700 font-medium transition-colors"
                           >
-                            رفض الطلب
+                            رفض (خارج الدفعة)
                           </button>
                         )}
                         {item.status !== 'approved' && (
@@ -563,7 +563,7 @@ export default function EnrollmentApprovalManager({
                             className="px-4 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-bold transition-colors shadow-md shadow-teal-600/20 flex items-center gap-1.5"
                           >
                             <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>اعتماد القيد الأكاديمي</span>
+                            <span>تأكيد انتماء الطالب للدفعة ✓</span>
                           </button>
                         )}
                       </>

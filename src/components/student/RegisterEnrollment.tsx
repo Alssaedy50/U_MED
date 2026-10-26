@@ -222,15 +222,14 @@ export default function RegisterEnrollment({
       return;
     }
 
-    if (!academicNumber.trim()) {
-      setErrorMessage('يرجى إدخال الرقم الأكاديمي أو الجامعي للطالب');
+    if (academicNumber.trim() && academicNumberStatus.available === false) {
+      setErrorMessage(academicNumberStatus.message || 'الرقم التعريفي مسجل مسبقاً لطالب آخر');
       return;
     }
 
-    if (academicNumberStatus.available === false) {
-      setErrorMessage(academicNumberStatus.message || 'رقم القيد الأكاديمي مسجل مسبقاً لطالب آخر');
-      return;
-    }
+    const effectiveAcademicNumber =
+      academicNumber.trim() ||
+      `BATCH-${new Date().getFullYear()}-${uid.slice(0, 5).toUpperCase()}`;
 
     setSubmitting(true);
     try {
@@ -245,7 +244,7 @@ export default function RegisterEnrollment({
         programId: selectedProgramId,
         curriculumVersionId: 'cur-dar-2024',
         currentStudyLevelId: selectedLevelId,
-        academicStudentNumber: academicNumber,
+        academicStudentNumber: effectiveAcademicNumber,
         academicYear,
         policy
       });
@@ -280,10 +279,10 @@ export default function RegisterEnrollment({
         </div>
         <div>
           <h2 className="text-base sm:text-lg font-bold text-white">
-            تسجيل وتوثيق القيد الأكاديمي للطالب
+            الانضمام للدفعة الدراسية وتوثيق العضوية
           </h2>
           <p className="text-xs text-slate-400">
-            حدد بيانات جامعتك وكلية الطب البشري ومستواك الدراسي لبدء الوصول للمقررات
+            اختر جامعتك ومستواك الدراسي (دفعتك) للوصول الفوري إلى المحاضرات والاختبارات التدريبية الخاصة بدفعتك
           </p>
         </div>
       </div>
@@ -374,14 +373,14 @@ export default function RegisterEnrollment({
 
         {/* 5. Study Level Selection (Regular Levels 1..7 vs Internship) */}
         <div>
-          <label className="block text-slate-300 font-semibold mb-1">المستوى الدراسي المقيد به حالياً:</label>
+          <label className="block text-slate-300 font-semibold mb-1">الدفعة / المستوى الدراسي الحالي:</label>
           <select
             value={selectedLevelId}
             disabled={!selectedProgramId || studyLevels.length === 0}
             onChange={(e) => setSelectedLevelId(e.target.value)}
             className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-teal-500 disabled:opacity-50 font-medium"
           >
-            <option value="">-- اختر المستوى الدراسي --</option>
+            <option value="">-- اختر الدفعة / المستوى الدراسي --</option>
             {studyLevels.map((lvl) => (
               <option key={lvl.id} value={lvl.id}>
                 {lvl.stageType === 'internship' 
@@ -395,13 +394,12 @@ export default function RegisterEnrollment({
         {/* 6. Academic Number & Year */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
-            <label className="block text-slate-300 font-semibold mb-1">الرقم الجامعي / رقم القيد الأكاديمي (فريد لكل طالب):</label>
+            <label className="block text-slate-300 font-semibold mb-1">الرقم التعريفي للطالب / رقم الكشف بالدفعة (اختياري):</label>
             <input
               type="text"
-              required
               value={academicNumber}
               onChange={(e) => setAcademicNumber(e.target.value)}
-              placeholder="مثال: MED-2023-0182"
+              placeholder="اختياري — يُولّد تلقائياً عند تركه فارغاً"
               className={`w-full px-3 py-2.5 rounded-xl bg-slate-950 border text-white placeholder-slate-600 focus:outline-none font-mono text-left ${
                 academicNumberStatus.available === false
                   ? 'border-rose-500 focus:border-rose-400'
@@ -412,7 +410,7 @@ export default function RegisterEnrollment({
               dir="ltr"
             />
             {academicNumberStatus.checking && (
-              <p className="text-[10px] text-slate-400 mt-1">جارٍ التحقق من عدم تكرار رقم القيد...</p>
+              <p className="text-[10px] text-slate-400 mt-1">جارٍ التحقق من الرقم المدخل...</p>
             )}
             {!academicNumberStatus.checking && academicNumberStatus.message && (
               <p
@@ -438,36 +436,27 @@ export default function RegisterEnrollment({
           </div>
         </div>
 
-        {/* Policy Notice Box */}
+        {/* Batch Access & Verification Notice Box */}
         {selectedUniversity && (
           <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-xs">
-            <span className="text-slate-400 font-semibold block mb-1">سياسة القبول المعتمدة في {selectedUniversity.nameArabic}:</span>
-            {selectedUniversity.enrollmentPolicy === 'approval_required' ? (
-              <div className="flex items-center gap-2 text-amber-300">
-                <Clock className="w-4 h-4 flex-shrink-0" />
-                <span>
-                  <strong>تتطلب اعتماد المشرف:</strong> سيتم تسجيل طلبك بحالة (معلق / Pending) وتفعيل صلاحيات المواد والاختبارات بعد مراجعة إدارة الكلية.
-                </span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 text-emerald-300">
-                <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
-                <span>
-                  <strong>تسجيل فوري مباشر:</strong> سيتم تفعيل حسابك الأكاديمي فوراً للوصول إلى مقررات المستوى.
-                </span>
-              </div>
-            )}
+            <span className="text-slate-400 font-semibold block mb-1">آلية الانضمام للدفعة في {selectedUniversity.nameArabic}:</span>
+            <div className="flex items-center gap-2 text-emerald-300">
+              <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+              <span>
+                <strong>وصول فوري للمحاضرات والاختبارات التدريبية:</strong> ستُفتح لك محاضرات الدفعة، المكتبة الطبية، والاختبارات التدريبية فور تأكيد انضمامك، بينما يظهر طلبك لمندوب الدفعة لتوثيق عضويتك في قائمة طلاب الدفعة.
+              </span>
+            </div>
           </div>
         )}
 
         {/* Submit Action Button */}
         <button
           type="submit"
-          disabled={submitting || !selectedUniversityId || academicNumberStatus.available === false}
+          disabled={submitting || !selectedUniversityId || (Boolean(academicNumber.trim()) && academicNumberStatus.available === false)}
           className="w-full py-3 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-400 hover:to-emerald-500 text-white font-bold text-xs transition-all shadow-lg shadow-teal-500/20 flex items-center justify-center gap-2 disabled:opacity-50"
         >
           <UserCheck className="w-4 h-4" />
-          <span>{submitting ? 'جارٍ إرسال طلب القيد...' : 'تأكيد التسجيل ورفع طلب القيد الأكاديمي'}</span>
+          <span>{submitting ? 'جارٍ تأكيد الانضمام للدفعة...' : 'تأكيد الانضمام للدفعة وفتح المقررات فوراً'}</span>
         </button>
 
       </form>
