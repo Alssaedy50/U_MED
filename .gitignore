@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Ignore generated AI Studio temporary media
+.aistudio/**/.tempmediaStorage/
