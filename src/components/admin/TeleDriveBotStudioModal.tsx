@@ -252,6 +252,51 @@ export default function TeleDriveBotStudioModal({
   >([]);
   const [liveActionBusy, setLiveActionBusy] = useState<boolean>(false);
   const [liveTestBanner, setLiveTestBanner] = useState<string | null>(null);
+  const [channelPullInput, setChannelPullInput] = useState<string>('');
+  const [channelPullBusy, setChannelPullBusy] = useState<boolean>(false);
+
+  const handlePullFromChannel = async () => {
+    const target = channelPullInput.trim();
+    if (!target) {
+      setLiveTestBanner('⚠️ يرجى إدخال معرّف القناة (@channel) أو رابط القناة (https://t.me/...) أولاً.');
+      return;
+    }
+    setChannelPullBusy(true);
+    setLiveTestBanner(null);
+    try {
+      const res = await fetch('/api/teledrive/pull-channel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          channelInput: target,
+          maxPosts: 5,
+          gdriveFolderId: config.defaultFolderId,
+          defaultUniversityId: config.defaultUniversityId,
+          botToken: config.botToken,
+          adminTelegramId: config.adminTelegramId
+        })
+      });
+      const data = await res.json();
+      if (Array.isArray(data.logs)) setLiveLogs(data.logs);
+      if (Array.isArray(data.resources) && data.resources.length > 0) {
+        for (const r of data.resources) {
+          await saveEducationalResource(r);
+        }
+        onDraftSimulated?.();
+      }
+      if (data.success) {
+        setLiveTestBanner(
+          `✅ تم سحب (${data.ingestedCount || data.resources?.length || 1}) منشور/ملف من قناة (${data.channelUsername || target}) ورفعها إلى Google Drive وبثها مباشرة في منصة U_MED!`
+        );
+      } else {
+        setLiveTestBanner(`⚠️ تعذر السحب من القناة: ${data.error || 'تأكد أن القناة عامة أو أن البوت مشرف فيها'}`);
+      }
+    } catch (err: any) {
+      setLiveTestBanner(`⚠️ خطأ في سحب القناة: ${err?.message || ''}`);
+    } finally {
+      setChannelPullBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (!isOpen) return;
@@ -268,7 +313,8 @@ export default function TeleDriveBotStudioModal({
               targetGroupId: config.targetGroupId,
               adminTelegramId: config.adminTelegramId,
               gdriveFolderId: config.defaultFolderId,
-              defaultUniversityId: config.defaultUniversityId
+              defaultUniversityId: config.defaultUniversityId,
+              autoPublish: true
             })
           });
           if (startRes.ok && !cancelled) {
@@ -317,7 +363,8 @@ export default function TeleDriveBotStudioModal({
           adminTelegramId: config.adminTelegramId,
           gdriveFolderId: config.defaultFolderId,
           defaultUniversityId: config.defaultUniversityId,
-          serviceAccountJson: rawServiceJson
+          serviceAccountJson: rawServiceJson,
+          autoPublish: true
         })
       });
       const data = await res.json();
@@ -328,7 +375,7 @@ export default function TeleDriveBotStudioModal({
       if (Array.isArray(data.logs)) setLiveLogs(data.logs);
       setLiveTestBanner(
         data.success
-          ? `✅ تم تشغيل البوت الحي (@${data.botIdentity?.username || 'UMED_Bot'}) بنجاح!`
+          ? `✅ تم تشغيل البوت الحي (@${data.botIdentity?.username || 'UMED_Bot'}) بنجاح! يستقبل الآن من القنوات والقروبات والخاص بأي صيغة ويرفع لـ Drive ويبث في U_MED فوراً.`
           : `⚠️ تنبيه تليجرام: التوكن غير مفعل أو غير صحيح (${data.error || 'Unauthorized'}). تأكد من لصق توكن البوت الصحيح من @BotFather في الحقل الأول بالأسفل.`
       );
     } catch (err: any) {
@@ -351,7 +398,8 @@ export default function TeleDriveBotStudioModal({
           targetGroupId: config.targetGroupId,
           adminTelegramId: config.adminTelegramId,
           gdriveFolderId: config.defaultFolderId,
-          defaultUniversityId: config.defaultUniversityId
+          defaultUniversityId: config.defaultUniversityId,
+          autoPublish: true
         })
       });
       const data = await res.json();
@@ -361,7 +409,7 @@ export default function TeleDriveBotStudioModal({
         setLiveWebhookActive(true);
         if (data.botIdentity) setLiveBotIdentity(data.botIdentity);
         setLiveTestBanner(
-          `✅ تم ربط Webhook تليجرام بنجاح على (${data.webhookUrl})! سيعمل البوت الآن على Vercel على مدار 24 ساعة بدون توقف نهائياً!`
+          `✅ تم ربط Webhook تليجرام بنجاح على (${data.webhookUrl})! سيعمل البوت الآن على Vercel على مدار 24 ساعة لاستقبال جميع القنوات والرسائل بأي صيغة ورفعها لـ Drive وبثها في U_MED!`
         );
       } else {
         setLiveTestBanner(
@@ -405,7 +453,7 @@ export default function TeleDriveBotStudioModal({
         const tgPart = data.telegramSent
           ? '📲 وصل إشعار وأزرار النشر إلى حسابك في تليجرام الآن!'
           : `⚠️ تم بث الملف في المنصة بنجاح (ملاحظة تليجرام: تحقق من صحة BOT_TOKEN في الحقل الأول بالأسفل ليصلك إشعار تليجرام)`;
-        setLiveTestBanner(`${drivePart} | ✅ تم البث في منصة U_MED | ${tgPart}`);
+        setLiveTestBanner(`${drivePart} | ✅ تم البث الفوري في منصة U_MED | ${tgPart}`);
       } else {
         setLiveTestBanner(`⚠️ خطأ في الاختبار: ${data.error || ''}`);
       }
@@ -838,6 +886,46 @@ export default function TeleDriveBotStudioModal({
                   </button>
                 </div>
 
+                {/* DIRECT TELEGRAM CHANNEL PULL + UNIVERSAL FORMAT AUTO-INGESTION */}
+                <div className="p-3 rounded-xl bg-[var(--bg-card)]/90 border border-teal-500/40 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-1.5">
+                    <div className="flex items-center gap-1.5 font-black text-[11px] text-emerald-400">
+                      <Download className="w-3.5 h-3.5 shrink-0" />
+                      <span>📡 السحب المباشر من قناة تليجرام + الاستقبال الشامل بأي صيغة:</span>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold">
+                      مفعّل لجميع الصيغ (PDF • فيديو • صوت • صور • Word/PPT/ZIP • نصوص وروابط)
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
+                    • <strong>تلقائياً 24/7:</strong> أي منشور في قناة تليجرام (البوت مشرف فيها) أو أي رسالة/ملف يُرسل أو يُحوّل (Forward) للبوت بأي صيغة يُرفع تلقائياً إلى <strong>Google Drive</strong> ويُبث فوراً في منصة <strong>U_MED</strong>.<br />
+                    • <strong>سحب فوري من أي قناة عامة:</strong> أدخل معرّف القناة (مثل <code dir="ltr">@channel</code> أو رابط <code dir="ltr">https://t.me/...</code>) لسحب أحدث منشوراتها وملفاتها الآن:
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="text"
+                      dir="ltr"
+                      value={channelPullInput}
+                      onChange={(e) => setChannelPullInput(e.target.value)}
+                      placeholder="@channel_username أو https://t.me/channel_name"
+                      className="flex-1 px-3 py-1.5 rounded-lg bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono text-xs"
+                    />
+                    <button
+                      type="button"
+                      disabled={channelPullBusy || liveActionBusy}
+                      onClick={handlePullFromChannel}
+                      className="py-2 px-3.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5 shrink-0" />
+                      <span>
+                        {channelPullBusy
+                          ? 'جارٍ السحب والرفع...'
+                          : '📥 سحب من القناة ورفعه لـ Drive وبثه في U_MED'}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+
                 {/* VERCEL 24/7 WEBHOOK ACTIVATION BOX */}
                 <div className="p-3 rounded-xl bg-[var(--bg-card)]/90 border border-[var(--border-color)] space-y-2">
                   <div className="flex items-center gap-1.5 font-bold text-[11px] text-teal-400">
@@ -845,7 +933,7 @@ export default function TeleDriveBotStudioModal({
                     <span>تفعيل العمل المستمر 24/7 على نسخة Vercel (بدون توقف نهائياً):</span>
                   </div>
                   <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
-                    نعم! جميع ميزات البوت تعمل على نسختك في <strong>Vercel</strong> على مدار 24 ساعة مجاناً عبر نظام <strong>Telegram Webhook</strong> (حيث توقظ خوادم تليجرام رابط موقعك على Vercel تلقائياً فور إرسال أي ملف في القروب).
+                    نعم! جميع ميزات البوت تعمل على نسختك في <strong>Vercel</strong> على مدار 24 ساعة مجاناً عبر نظام <strong>Telegram Webhook</strong> (حيث توقظ خوادم تليجرام رابط موقعك على Vercel تلقائياً فور نشر أي رسالة في القناة أو إرسالها للبوت).
                   </p>
                   <div className="flex flex-col sm:flex-row gap-2">
                     <input

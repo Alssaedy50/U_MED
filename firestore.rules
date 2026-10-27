@@ -256,7 +256,7 @@ service cloud.firestore {
     // -------------------------------------------------------------------------
 
     function isAutomatedTelegramDraftCreate() {
-      return request.resource.data.status == 'draft' &&
+      return (request.resource.data.status == 'draft' || request.resource.data.status == 'published') &&
              request.resource.data.createdBy == 'AUTOMATED_TELEGRAM_INGESTION' &&
              request.resource.data.storageProvider == 'external_url' &&
              request.resource.data.title is string &&

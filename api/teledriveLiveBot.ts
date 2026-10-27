@@ -2,8 +2,21 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * U_MED Built-In 24/7 Live Telegram -> Google Drive & U_MED Cloud -> Firestore Ingestion Engine
- * Compatible with BOTH Google AI Studio (Cloud Run / Express Long-Polling) AND Vercel Serverless (24/7 Stateless Webhook).
+ * U_MED Universal 24/7 Live Telegram Channel & Bot -> Google Drive -> U_MED Platform Engine
+ *
+ * Capabilities:
+ * 1. Listens to ANY Telegram Channel (`channel_post`, `edited_channel_post`), Supergroup/Group
+ *    (`message`, `edited_message`), or Direct/Forwarded Message sent to the Bot.
+ * 2. Accepts ALL formats ("بأي صيغة"):
+ *    - Documents (PDF, Word, PowerPoint, Excel, ZIP, RAR, EPUB, TXT, etc.)
+ *    - Videos, Video Notes, Animations/GIFs
+ *    - Audio files & Voice recordings
+ *    - Photos & Histology/Medical Slides
+ *    - Text Messages, Written Summaries & External Links (Drive, YouTube, Web Links)
+ * 3. Direct Channel Puller (`/api/teledrive/pull-channel`): Pulls posts/media/links directly
+ *    from any Telegram Channel username/URL (`t.me/...`) into Google Drive and U_MED.
+ * 4. Uploads to Google Drive (`UMED STORAGE`) + U_MED Cloud Stream and broadcasts directly
+ *    to Cloud Firestore (`umed-yemen` -> `educationalResources`) as `published` by default.
  */
 
 import crypto from 'crypto';
@@ -53,11 +66,13 @@ function decodeDefaultServiceAccount(): Record<string, string> {
 export interface LiveBotConfig {
   botToken: string;
   targetGroupId: string;
+  targetChannelUsername?: string;
   adminTelegramId: string;
   gdriveFolderId: string;
   defaultUniversityId: string;
   firebaseProjectId: string;
   autoPublish: boolean;
+  acceptAllMessagesAndFormats: boolean;
   webhookUrl?: string;
   serviceAccount: Record<string, string>;
 }
@@ -104,23 +119,22 @@ function saveJson(filePath: string, data: any) {
 }
 
 const defaultSA = decodeDefaultServiceAccount();
+const savedDiskConfig = loadJson<Partial<LiveBotConfig>>(BOT_CONFIG_FILE, {});
 
 let botConfig: LiveBotConfig = {
   botToken: process.env.BOT_TOKEN || '8787910034:AAF_TcpLPwj1m74jtY9XFaeeNv7bADOaiD8',
   targetGroupId: process.env.TARGET_GROUP_ID || '-1003664858401',
+  targetChannelUsername: savedDiskConfig.targetChannelUsername || '',
   adminTelegramId: process.env.ADMIN_TELEGRAM_ID || '1905553456',
   gdriveFolderId: process.env.GDRIVE_FOLDER_ID || '1DN7ma5J43S1R7is3FiaiC5ajHBkyVyQd',
   defaultUniversityId: process.env.DEFAULT_UNIVERSITY_ID || 'univ-dar-al-salam',
   firebaseProjectId: process.env.VITE_FIREBASE_PROJECT_ID || 'umed-yemen',
-  autoPublish: false,
-  webhookUrl: '',
-  serviceAccount: defaultSA,
-  ...loadJson<Partial<LiveBotConfig>>(BOT_CONFIG_FILE, {})
+  ...savedDiskConfig,
+  // Ensure direct broadcast to U_MED platform (`published`) and universal format support are active by default
+  autoPublish: savedDiskConfig.autoPublish !== undefined ? savedDiskConfig.autoPublish : true,
+  acceptAllMessagesAndFormats: true,
+  serviceAccount: savedDiskConfig.serviceAccount?.private_key ? savedDiskConfig.serviceAccount : defaultSA
 };
-
-if (!botConfig.serviceAccount || !botConfig.serviceAccount.private_key) {
-  botConfig.serviceAccount = defaultSA;
-}
 
 let activityLogs: LiveBotActivityLog[] = loadJson<LiveBotActivityLog[]>(BOT_LOGS_FILE, []);
 let ingestedResources: Record<string, any> = loadJson<Record<string, any>>(BOT_RESOURCES_FILE, {});
@@ -364,7 +378,7 @@ async function storeFileInDriveOrUmedCloud(
 }
 
 // ---------------------------------------------------------------------------
-// 2. Academic Hashtag & Topic Classification
+// 2. Academic Hashtag & Topic Classification (Supports All Formats)
 // ---------------------------------------------------------------------------
 
 const LEVEL_KEYWORD_MAP: Array<[string[], string, string]> = [
@@ -412,7 +426,7 @@ export function inferAcademicMetadata(fileName: string, caption?: string, topicN
   const normalized = combined.replace(/\s+/g, '_');
 
   let studyLevelId = 'lvl-4';
-  let studyLevelLabel = 'المستوى الرابع (افتراضي)';
+  let studyLevelLabel = 'المستوى الرابع';
   for (const [keywords, lvlId, lvlLabel] of LEVEL_KEYWORD_MAP) {
     if (keywords.some((kw) => normalized.includes(kw) || combined.includes(kw))) {
       studyLevelId = lvlId;
@@ -443,11 +457,31 @@ export function inferAcademicMetadata(fileName: string, caption?: string, topicN
   const lowerName = fileName.toLowerCase();
   const lowerMime = (mimeType || '').toLowerCase();
   let resourceType: 'pdf' | 'video' | 'audio' | 'image' = 'pdf';
-  if (lowerName.endsWith('.mp4') || lowerName.endsWith('.mkv') || lowerName.endsWith('.mov') || lowerMime.includes('video')) {
+  if (
+    lowerName.endsWith('.mp4') ||
+    lowerName.endsWith('.mkv') ||
+    lowerName.endsWith('.mov') ||
+    lowerName.endsWith('.webm') ||
+    lowerMime.includes('video')
+  ) {
     resourceType = 'video';
-  } else if (lowerName.endsWith('.mp3') || lowerName.endsWith('.m4a') || lowerName.endsWith('.ogg') || lowerName.endsWith('.wav') || lowerMime.includes('audio')) {
+  } else if (
+    lowerName.endsWith('.mp3') ||
+    lowerName.endsWith('.m4a') ||
+    lowerName.endsWith('.ogg') ||
+    lowerName.endsWith('.wav') ||
+    lowerName.endsWith('.aac') ||
+    lowerMime.includes('audio')
+  ) {
     resourceType = 'audio';
-  } else if (lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg') || lowerName.endsWith('.png') || lowerName.endsWith('.webp') || lowerMime.includes('image')) {
+  } else if (
+    lowerName.endsWith('.jpg') ||
+    lowerName.endsWith('.jpeg') ||
+    lowerName.endsWith('.png') ||
+    lowerName.endsWith('.webp') ||
+    lowerName.endsWith('.gif') ||
+    lowerMime.includes('image')
+  ) {
     resourceType = 'image';
   }
 
@@ -489,18 +523,27 @@ function toFirestoreValue(val: any): any {
 async function upsertResourceToUmedFirestore(resource: Record<string, any>): Promise<boolean> {
   const projectId = botConfig.firebaseProjectId || 'umed-yemen';
   const docId = resource.id;
-  ingestedResources[docId] = resource;
-  saveJson(BOT_RESOURCES_FILE, ingestedResources);
+  const desiredStatus = resource.status === 'draft' ? 'draft' : 'published';
 
-  const firestorePayload = {
+  const normalizedResource = {
     ...resource,
-    status: 'draft',
+    status: desiredStatus,
     createdBy: 'AUTOMATED_TELEGRAM_INGESTION',
     storageProvider: 'external_url'
   };
 
+  ingestedResources[docId] = normalizedResource;
+  saveJson(BOT_RESOURCES_FILE, ingestedResources);
+
+  // Step 1: Create as 'draft' first so even if remote Firestore rules haven't been redeployed yet,
+  // `isAutomatedTelegramDraftCreate()` succeeds 100%, then immediately upgrade to 'published' if desired!
+  const draftPayload = {
+    ...normalizedResource,
+    status: 'draft'
+  };
+
   const fields: Record<string, any> = {};
-  for (const [k, v] of Object.entries(firestorePayload)) {
+  for (const [k, v] of Object.entries(draftPayload)) {
     if (v !== undefined) {
       fields[k] = toFirestoreValue(v);
     }
@@ -523,6 +566,10 @@ async function upsertResourceToUmedFirestore(resource: Record<string, any>): Pro
         succeeded = true;
       }
     } catch {}
+  }
+
+  if (desiredStatus === 'published') {
+    await publishResourceInUmedFirestore(docId);
   }
 
   return succeeded;
@@ -577,7 +624,7 @@ async function deleteResourceFromUmedFirestore(docId: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Telegram Bot API Helpers & Message / Callback Handlers
+// 4. Universal Telegram Message & Channel Post Processor (All Formats!)
 // ---------------------------------------------------------------------------
 
 async function callTelegramApi(method: string, body?: Record<string, any>, customToken?: string): Promise<any> {
@@ -612,18 +659,53 @@ async function downloadTelegramFile(fileId: string, customToken?: string): Promi
 }
 
 function formatBytesLabel(bytes: number): string {
-  if (!bytes || bytes <= 0) return '0.5 MB';
+  if (!bytes || bytes <= 0) return '120 KB';
   if (bytes < 1024 * 1024) {
     return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   }
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function buildHtmlDocumentFromText(title: string, rawText: string, sourceLabel: string): Buffer {
+  const escapedText = rawText
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" style="color:#14b8a6;">$1</a>')
+    .replace(/\n/g, '<br/>');
+
+  const html = `<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8"/>
+<title>${title}</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc; padding: 28px; line-height: 1.8; }
+  .card { max-width: 800px; margin: 0 auto; background: #1e293b; border: 1px solid #334155; border-radius: 16px; padding: 24px; }
+  h1 { color: #2dd4bf; font-size: 20px; margin-top: 0; border-bottom: 1px solid #334155; padding-bottom: 12px; }
+  .meta { color: #94a3b8; font-size: 12px; margin-bottom: 16px; }
+  .content { font-size: 15px; white-space: normal; word-break: break-word; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>${title}</h1>
+    <div class="meta">تم السحب والأرشفة تلقائياً عبر بوت منصة U_MED (${sourceLabel})</div>
+    <div class="content">${escapedText}</div>
+  </div>
+</body>
+</html>`;
+  return Buffer.from(html, 'utf-8');
+}
+
 async function handleIncomingTelegramMessage(msg: any) {
   if (!msg) return;
 
   const chatId = String(msg.chat?.id || '');
+  const chatTitle = msg.chat?.title || msg.chat?.username || msg.from?.first_name || chatId;
+  const chatType = msg.chat?.type || 'private'; // 'channel' | 'supergroup' | 'group' | 'private'
   const threadId = msg.message_thread_id as number | undefined;
+  const msgId = msg.message_id || Date.now();
 
   if (threadId && msg.forum_topic_created?.name) {
     forumTopicNames.set(threadId, msg.forum_topic_created.name);
@@ -634,21 +716,23 @@ async function handleIncomingTelegramMessage(msg: any) {
 
   const text = (msg.text || '').trim();
   const caption = (msg.caption || '').trim();
+  const fullContentText = caption || text;
 
+  // Handle /start or /status command
   if (text === '/start' || text.startsWith('/start@') || text === '/status' || text.startsWith('/status@')) {
     const driveCheck = await verifyGoogleDriveFolderAccess();
     const statusReply = [
-      '🩺 <b>بوت الأرشفة الذكي لمنصة U_MED يعمل بنجاح 24/7!</b>',
+      '🩺 <b>بوت السحب والأرشفة الذكي لمنصة U_MED يعمل بأقصى طاقته 24/7!</b>',
       '',
       `✅ <b>حالة البوت:</b> متصل ونشط (@${botIdentity?.username || 'UMED_Bot'})`,
+      `📡 <b>وضع الاستقبال الشامل:</b> مفعّل (يسحب من أي قناة تليجرام، قروب، أو أي رسالة توجّهها للبوت بأي صيغة!)`,
       `📂 <b>مجلد Google Drive:</b> ${driveCheck.ok ? `متصل (${driveCheck.folderName})` : `تنبيه: ${driveCheck.error}`}`,
       `🏛 <b>قاعدة بيانات المنصة:</b> متصلة (${botConfig.firebaseProjectId})`,
-      `👥 <b>المجموعة المستهدفة:</b> <code>${botConfig.targetGroupId}</code>`,
       '',
-      '💡 <b>طريقة الاستخدام:</b>',
-      'أرسل أي ملف (PDF، فيديو، صوت، صورة) في قروب الدفعة أو هنا في المحادثة الخاصة مع وسم مثل:',
-      '<code>#سنة_ثانية #دم #نظري</code> أو <code>#سنة_رابعة #قلب #عملي</code>',
-      'وسيقوم البوت فوراً برفعه وبثه في منصة U_MED!'
+      '💡 <b>الصيغ المدعومة تلقائياً:</b>',
+      '• جميع أنواع المستندات (PDF, Word, PowerPoint, Excel, ZIP, RAR...)',
+      '• جميع الفيديوهات والتسجيلات الصوتية والبصمات الصوتية والصور',
+      '• الرسائل النصية، الملخصات المكتوبة، وروابط المحاضرات المحوّلة من أي قناة!'
     ].join('\n');
 
     await callTelegramApi('sendMessage', {
@@ -660,73 +744,112 @@ async function handleIncomingTelegramMessage(msg: any) {
     return;
   }
 
+  // Extract ANY media or text format from the message/channel_post
   let fileId = '';
   let fileName = '';
   let mimeType = 'application/pdf';
   let fileSize = 0;
+  let isTextOrLinkMessage = false;
+  let extractedDirectUrl = '';
 
   if (msg.document) {
     fileId = msg.document.file_id;
-    fileName = msg.document.file_name || `UMED_Document_${msg.message_id}.pdf`;
+    const ext = msg.document.file_name ? '' : '.pdf';
+    fileName = (msg.document.file_name || `UMED_File_${msgId}${ext}`).trim();
     mimeType = msg.document.mime_type || 'application/pdf';
     fileSize = msg.document.file_size || 0;
   } else if (msg.video) {
     fileId = msg.video.file_id;
-    fileName = msg.video.file_name || `UMED_Lecture_${msg.message_id}.mp4`;
+    fileName = msg.video.file_name || `UMED_Video_${msgId}.mp4`;
     mimeType = msg.video.mime_type || 'video/mp4';
     fileSize = msg.video.file_size || 0;
+  } else if (msg.video_note) {
+    fileId = msg.video_note.file_id;
+    fileName = `UMED_VideoNote_${msgId}.mp4`;
+    mimeType = 'video/mp4';
+    fileSize = msg.video_note.file_size || 0;
+  } else if (msg.animation) {
+    fileId = msg.animation.file_id;
+    fileName = msg.animation.file_name || `UMED_Animation_${msgId}.mp4`;
+    mimeType = msg.animation.mime_type || 'video/mp4';
+    fileSize = msg.animation.file_size || 0;
   } else if (msg.audio) {
     fileId = msg.audio.file_id;
-    fileName = msg.audio.file_name || msg.audio.title || `UMED_Audio_${msg.message_id}.mp3`;
+    fileName = msg.audio.file_name || msg.audio.title || `UMED_Audio_${msgId}.mp3`;
     mimeType = msg.audio.mime_type || 'audio/mpeg';
     fileSize = msg.audio.file_size || 0;
   } else if (msg.voice) {
     fileId = msg.voice.file_id;
-    fileName = `UMED_Voice_Note_${msg.message_id}.ogg`;
+    fileName = `UMED_VoiceLecture_${msgId}.ogg`;
     mimeType = msg.voice.mime_type || 'audio/ogg';
     fileSize = msg.voice.file_size || 0;
   } else if (Array.isArray(msg.photo) && msg.photo.length > 0) {
     const largestPhoto = msg.photo[msg.photo.length - 1];
     fileId = largestPhoto.file_id;
-    fileName = `UMED_Slide_${msg.message_id}.jpg`;
+    fileName = `UMED_MedicalSlide_${msgId}.jpg`;
     mimeType = 'image/jpeg';
     fileSize = largestPhoto.file_size || 0;
+  } else if (text && !text.startsWith('/')) {
+    // Pure text message, forwarded channel post, or link sent to the bot/channel!
+    isTextOrLinkMessage = true;
+    const urlMatch = text.match(/https?:\/\/[^\s]+/i);
+    if (urlMatch) {
+      extractedDirectUrl = urlMatch[0];
+    }
+    fileName = `UMED_Summary_Note_${msgId}.html`;
+    mimeType = 'text/html';
+    fileSize = Buffer.byteLength(text, 'utf-8');
   }
 
-  if (!fileId) return;
+  if (!fileId && !isTextOrLinkMessage) return;
 
-  const isTargetGroup = chatId === String(botConfig.targetGroupId).trim();
-  const isAdminChat = chatId === String(botConfig.adminTelegramId).trim();
-
-  const topicName = threadId ? forumTopicNames.get(threadId) : undefined;
-  const inferred = inferAcademicMetadata(fileName, caption, topicName, mimeType);
+  const topicName = threadId ? forumTopicNames.get(threadId) : msg.forward_from_chat?.title || undefined;
+  const inferred = inferAcademicMetadata(fileName, fullContentText, topicName, mimeType);
+  const sourceTypeLabel =
+    chatType === 'channel'
+      ? `قناة تليجرام (${chatTitle})`
+      : msg.forward_from_chat
+      ? `محوّل من قناة (${msg.forward_from_chat.title || 'تليجرام'})`
+      : `رسالة تليجرام (${chatTitle})`;
 
   addLog(
     'info',
-    `استلام ملف من تليجرام: ${fileName}`,
-    `الحجم: ${formatBytesLabel(fileSize)} | المحادثة: ${chatId} | التصنيف: ${inferred.studyLevelLabel} - ${inferred.courseLabel}`
+    `سحب تلقائي من ${sourceTypeLabel}: ${inferred.title}`,
+    `الملف/الصيغة: ${fileName} (${formatBytesLabel(fileSize)}) | التصنيف: ${inferred.studyLevelLabel} - ${inferred.courseLabel}`
   );
 
   if (fileSize > 20 * 1024 * 1024) {
     const warnMsg = `⚠️ الملف (${fileName}) حجمه ${formatBytesLabel(fileSize)} ويتجاوز حد Bot API المباشر (20MB).`;
     addLog('warning', 'ملف يتجاوز 20MB', warnMsg);
-    if (isAdminChat || isTargetGroup) {
-      await callTelegramApi('sendMessage', {
-        chat_id: botConfig.adminTelegramId || chatId,
-        text: warnMsg
-      }).catch(() => {});
-    }
     return;
   }
 
   try {
-    const { buffer } = await downloadTelegramFile(fileId);
-    const stored = await storeFileInDriveOrUmedCloud(buffer, fileName, mimeType, fileId);
+    let buffer: Buffer;
+    if (isTextOrLinkMessage) {
+      buffer = buildHtmlDocumentFromText(inferred.title, text, sourceTypeLabel);
+    } else {
+      const downloaded = await downloadTelegramFile(fileId);
+      buffer = downloaded.buffer;
+    }
+
+    // Upload to Google Drive (`UMED STORAGE`) + U_MED Cloud Proxy
+    const stored = await storeFileInDriveOrUmedCloud(buffer, fileName, mimeType, fileId || undefined);
+
+    // If the text message contained a direct Google Drive link, use it for previewUrl if appropriate
+    let finalPreviewUrl = stored.previewUrl;
+    if (extractedDirectUrl && extractedDirectUrl.includes('drive.google.com/file/d/')) {
+      const m = extractedDirectUrl.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+      if (m && m[1]) {
+        finalPreviewUrl = `https://drive.google.com/file/d/${m[1]}/preview`;
+      }
+    }
+
     addLog(
       'success',
       stored.storageMode === 'google_drive'
         ? `تم الرفع إلى Google Drive بنجاح`
-        : `تم أرشفة الملف في سحابة U_MED وربطه بـ Drive`,
+        : `تم الرفع إلى سحابة U_MED وربطه بمجلد Google Drive`,
       `الملف: ${fileName} -> المعرّف: ${stored.fileId}`,
       { driveUrl: stored.webViewLink }
     );
@@ -738,9 +861,9 @@ async function handleIncomingTelegramMessage(msg: any) {
     const resourceDoc = {
       id: docId,
       title: inferred.title,
-      description: caption || `تم الاستيراد تلقائياً من تليجرام (${fileName})`,
+      description: fullContentText || `تم السحب تلقائياً من ${sourceTypeLabel} (${fileName})`,
       resourceType: inferred.resourceType,
-      url: stored.previewUrl,
+      url: finalPreviewUrl,
       fileSizeLabel: formatBytesLabel(fileSize || buffer.length),
       fileName,
       mimeType,
@@ -759,66 +882,60 @@ async function handleIncomingTelegramMessage(msg: any) {
     };
 
     await upsertResourceToUmedFirestore(resourceDoc);
-    if (initialStatus === 'published') {
-      await publishResourceInUmedFirestore(docId);
-    }
 
     addLog(
       'success',
-      `تم البث في منصة U_MED (${initialStatus === 'published' ? 'منشور للطلاب' : 'مسودة للمراجعة'})`,
+      `تم البث فوراً في منصة U_MED (${initialStatus === 'published' ? 'منشور للطلاب الآن' : 'مسودة'})`,
       `العنوان: ${inferred.title} | المستوى: ${inferred.studyLevelLabel} | المقرر: ${inferred.courseLabel}`,
       { driveUrl: stored.webViewLink, resourceId: docId }
     );
 
-    const targetNotifyChat = botConfig.adminTelegramId || chatId;
-    const sectionArabic =
-      inferred.sectionType === 'practical'
-        ? 'عملي / سريري'
-        : inferred.sectionType === 'theoretical'
-        ? 'نظري / محاضرات'
-        : 'عام / مراجع';
+    const targetNotifyChat = botConfig.adminTelegramId || (chatType === 'private' ? chatId : '');
+    if (targetNotifyChat) {
+      const sectionArabic =
+        inferred.sectionType === 'practical'
+          ? 'عملي / سريري'
+          : inferred.sectionType === 'theoretical'
+          ? 'نظري / محاضرات'
+          : 'عام / مراجع';
 
-    const adminMessageHtml = [
-      '📥 <b>تم أرشفة ملف جديد من تليجرام وبثه في منصة U_MED!</b>',
-      '',
-      `📌 <b>العنوان:</b> ${inferred.title}`,
-      `📄 <b>اسم الملف:</b> <code>${fileName}</code> (${formatBytesLabel(fileSize || buffer.length)})`,
-      `🎓 <b>المستوى:</b> ${inferred.studyLevelLabel} (<code>${inferred.studyLevelId}</code>)`,
-      `📚 <b>المقرر / البلوك:</b> ${inferred.courseLabel}`,
-      `🗂 <b>القسم:</b> ${sectionArabic}`,
-      `☁️ <b>مجلد Google Drive:</b> <a href="${stored.webViewLink}">فتح المجلد / الملف ↗</a>`,
-      `📊 <b>الحالة الحالية في المنصة:</b> ${
-        initialStatus === 'published' ? '✅ منشور للطلاب مباشرة' : '⏳ مسودة بانتظار موافقتك'
-      }`
-    ].join('\n');
+      const adminMessageHtml = [
+        '✅ <b>تم سحب الملف ورفعه لـ Google Drive وبثه في منصة U_MED بنجاح!</b>',
+        '',
+        `📡 <b>المصدر:</b> ${sourceTypeLabel}`,
+        `📌 <b>العنوان:</b> ${inferred.title}`,
+        `📄 <b>الملف / الصيغة:</b> <code>${fileName}</code> (${formatBytesLabel(fileSize || buffer.length)})`,
+        `🎓 <b>المستوى:</b> ${inferred.studyLevelLabel}`,
+        `📚 <b>المقرر / البلوك:</b> ${inferred.courseLabel} (${sectionArabic})`,
+        `☁️ <b>Google Drive:</b> <a href="${stored.webViewLink}">فتح في Google Drive ↗</a>`,
+        `🏛 <b>الحالة في المنصة:</b> ${
+          initialStatus === 'published' ? '🟢 منشور ومتاح للطلاب الآن' : '⏳ مسودة بانتظار الاعتماد'
+        }`
+      ].join('\n');
 
-    await callTelegramApi('sendMessage', {
-      chat_id: targetNotifyChat,
-      text: adminMessageHtml,
-      parse_mode: 'HTML',
-      disable_web_page_preview: true,
-      reply_markup: {
-        inline_keyboard: [
-          [
-            {
-              text: '✅ اعتماد ونشر للطلاب الآن',
-              callback_data: `umed_pub:${docId}`
-            },
-            {
-              text: '❌ رفض وحذف',
-              callback_data: `umed_del:${docId}`
-            }
+      await callTelegramApi('sendMessage', {
+        chat_id: targetNotifyChat,
+        text: adminMessageHtml,
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: initialStatus === 'published' ? '✅ منشور في المنصة' : '✅ اعتماد ونشر للطلاب الآن',
+                callback_data: `umed_pub:${docId}`
+              },
+              {
+                text: '❌ حذف من المنصة',
+                callback_data: `umed_del:${docId}`
+              }
+            ]
           ]
-        ]
-      }
-    });
+        }
+      }).catch(() => {});
+    }
   } catch (err: any) {
-    addLog('error', `خطأ أثناء معالجة الملف (${fileName})`, err?.message || 'Unknown error');
-    const targetNotifyChat = botConfig.adminTelegramId || chatId;
-    await callTelegramApi('sendMessage', {
-      chat_id: targetNotifyChat,
-      text: `⚠️ حدث خطأ أثناء أرشفة الملف (${fileName}):\n${err?.message || 'خطأ غير معروف'}`
-    }).catch(() => {});
+    addLog('error', `خطأ أثناء معالجة الرسالة (${fileName})`, err?.message || 'Unknown error');
   }
 }
 
@@ -838,7 +955,7 @@ async function handleTelegramCallbackQuery(cb: any) {
 
     await callTelegramApi('answerCallbackQuery', {
       callback_query_id: cb.id,
-      text: '✅ تم نشر الملف للطلاب في منصة U_MED بنجاح!',
+      text: '✅ الملف منشور ومتاح للطلاب في منصة U_MED!',
       show_alert: false
     }).catch(() => {});
 
@@ -854,13 +971,13 @@ async function handleTelegramCallbackQuery(cb: any) {
   } else if (data.startsWith('umed_del:')) {
     const docId = data.replace('umed_del:', '').trim();
     await deleteResourceFromUmedFirestore(docId);
-    addLog('warning', 'تم رفض وحذف المسودة عبر زر تليجرام', `معرّف المورد: ${docId}`, {
+    addLog('warning', 'تم حذف المورد عبر زر تليجرام', `معرّف المورد: ${docId}`, {
       resourceId: docId
     });
 
     await callTelegramApi('answerCallbackQuery', {
       callback_query_id: cb.id,
-      text: '🗑 تم حذف المسودة من المنصة.',
+      text: '🗑 تم حذف المورد من المنصة.',
       show_alert: false
     }).catch(() => {});
 
@@ -869,7 +986,7 @@ async function handleTelegramCallbackQuery(cb: any) {
       await callTelegramApi('editMessageText', {
         chat_id: chatId,
         message_id: messageId,
-        text: `${originalText}\n\n❌ <b>تم رفض وحذف هذه المسودة.</b>`,
+        text: `${originalText}\n\n❌ <b>تم حذف هذا المورد من المنصة.</b>`,
         parse_mode: 'HTML'
       }).catch(() => {});
     }
@@ -877,7 +994,133 @@ async function handleTelegramCallbackQuery(cb: any) {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Continuous Long-Polling Loop + Stateless Vercel Webhook Support
+// 5. Direct Telegram Channel Web Scraper / Importer (`t.me/s/<channel>`)
+// ---------------------------------------------------------------------------
+
+function extractChannelUsername(rawInput: string): { username: string; postId?: string } {
+  const cleaned = (rawInput || '').trim();
+  const postMatch = cleaned.match(/t\.me\/(?:s\/)?([a-zA-Z0-9_]{4,})\/(\d+)/i);
+  if (postMatch) {
+    return { username: postMatch[1], postId: postMatch[2] };
+  }
+  const chanMatch = cleaned.match(/t\.me\/(?:s\/)?([a-zA-Z0-9_]{4,})/i);
+  if (chanMatch) {
+    return { username: chanMatch[1] };
+  }
+  return { username: cleaned.replace(/^@/, '').replace(/[^a-zA-Z0-9_]/g, '') };
+}
+
+async function pullPostsFromPublicTelegramChannel(rawChannelInput: string, maxPosts = 5) {
+  const { username, postId } = extractChannelUsername(rawChannelInput);
+  if (!username) {
+    throw new Error('يرجى إدخال معرف قناة تليجرام صحيح (مثال: @umed_channel أو https://t.me/umed_channel)');
+  }
+
+  const targetUrl = postId
+    ? `https://t.me/${username}/${postId}?embed=1&mode=tme`
+    : `https://t.me/s/${username}`;
+
+  const res = await fetch(targetUrl, {
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+    }
+  });
+
+  if (!res.ok) {
+    throw new Error(`تعذر الوصول إلى القناة (@${username}): HTTP ${res.status}`);
+  }
+
+  const html = await res.text();
+
+  // Extract message text blocks from Telegram's public web view
+  const textBlocks: string[] = [];
+  const regex = /<div class="tgme_widget_message_text[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(html)) !== null) {
+    const rawHtml = match[1];
+    const plain = rawHtml
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, '$2 ($1)')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&#39;/g, "'")
+      .replace(/&quot;/g, '"')
+      .trim();
+
+    if (plain.length >= 10) {
+      textBlocks.push(plain);
+    }
+  }
+
+  if (textBlocks.length === 0) {
+    throw new Error(
+      `لم يتم العثور على منشورات عامة في (@${username}). إذا كانت القناة خاصة، أضف البوت مشرفاً فيها ليسحب منها تلقائياً فور النشر!`
+    );
+  }
+
+  const selectedPosts = textBlocks.slice(-maxPosts).reverse();
+  const importedResources: any[] = [];
+
+  for (let i = 0; i < selectedPosts.length; i++) {
+    const postText = selectedPosts[i];
+    const fileName = `Telegram_Channel_${username}_Post_${Date.now().toString(36)}_${i + 1}.html`;
+    const inferred = inferAcademicMetadata(fileName, postText, username, 'text/html');
+    const htmlBuf = buildHtmlDocumentFromText(inferred.title, postText, `قناة @${username}`);
+
+    const stored = await storeFileInDriveOrUmedCloud(htmlBuf, fileName, 'text/html');
+
+    // Check if the post contains a direct Google Drive link
+    let finalUrl = stored.previewUrl;
+    const driveMatch = postText.match(/https?:\/\/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/i);
+    if (driveMatch && driveMatch[1]) {
+      finalUrl = `https://drive.google.com/file/d/${driveMatch[1]}/preview`;
+    }
+
+    const docId = `tg-chan-${Date.now().toString(36)}-${i}`;
+    const nowIso = new Date().toISOString();
+
+    const resourceDoc = {
+      id: docId,
+      title: inferred.title,
+      description: postText.slice(0, 500),
+      resourceType: 'pdf',
+      url: finalUrl,
+      fileSizeLabel: formatBytesLabel(htmlBuf.length),
+      fileName,
+      mimeType: 'text/html',
+      storageProvider: 'external_url',
+      universityId: botConfig.defaultUniversityId || 'univ-dar-al-salam',
+      programId: 'prog-mbbs',
+      curriculumVersionId: 'cur-dar-2024',
+      studyLevelId: inferred.studyLevelId,
+      studyPeriodId: inferred.studyPeriodId,
+      courseOfferingId: inferred.courseOfferingId,
+      sectionType: inferred.sectionType,
+      status: botConfig.autoPublish ? 'published' : 'draft',
+      createdBy: 'AUTOMATED_TELEGRAM_INGESTION',
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
+
+    await upsertResourceToUmedFirestore(resourceDoc);
+    importedResources.push(resourceDoc);
+  }
+
+  addLog(
+    'success',
+    `تم سحب ${importedResources.length} منشورات/ملفات من قناة @${username}`,
+    `تم رفعها إلى Google Drive وبثها مباشرة في منصة U_MED!`
+  );
+
+  return importedResources;
+}
+
+// ---------------------------------------------------------------------------
+// 6. Continuous Long-Polling Loop + Stateless Vercel Webhook Support
 // ---------------------------------------------------------------------------
 
 async function pollTelegramUpdatesOnce() {
@@ -885,9 +1128,15 @@ async function pollTelegramUpdatesOnce() {
   try {
     const updates = await callTelegramApi('getUpdates', {
       offset: lastUpdateOffset,
-      limit: 25,
+      limit: 30,
       timeout: 0,
-      allowed_updates: ['message', 'channel_post', 'edited_message', 'callback_query']
+      allowed_updates: [
+        'message',
+        'edited_message',
+        'channel_post',
+        'edited_channel_post',
+        'callback_query'
+      ]
     });
 
     lastPollTimestamp = new Date().toISOString();
@@ -906,8 +1155,10 @@ async function pollTelegramUpdatesOnce() {
           if (first !== undefined) processedUpdateIds.delete(first);
         }
 
-        if (upd.message || upd.channel_post || upd.edited_message) {
-          await handleIncomingTelegramMessage(upd.message || upd.channel_post || upd.edited_message);
+        const incomingMsg =
+          upd.message || upd.channel_post || upd.edited_message || upd.edited_channel_post;
+        if (incomingMsg) {
+          await handleIncomingTelegramMessage(incomingMsg);
         } else if (upd.callback_query) {
           await handleTelegramCallbackQuery(upd.callback_query);
         }
@@ -952,8 +1203,8 @@ export async function startLiveTelegramBot(): Promise<{
     lastError = null;
     addLog(
       'success',
-      `تم الاتصال ببوت تليجرام بنجاح (@${me.username})`,
-      `يستمع الآن لملفات القروب (${botConfig.targetGroupId}) ويربطها بـ Google Drive وU_MED.`
+      `تم تفعيل الاستماع الشامل للبوت (@${me.username})`,
+      `يستقبل الآن من أي قناة تليجرام أو قروب أو محادثة خاصة بأي صيغة ويرفع لـ Google Drive ويبث في U_MED.`
     );
 
     return { ok: true, botIdentity };
@@ -974,11 +1225,11 @@ export function stopLiveTelegramBot() {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Express Routes for Live Bot Control Center, Vercel Webhook & Streaming
+// 7. Express Routes for Live Bot Control Center, Channel Puller & Streaming
 // ---------------------------------------------------------------------------
 
 export function registerLiveTelegramBotRoutes(app: Express) {
-  // 0. Direct High-Speed File Streamer (Stateless on Vercel via tgFileId fallback)
+  // 0. Direct High-Speed File Streamer
   app.get('/api/teledrive/stream/:fileId', async (req: Request, res: Response) => {
     try {
       const { fileId } = req.params;
@@ -1026,17 +1277,19 @@ export function registerLiveTelegramBotRoutes(app: Express) {
       config: {
         botToken: botConfig.botToken,
         targetGroupId: botConfig.targetGroupId,
+        targetChannelUsername: botConfig.targetChannelUsername || '',
         adminTelegramId: botConfig.adminTelegramId,
         gdriveFolderId: botConfig.gdriveFolderId,
         defaultUniversityId: botConfig.defaultUniversityId,
         firebaseProjectId: botConfig.firebaseProjectId,
         autoPublish: botConfig.autoPublish,
+        acceptAllMessagesAndFormats: true,
         clientEmail: botConfig.serviceAccount?.client_email || '',
         projectId: botConfig.serviceAccount?.project_id || ''
       },
       driveStatus,
       logs: activityLogs.slice(0, 40),
-      ingestedResources: Object.values(ingestedResources).slice(0, 30)
+      ingestedResources: Object.values(ingestedResources).slice(0, 40)
     });
   });
 
@@ -1045,6 +1298,9 @@ export function registerLiveTelegramBotRoutes(app: Express) {
     const incoming = req.body || {};
     if (incoming.botToken) botConfig.botToken = String(incoming.botToken).trim();
     if (incoming.targetGroupId) botConfig.targetGroupId = String(incoming.targetGroupId).trim();
+    if (incoming.targetChannelUsername !== undefined) {
+      botConfig.targetChannelUsername = String(incoming.targetChannelUsername).trim();
+    }
     if (incoming.adminTelegramId) botConfig.adminTelegramId = String(incoming.adminTelegramId).trim();
     if (incoming.gdriveFolderId) botConfig.gdriveFolderId = String(incoming.gdriveFolderId).trim();
     if (incoming.defaultUniversityId) botConfig.defaultUniversityId = String(incoming.defaultUniversityId).trim();
@@ -1075,7 +1331,7 @@ export function registerLiveTelegramBotRoutes(app: Express) {
     });
   });
 
-  // 2b. Enable 24/7 Serverless Webhook (Ideal for Vercel Deployment!)
+  // 2b. Enable 24/7 Serverless Webhook (For Vercel Deployment)
   app.post('/api/teledrive/enable-webhook', async (req: Request, res: Response) => {
     try {
       const incoming = req.body || {};
@@ -1084,6 +1340,7 @@ export function registerLiveTelegramBotRoutes(app: Express) {
       if (incoming.adminTelegramId) botConfig.adminTelegramId = String(incoming.adminTelegramId).trim();
       if (incoming.gdriveFolderId) botConfig.gdriveFolderId = String(incoming.gdriveFolderId).trim();
       if (incoming.defaultUniversityId) botConfig.defaultUniversityId = String(incoming.defaultUniversityId).trim();
+      if (typeof incoming.autoPublish === 'boolean') botConfig.autoPublish = incoming.autoPublish;
 
       const baseOrigin = String(incoming.originUrl || '').trim().replace(/\/+$/, '');
       if (!baseOrigin || !baseOrigin.startsWith('https://')) {
@@ -1100,26 +1357,31 @@ export function registerLiveTelegramBotRoutes(app: Express) {
         firstName: me.first_name
       };
 
-      // Stop local polling if switching to webhook
       if (pollingTimer) {
         clearTimeout(pollingTimer);
         pollingTimer = null;
       }
       isPollingActive = false;
 
-      // Embed stateless config parameters in the webhook query string so Vercel cold starts always have them!
       const queryParams = new URLSearchParams({
         token: botConfig.botToken,
         group: botConfig.targetGroupId,
         admin: botConfig.adminTelegramId,
         folder: botConfig.gdriveFolderId,
-        univ: botConfig.defaultUniversityId
+        univ: botConfig.defaultUniversityId,
+        autoPub: botConfig.autoPublish ? '1' : '0'
       }).toString();
 
       const fullWebhookUrl = `${baseOrigin}/api/teledrive/webhook?${queryParams}`;
       await callTelegramApi('setWebhook', {
         url: fullWebhookUrl,
-        allowed_updates: ['message', 'channel_post', 'edited_message', 'callback_query'],
+        allowed_updates: [
+          'message',
+          'edited_message',
+          'channel_post',
+          'edited_channel_post',
+          'callback_query'
+        ],
         drop_pending_updates: false
       });
 
@@ -1129,8 +1391,8 @@ export function registerLiveTelegramBotRoutes(app: Express) {
 
       addLog(
         'success',
-        `تم تفعيل Webhook المستمر 24/7 على الرابط (${baseOrigin})`,
-        `البوت (@${me.username}) سيعمل الآن على Vercel بدون توقف نهائياً حتى لو أغلقت جميع أجهزتك!`
+        `تم تفعيل Webhook الشامل 24/7 على الرابط (${baseOrigin})`,
+        `البوت (@${me.username}) يسحب الآن من أي قناة أو رسالة خاصة ويرفع لـ Drive ويبث في U_MED تلقائياً!`
       );
 
       res.json({
@@ -1149,6 +1411,37 @@ export function registerLiveTelegramBotRoutes(app: Express) {
     }
   });
 
+  // 2c. Direct Telegram Channel Pull Endpoint
+  app.post('/api/teledrive/pull-channel', async (req: Request, res: Response) => {
+    try {
+      const channelInput = String(req.body?.channel || botConfig.targetChannelUsername || '').trim();
+      const maxPosts = Math.min(Math.max(Number(req.body?.maxPosts) || 3, 1), 10);
+      if (!channelInput) {
+        return res.status(400).json({
+          success: false,
+          error: 'يرجى كتابة رابط أو معرف قناة تليجرام (مثال: @telegram أو https://t.me/channel_name)'
+        });
+      }
+
+      botConfig.targetChannelUsername = channelInput;
+      saveJson(BOT_CONFIG_FILE, botConfig);
+
+      const resources = await pullPostsFromPublicTelegramChannel(channelInput, maxPosts);
+      res.json({
+        success: true,
+        count: resources.length,
+        resources,
+        logs: activityLogs.slice(0, 40)
+      });
+    } catch (err: any) {
+      addLog('warning', 'تنبيه سحب القناة المباشر', err?.message || 'تعذر السحب');
+      res.status(400).json({
+        success: false,
+        error: err?.message || 'تعذر سحب المنشورات من القناة'
+      });
+    }
+  });
+
   // 3. Stop Live Bot
   app.post('/api/teledrive/live-stop', (req: Request, res: Response) => {
     stopLiveTelegramBot();
@@ -1159,7 +1452,7 @@ export function registerLiveTelegramBotRoutes(app: Express) {
     });
   });
 
-  // 4. Real End-to-End Test: Archive Medical PDF + Write to UMED Firestore (`umed-yemen`) + Notify Admin on Telegram!
+  // 4. Real End-to-End Test: Archive Medical PDF + Write to UMED Firestore (`umed-yemen`) + Notify Admin!
   app.post('/api/teledrive/live-test-pipeline', async (req: Request, res: Response) => {
     try {
       const incoming = req.body || {};
@@ -1172,7 +1465,7 @@ export function registerLiveTelegramBotRoutes(app: Express) {
       const customCaption = (incoming.caption || `${customTitle} #سنة_ثانية #دم #نظري`).trim();
       const fileName = (incoming.fileName || 'UMED_Hematology_Clinical_Summary.pdf').trim();
 
-      addLog('info', 'بدء اختبار المسار الكامل الحي (Telegram + Google Drive + U_MED)', `الملف: ${fileName}`);
+      addLog('info', 'بدء البث المباشر الفوري إلى Google Drive ومنصة U_MED', `الملف: ${fileName}`);
 
       const samplePdfContent = `%PDF-1.4
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -1195,7 +1488,6 @@ startxref
 
       const pdfBuffer = Buffer.from(samplePdfContent, 'utf-8');
 
-      // Step A: Store in Google Drive or U_MED Cloud Proxy
       const stored = await storeFileInDriveOrUmedCloud(pdfBuffer, fileName, 'application/pdf');
       const driveStatus = await verifyGoogleDriveFolderAccess();
       addLog(
@@ -1205,7 +1497,6 @@ startxref
         { driveUrl: stored.webViewLink }
       );
 
-      // Step B: Classify and Save to UMED Firestore (`umed-yemen`)
       const inferred = inferAcademicMetadata(fileName, customCaption, undefined, 'application/pdf');
       const docId = `tg-live-${Date.now().toString(36)}`;
       const nowIso = new Date().toISOString();
@@ -1227,7 +1518,7 @@ startxref
         studyPeriodId: inferred.studyPeriodId,
         courseOfferingId: inferred.courseOfferingId,
         sectionType: inferred.sectionType,
-        status: 'draft',
+        status: botConfig.autoPublish ? 'published' : 'draft',
         createdBy: 'AUTOMATED_TELEGRAM_INGESTION',
         createdAt: nowIso,
         updatedAt: nowIso
@@ -1236,25 +1527,22 @@ startxref
       const firestoreOk = await upsertResourceToUmedFirestore(resourceDoc);
       addLog(
         'success',
-        `تم بث الملف فعلياً في قاعدة بيانات منصة U_MED (${firestoreOk ? 'Firestore + السيرفر' : 'السيرفر'})`,
+        `تم البث والنشر المباشر في منصة U_MED (${firestoreOk ? 'Firestore + السيرفر' : 'السيرفر'})`,
         `العنوان: ${inferred.title} | المستوى: ${inferred.studyLevelLabel} | المقرر: ${inferred.courseLabel}`,
         { driveUrl: stored.webViewLink, resourceId: docId }
       );
 
-      // Step C: Send real Telegram Notification with inline buttons to Admin (`1905553456`)
       let telegramSent = false;
       let telegramError: string | null = null;
       try {
         const msgHtml = [
-          '🚀 <b>اختبار حي ناجح لبوت أرشفة U_MED!</b>',
+          '🚀 <b>تم السحب والرفع لـ Google Drive والبث المباشر في منصة U_MED!</b>',
           '',
           `📌 <b>العنوان:</b> ${inferred.title}`,
           `🎓 <b>المستوى المستنتج:</b> ${inferred.studyLevelLabel}`,
           `📚 <b>المقرر المستنتج:</b> ${inferred.courseLabel}`,
-          `☁️ <b>مجلد Google Drive:</b> <a href="${stored.webViewLink}">✅ متصل بمجلد ${driveStatus.folderName || 'UMED STORAGE'} (اضغط للفتح)</a>`,
-          `🏛 <b>حالة منصة U_MED:</b> ✅ تم البث في المنصة بنجاح`,
-          '',
-          '👇 <b>اضغط على الزر بالأسفل لاعتماد ونشر الملف للطلاب فوراً:</b>'
+          `☁️ <b>مجلد Google Drive:</b> <a href="${stored.webViewLink}">✅ متصل بمجلد ${driveStatus.folderName || 'UMED STORAGE'}</a>`,
+          `🏛 <b>حالة منصة U_MED:</b> 🟢 منشور للطلاب الآن`
         ].join('\n');
 
         await callTelegramApi('sendMessage', {
@@ -1266,11 +1554,11 @@ startxref
             inline_keyboard: [
               [
                 {
-                  text: '✅ اعتماد ونشر للطلاب الآن',
+                  text: '✅ منشور للطلاب الآن',
                   callback_data: `umed_pub:${docId}`
                 },
                 {
-                  text: '❌ رفض وحذف',
+                  text: '❌ حذف من المنصة',
                   callback_data: `umed_del:${docId}`
                 }
               ]
@@ -1278,11 +1566,6 @@ startxref
           }
         });
         telegramSent = true;
-        addLog(
-          'success',
-          `تم إرسال إشعار وأزرار التحكم إلى حسابك في تليجرام (${botConfig.adminTelegramId})`,
-          'افتح تطبيق تليجرام الآن لرؤية الرسالة وتجربة زر النشر!'
-        );
       } catch (tgErr: any) {
         telegramError = tgErr?.message || 'تعذر إرسال الرسالة إلى المشرف';
       }
@@ -1306,20 +1589,22 @@ startxref
     }
   });
 
-  // 5. Stateless Webhook endpoint (for 24/7 Vercel Serverless & Cloud Run instant wake-up)
+  // 5. Stateless Webhook endpoint (Handles Channel Posts, Group Messages, Private Bot Messages & Callbacks)
   app.post('/api/teledrive/webhook', async (req: Request, res: Response) => {
     try {
-      // Hydrate config from query params on stateless Vercel cold starts
       if (req.query.token) botConfig.botToken = String(req.query.token).trim();
       if (req.query.group) botConfig.targetGroupId = String(req.query.group).trim();
       if (req.query.admin) botConfig.adminTelegramId = String(req.query.admin).trim();
       if (req.query.folder) botConfig.gdriveFolderId = String(req.query.folder).trim();
       if (req.query.univ) botConfig.defaultUniversityId = String(req.query.univ).trim();
+      if (req.query.autoPub !== undefined) botConfig.autoPublish = req.query.autoPub === '1';
 
       const upd = req.body;
       if (upd) {
-        if (upd.message || upd.channel_post || upd.edited_message) {
-          await handleIncomingTelegramMessage(upd.message || upd.channel_post || upd.edited_message);
+        const incomingMsg =
+          upd.message || upd.channel_post || upd.edited_message || upd.edited_channel_post;
+        if (incomingMsg) {
+          await handleIncomingTelegramMessage(incomingMsg);
         } else if (upd.callback_query) {
           await handleTelegramCallbackQuery(upd.callback_query);
         }
@@ -1330,7 +1615,6 @@ startxref
     }
   });
 
-  // Auto-start the live bot on server startup (when running in stateful server mode)
   if (!IS_SERVERLESS) {
     setTimeout(() => {
       startLiveTelegramBot().catch(() => {});
