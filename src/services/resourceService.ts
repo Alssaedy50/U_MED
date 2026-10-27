@@ -470,41 +470,42 @@ export function getCachedEducationalResources(filters: ResourceFilters = {}): Ed
 
 async function queryResourcesFromFirestore(statusFilter?: string): Promise<EducationalResource[]> {
   const deleted = getDeletedResourceIds();
-  const items: EducationalResource[] = [];
+  const byId = new Map<string, EducationalResource>();
+
+  const collectFromSnap = (snap: any) => {
+    snap.forEach((d: any) => {
+      const data = { ...d.data(), id: d.data().id || d.id } as EducationalResource;
+      if (data && data.id && !deleted.has(data.id)) {
+        byId.set(data.id, data);
+      }
+    });
+  };
 
   if (statusFilter === 'published') {
-    // Student-safe query that 100% satisfies `resource.data.status == 'published'` in Firestore security rules
-    const q = query(collection(db, 'educationalResources'), where('status', '==', 'published'));
-    const snap = await getDocs(q);
-    snap.forEach((d) => {
-      const data = { ...d.data(), id: d.data().id || d.id } as EducationalResource;
-      if (data && data.id && !deleted.has(data.id)) {
-        items.push(data);
-      }
-    });
-    return items;
+    const qPrimary = query(collection(db, 'educationalResources'), where('status', '==', 'published'));
+    const snapPrimary = await getDocs(qPrimary);
+    collectFromSnap(snapPrimary);
+    try {
+      const qSnake = query(collection(db, 'educational_resources'), where('status', '==', 'published'));
+      const snapSnake = await getDocs(qSnake);
+      collectFromSnap(snapSnake);
+    } catch {}
+    return Array.from(byId.values());
   }
 
-  // Admin query: try full collection first, fallback to published query if caller is student
   try {
-    const snap = await getDocs(collection(db, 'educationalResources'));
-    snap.forEach((d) => {
-      const data = { ...d.data(), id: d.data().id || d.id } as EducationalResource;
-      if (data && data.id && !deleted.has(data.id)) {
-        items.push(data);
-      }
-    });
-    return items;
+    const [snapPrimary, snapSnake] = await Promise.all([
+      getDocs(collection(db, 'educationalResources')),
+      getDocs(collection(db, 'educational_resources')).catch(() => null)
+    ]);
+    collectFromSnap(snapPrimary);
+    if (snapSnake) collectFromSnap(snapSnake);
+    return Array.from(byId.values());
   } catch {
     const q = query(collection(db, 'educationalResources'), where('status', '==', 'published'));
     const snap = await getDocs(q);
-    snap.forEach((d) => {
-      const data = { ...d.data(), id: d.data().id || d.id } as EducationalResource;
-      if (data && data.id && !deleted.has(data.id)) {
-        items.push(data);
-      }
-    });
-    return items;
+    collectFromSnap(snap);
+    return Array.from(byId.values());
   }
 }
 
@@ -639,7 +640,11 @@ export async function saveEducationalResource(resource: EducationalResource): Pr
   writeLocalResources(nextList);
 
   try {
-    await setDoc(doc(db, 'educationalResources', resource.id), cleanFirestoreData(updatedResource), { merge: true });
+    const cleaned = cleanFirestoreData(updatedResource);
+    await Promise.all([
+      setDoc(doc(db, 'educationalResources', resource.id), cleaned, { merge: true }),
+      setDoc(doc(db, 'educational_resources', resource.id), cleaned, { merge: true }).catch(() => {})
+    ]);
   } catch (err) {
     console.warn('Firestore saveEducationalResource fallback to localStorage:', err);
   }
@@ -660,7 +665,11 @@ export async function toggleResourceStatus(resourceId: string, newStatus: 'publi
     const nextList = current.map(r => r.id === resourceId ? updatedTarget : r);
     writeLocalResources(nextList);
     try {
-      await setDoc(doc(db, 'educationalResources', resourceId), cleanFirestoreData(updatedTarget), { merge: true });
+      const cleaned = cleanFirestoreData(updatedTarget);
+      await Promise.all([
+        setDoc(doc(db, 'educationalResources', resourceId), cleaned, { merge: true }),
+        setDoc(doc(db, 'educational_resources', resourceId), cleaned, { merge: true }).catch(() => {})
+      ]);
       return;
     } catch (err) {
       console.warn('Firestore toggleResourceStatus setDoc fallback:', err);
@@ -668,10 +677,16 @@ export async function toggleResourceStatus(resourceId: string, newStatus: 'publi
   }
 
   try {
-    await updateDoc(doc(db, 'educationalResources', resourceId), {
-      status: newStatus,
-      updatedAt: nowIso
-    });
+    await Promise.all([
+      updateDoc(doc(db, 'educationalResources', resourceId), {
+        status: newStatus,
+        updatedAt: nowIso
+      }),
+      updateDoc(doc(db, 'educational_resources', resourceId), {
+        status: newStatus,
+        updatedAt: nowIso
+      }).catch(() => {})
+    ]);
   } catch (err) {
     console.warn('Firestore toggleResourceStatus error:', err);
   }
@@ -685,8 +700,10 @@ export async function deleteEducationalResource(resourceId: string): Promise<voi
   writeLocalResources(filtered);
 
   try {
-    await deleteDoc(doc(db, 'educationalResources', resourceId));
-    // Also clean up cloud file chunks in parallel if it was a direct upload
+    await Promise.all([
+      deleteDoc(doc(db, 'educationalResources', resourceId)),
+      deleteDoc(doc(db, 'educational_resources', resourceId)).catch(() => {})
+    ]);
     if (target?.url?.startsWith('umed-cloud://')) {
       await deleteCloudFileChunks(target.url, target.chunkCount);
     }

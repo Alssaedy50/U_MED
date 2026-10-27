@@ -53,6 +53,7 @@ import {
   subscribeToUserAcademicContext
 } from '../../services/academicService.ts';
 import ResourcePreviewModal from '../library/ResourcePreviewModal.tsx';
+import TeleDriveBotStudioModal from './TeleDriveBotStudioModal.tsx';
 
 interface EducationalContentManagerProps {
   adminUid: string;
@@ -83,6 +84,7 @@ export default function EducationalContentManager({
   const [statusFilter, setStatusFilter] = useState<'all' | 'published' | 'draft' | 'archived'>('all');
   const [typeFilter, setTypeFilter] = useState<ResourceType | 'all'>('all');
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
+  const [showBotStudioModal, setShowBotStudioModal] = useState<boolean>(false);
   const [editingResource, setEditingResource] = useState<EducationalResource | null>(null);
   const [previewResource, setPreviewResource] = useState<EducationalResource | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -508,6 +510,23 @@ export default function EducationalContentManager({
 
   const handleToggleStatus = async (resourceId: string, current: string) => {
     const nextStatus = current === 'published' ? 'draft' : 'published';
+    const target = resources.find(r => r.id === resourceId);
+    if (
+      nextStatus === 'published' &&
+      target &&
+      (!target.studyLevelId || target.studyLevelId === 'pending_review')
+    ) {
+      setEditingResource({
+        ...target,
+        studyLevelId: studyLevels[0]?.id || 'lvl-2',
+        status: 'published'
+      });
+      setStatusMessage({
+        type: 'error',
+        text: 'يرجى تحديد المستوى الدراسي والمقرر لهذه المسودة المسحوبة من تيليجرام ثم الضغط على «حفظ التعديلات» لنشرها للطلاب.'
+      });
+      return;
+    }
     await toggleResourceStatus(resourceId, nextStatus);
     setResources(resources.map(r => r.id === resourceId ? { ...r, status: nextStatus } : r));
     setStatusMessage({ type: 'success', text: `تم تحديث حالة المورد إلى (${nextStatus === 'published' ? 'منشور' : 'مسودة'}).` });
@@ -520,9 +539,14 @@ export default function EducationalContentManager({
   };
 
   const getLevelLabel = (lvlId: string) => {
+    if (!lvlId || lvlId === 'pending_review') return 'قيد المراجعة (Pending Review)';
     const found = studyLevels.find(l => l.id === lvlId);
     return found ? found.titleArabic : lvlId;
   };
+
+  const telegramDraftCount = resources.filter(
+    r => r.status === 'draft' && r.createdBy === 'AUTOMATED_TELEGRAM_INGESTION'
+  ).length;
 
   const handleFilterLevelChange = async (lvlId: string) => {
     setFilterLevelId(lvlId);
@@ -588,6 +612,15 @@ export default function EducationalContentManager({
 
         <div className="flex flex-wrap items-center gap-2">
           <button
+            type="button"
+            onClick={() => setShowBotStudioModal(true)}
+            className="py-2.5 px-3.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 font-bold text-xs flex items-center gap-2 transition-colors cursor-pointer"
+          >
+            <Cloud className="w-4 h-4 shrink-0" />
+            <span>استوديو بوت تيليجرام (TeleDrive MTProto)</span>
+          </button>
+
+          <button
             onClick={() => {
               loadAcademicHierarchy();
               setUploadSourceMode('device_file');
@@ -612,6 +645,32 @@ export default function EducationalContentManager({
           </button>
         </div>
       </div>
+
+      {/* Automated Telegram Draft Ingestion Alert Banner */}
+      {telegramDraftCount > 0 && (
+        <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2.5">
+            <span className="px-2.5 py-1 rounded-lg bg-amber-500 text-slate-950 font-black text-xs">
+              📥 {telegramDraftCount} مسودة جديدة من تيليجرام
+            </span>
+            <span className="text-[var(--text-primary)] font-semibold">
+              تم سحب ملفات جديدة تلقائياً من مجموعة الدفعة عبر بوت TeleDrive وهي بانتظار مراجعة المستوى/المادة واعتماد النشر للطلاب.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setStatusFilter('draft');
+              setFilterLevelId('all');
+              setFilterPeriodId('all');
+              setFilterCourseId('all');
+            }}
+            className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs transition-colors cursor-pointer"
+          >
+            عرض مسودات تيليجرام للمراجعة ({telegramDraftCount})
+          </button>
+        </div>
+      )}
 
       {statusMessage && (
         <div className={`p-4 rounded-xl border text-xs flex items-center justify-between gap-2 ${
@@ -737,9 +796,24 @@ export default function EducationalContentManager({
                     <span className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800 text-amber-300 font-mono text-[10px]">
                       {res.fileSizeLabel || '1.8 MB'}
                     </span>
+                    {res.createdBy === 'AUTOMATED_TELEGRAM_INGESTION' && (
+                      <span className="px-2 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-800 text-[10px] font-bold">
+                        📥 مسحوب تلقائياً من تيليجرام
+                      </span>
+                    )}
+                    {res.url?.includes('drive.google.com') && (
+                      <span className="px-2 py-0.5 rounded bg-teal-950 text-teal-300 border border-teal-800 text-[10px] font-bold">
+                        Google Drive Preview
+                      </span>
+                    )}
                     {res.url?.startsWith('umed-cloud://') && (
                       <span className="px-2 py-0.5 rounded bg-teal-950 text-teal-300 border border-teal-800 text-[10px] font-bold">
                         مرفوع سحابياً (Firestore)
+                      </span>
+                    )}
+                    {(res.studyLevelId === 'pending_review' || res.courseOfferingId === 'pending_review') && (
+                      <span className="px-2 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-800 text-[10px] font-bold">
+                        ⚠️ بانتظار تحديد المستوى/المادة
                       </span>
                     )}
                     <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
@@ -756,6 +830,12 @@ export default function EducationalContentManager({
                       <>
                         <span>•</span>
                         <span>البلوك: {res.studyPeriodId}</span>
+                      </>
+                    )}
+                    {res.courseOfferingId && (
+                      <>
+                        <span>•</span>
+                        <span>المادة: {res.courseOfferingId === 'pending_review' ? 'قيد المراجعة' : res.courseOfferingId}</span>
                       </>
                     )}
                     <span>•</span>
@@ -1357,6 +1437,17 @@ export default function EducationalContentManager({
           onClose={() => setPreviewResource(null)}
         />
       )}
+
+      {/* TeleDrive MTProto Ingestion Studio Modal */}
+      <TeleDriveBotStudioModal
+        isOpen={showBotStudioModal}
+        onClose={() => setShowBotStudioModal(false)}
+        defaultUniversityId={form.universityId || assignedUniversityId}
+        onDraftSimulated={() => {
+          loadResources();
+          setStatusFilter('draft');
+        }}
+      />
 
     </div>
   );
