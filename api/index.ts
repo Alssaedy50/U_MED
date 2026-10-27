@@ -14,6 +14,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import type { UserRoleDoc, AuditLog, QuestionItemFull, Assessment } from '../src/types/umed.ts';
+import { registerLiveTelegramBotRoutes } from './teledriveLiveBot.ts';
 
 dotenv.config();
 
@@ -1456,4 +1457,8 @@ app.post('/api/admin/release-results', requireAdmin, (req: AuthenticatedRequest,
   }
 });
 
+// 15. Built-In 24/7 Live Telegram -> Google Drive -> U_MED Bot Engine
+registerLiveTelegramBotRoutes(app);
+
 export default app;
+

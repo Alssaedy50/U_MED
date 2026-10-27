@@ -267,17 +267,23 @@ service cloud.firestore {
              request.resource.data.url.size() <= 1000;
     }
 
+    function isAutomatedTelegramDraftUpdate() {
+      return resource.data.createdBy == 'AUTOMATED_TELEGRAM_INGESTION' &&
+             request.resource.data.createdBy == 'AUTOMATED_TELEGRAM_INGESTION' &&
+             (request.resource.data.status == 'published' || request.resource.data.status == 'draft');
+    }
+
     match /educationalResources/{resourceId} {
       allow read: if true;
       allow create: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId) || isAnyAdmin() || isAutomatedTelegramDraftCreate();
-      allow update: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId) || isAnyAdmin();
+      allow update: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId) || isAnyAdmin() || isAutomatedTelegramDraftUpdate();
       allow delete: if isDepartmentHead(resource.data.universityId, resource.data.studyLevelId) || isAnyAdmin();
     }
 
     match /educational_resources/{resourceId} {
       allow read: if true;
       allow create: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId) || isAnyAdmin() || isAutomatedTelegramDraftCreate();
-      allow update: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId) || isAnyAdmin();
+      allow update: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId) || isAnyAdmin() || isAutomatedTelegramDraftUpdate();
       allow delete: if isDepartmentHead(resource.data.universityId, resource.data.studyLevelId) || isAnyAdmin();
     }
 

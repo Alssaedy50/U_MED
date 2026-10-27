@@ -206,6 +206,7 @@ export default function ResourcePreviewModal({
               <div className="pt-2 flex flex-col sm:flex-row gap-2">
                 <button
                   onClick={() => {
+                    setIsLoading(true);
                     setHasConfirmedLoad(true);
                   }}
                   className="flex-1 py-2.5 px-4 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-lg shadow-teal-600/20"
@@ -214,7 +215,7 @@ export default function ResourcePreviewModal({
                   <span>{isAudio ? 'تشغيل التسجيل الصوتي الآن' : 'تحميل ومعاينة الملف الآن'}</span>
                 </button>
 
-                {!resource.url.startsWith('umed-cloud://') && (
+                {resource.url && !resource.url.startsWith('umed-cloud://') && (
                   <a
                     href={resource.url}
                     target="_blank"
@@ -227,7 +228,7 @@ export default function ResourcePreviewModal({
                 )}
               </div>
             </div>
-          ) : isLoading ? (
+          ) : isLoading || (!resolvedViewUrl && !loadError) ? (
             <div className="max-w-sm w-full text-center space-y-3 p-6 bg-slate-900 rounded-2xl border border-slate-800">
               <RefreshCw className="w-8 h-8 animate-spin text-teal-400 mx-auto" />
               <div className="text-xs font-bold text-white">جارٍ استرجاع الملف من السحابة... ({loadProgress}%)</div>
@@ -256,13 +257,15 @@ export default function ResourcePreviewModal({
                     <p className="text-xs text-slate-400 mt-1">{resource.description || 'محاضرة صوتية مسجلة'}</p>
                   </div>
 
-                  <audio
-                    ref={audioRef}
-                    controls
-                    autoPlay
-                    src={resolvedViewUrl}
-                    className="w-full"
-                  />
+                  {resolvedViewUrl && (
+                    <audio
+                      ref={audioRef}
+                      controls
+                      autoPlay
+                      src={resolvedViewUrl || undefined}
+                      className="w-full"
+                    />
+                  )}
 
                   <div className="flex flex-wrap items-center justify-center gap-2 text-xs">
                     <span className="text-slate-400">سرعة التشغيل:</span>
@@ -285,7 +288,7 @@ export default function ResourcePreviewModal({
               )}
 
               {/* 2. IMAGE / HISTOLOGY SLIDE VIEWER */}
-              {isImage && (
+              {isImage && resolvedViewUrl && (
                 <div className="w-full flex flex-col items-center justify-center space-y-3">
                   <div className="flex items-center gap-2 bg-slate-900 px-3 py-1.5 rounded-xl border border-slate-800 text-xs">
                     <button 
@@ -313,7 +316,7 @@ export default function ResourcePreviewModal({
 
                   <div className="max-w-full max-h-[70vh] overflow-auto rounded-xl border border-slate-800 bg-black flex items-center justify-center p-2">
                     <img 
-                      src={resolvedViewUrl} 
+                      src={resolvedViewUrl || undefined} 
                       alt={resource.title}
                       style={{ transform: `scale(${imageZoom})`, transition: 'transform 0.15s ease' }}
                       className="max-h-[65vh] object-contain rounded-lg"
@@ -324,12 +327,12 @@ export default function ResourcePreviewModal({
               )}
 
               {/* 2.5 VIDEO LECTURE PLAYER */}
-              {isVideo && (
+              {isVideo && resolvedViewUrl && (
                 <div className="w-full max-w-3xl flex flex-col items-center justify-center space-y-3">
                   <video
                     controls
                     autoPlay
-                    src={resolvedViewUrl}
+                    src={resolvedViewUrl || undefined}
                     className="w-full max-h-[68vh] rounded-xl border border-slate-800 bg-black shadow-2xl"
                   />
                 </div>
@@ -338,27 +341,29 @@ export default function ResourcePreviewModal({
               {/* 3. PDF & EXTERNAL VIEWER IFRAME */}
               {!isImage && !isAudio && !isVideo && (
                 <div className="w-full h-[70vh] relative rounded-xl overflow-hidden border border-slate-800 bg-slate-900">
-                  {iframeError ? (
+                  {iframeError || !resolvedViewUrl ? (
                     <div className="h-full flex flex-col items-center justify-center p-6 text-center space-y-3">
                       <AlertTriangle className="w-8 h-8 text-amber-400" />
                       <h4 className="font-bold text-white text-sm">المستند جاهز للفتح أو التنزيل المباشر</h4>
                       <p className="text-xs text-slate-400 max-w-md">
                         اضغط الزر أدناه لفتح أو تنزيل الملف مباشرة على جهازك.
                       </p>
-                      <a
-                        href={resolvedDownloadUrl || resolvedViewUrl}
-                        download={resource.fileName || `${resource.title}.pdf`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="py-2.5 px-5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center gap-2"
-                      >
-                        <Download className="w-4 h-4" />
-                        <span>تنزيل / فتح الملف الآن</span>
-                      </a>
+                      {(resolvedDownloadUrl || resolvedViewUrl) && (
+                        <a
+                          href={resolvedDownloadUrl || resolvedViewUrl}
+                          download={resource.fileName || `${resource.title}.pdf`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="py-2.5 px-5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center gap-2"
+                        >
+                          <Download className="w-4 h-4" />
+                          <span>تنزيل / فتح الملف الآن</span>
+                        </a>
+                      )}
                     </div>
                   ) : (
                     <iframe
-                      src={resolvedViewUrl}
+                      src={resolvedViewUrl || undefined}
                       title={resource.title}
                       className="w-full h-full border-0"
                       allow="autoplay"

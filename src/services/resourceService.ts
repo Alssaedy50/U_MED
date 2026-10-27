@@ -222,6 +222,9 @@ export async function resolveResourceFileUrl(
   onProgress?: (percent: number) => void
 ): Promise<{ viewUrl: string; downloadUrl: string; isCloudFile: boolean }> {
   const rawUrl = (resource.url || '').trim();
+  if (!rawUrl) {
+    throw new Error('رابط الملف غير متوفر حالياً.');
+  }
 
   // Case 1: Direct Data URL
   if (rawUrl.startsWith('data:')) {
@@ -481,6 +484,27 @@ async function queryResourcesFromFirestore(statusFilter?: string): Promise<Educa
     });
   };
 
+  // Also pull live-ingested resources from the built-in Node.js Telegram Bot Engine
+  const pullLiveBotResources = async () => {
+    try {
+      const res = await fetch('/api/teledrive/live-status');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data.ingestedResources)) {
+        for (const item of data.ingestedResources) {
+          if (item && item.id && !deleted.has(item.id)) {
+            if (!statusFilter || item.status === statusFilter) {
+              const existing = byId.get(item.id);
+              if (!existing || new Date(item.updatedAt || 0) >= new Date(existing.updatedAt || 0)) {
+                byId.set(item.id, item as EducationalResource);
+              }
+            }
+          }
+        }
+      }
+    } catch {}
+  };
+
   if (statusFilter === 'published') {
     const qPrimary = query(collection(db, 'educationalResources'), where('status', '==', 'published'));
     const snapPrimary = await getDocs(qPrimary);
@@ -490,6 +514,7 @@ async function queryResourcesFromFirestore(statusFilter?: string): Promise<Educa
       const snapSnake = await getDocs(qSnake);
       collectFromSnap(snapSnake);
     } catch {}
+    await pullLiveBotResources();
     return Array.from(byId.values());
   }
 
@@ -500,11 +525,13 @@ async function queryResourcesFromFirestore(statusFilter?: string): Promise<Educa
     ]);
     collectFromSnap(snapPrimary);
     if (snapSnake) collectFromSnap(snapSnake);
+    await pullLiveBotResources();
     return Array.from(byId.values());
   } catch {
     const q = query(collection(db, 'educationalResources'), where('status', '==', 'published'));
     const snap = await getDocs(q);
     collectFromSnap(snap);
+    await pullLiveBotResources();
     return Array.from(byId.values());
   }
 }
