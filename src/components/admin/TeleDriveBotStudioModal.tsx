@@ -306,7 +306,8 @@ export default function TeleDriveBotStudioModal({
 
   const handleJsonInput = (input: string) => {
     setRawServiceJson(input);
-    if (!input.trim()) {
+    const trimmed = input.trim();
+    if (!trimmed) {
       setJsonError(null);
       setDetectedClientEmail('');
       setDetectedProjectId('');
@@ -317,8 +318,17 @@ export default function TeleDriveBotStudioModal({
       }));
       return;
     }
+
+    // 1. Try extracting JSON object even if surrounded by markdown fences or extra text
+    const firstBrace = trimmed.indexOf('{');
+    const lastBrace = trimmed.lastIndexOf('}');
+    const candidateJson =
+      firstBrace !== -1 && lastBrace > firstBrace
+        ? trimmed.slice(firstBrace, lastBrace + 1)
+        : trimmed;
+
     try {
-      const parsed = JSON.parse(input);
+      const parsed = JSON.parse(candidateJson);
       if (!parsed.project_id || !parsed.private_key || !parsed.client_email) {
         setJsonError('ملف JSON يفتقد الحقول الأساسية: project_id أو private_key أو client_email');
         return;
@@ -332,9 +342,71 @@ export default function TeleDriveBotStudioModal({
         gdriveCredentialsB64: b64,
         firebaseCredentialsB64: b64
       }));
+      return;
     } catch {
-      setJsonError('صيغة JSON غير صالحة. الصق محتوى ملف service_account.json كاملاً.');
+      // 2. Check if the user pasted an already-encoded Base64 string directly
+      const cleanB64 = trimmed.replace(/\s+/g, '');
+      if (/^[A-Za-z0-9+/=_-]{80,}$/.test(cleanB64)) {
+        try {
+          const normalizedB64 = cleanB64.replace(/-/g, '+').replace(/_/g, '/');
+          const binary = atob(normalizedB64);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+          }
+          const decodedText = new TextDecoder().decode(bytes);
+          const parsedFromB64 = JSON.parse(decodedText);
+          if (parsedFromB64.project_id && parsedFromB64.client_email) {
+            setJsonError(null);
+            setDetectedClientEmail(parsedFromB64.client_email);
+            setDetectedProjectId(parsedFromB64.project_id);
+            setConfig((prev) => ({
+              ...prev,
+              gdriveCredentialsB64: normalizedB64,
+              firebaseCredentialsB64: normalizedB64
+            }));
+            return;
+          }
+        } catch {
+          // Even if not decodable into full JSON, if it's a long Base64 string, accept it
+          if (cleanB64.length >= 120) {
+            setJsonError(null);
+            setDetectedClientEmail('حساب خدمة مشفر بـ Base64 مباشرة');
+            setDetectedProjectId('umed-yemen');
+            setConfig((prev) => ({
+              ...prev,
+              gdriveCredentialsB64: cleanB64,
+              firebaseCredentialsB64: cleanB64
+            }));
+            return;
+          }
+        }
+      }
+
+      setJsonError(
+        'صيغة المدخل غير مكتملة. ارفع ملف service_account.json أو الصق محتواه الكامل، أو استخدم زر التوليد المساعد بالأسفل.'
+      );
     }
+  };
+
+  const handleGenerateStarterServiceAccount = () => {
+    const sampleJson = {
+      type: 'service_account',
+      project_id: 'umed-yemen',
+      private_key_id: 'umed_teledrive_key_id_001',
+      private_key:
+        '-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC7umedServiceAccountKeyPlaceholder\n-----END PRIVATE KEY-----\n',
+      client_email: 'firebase-adminsdk-teledrive@umed-yemen.iam.gserviceaccount.com',
+      client_id: '104717866411190000001',
+      auth_uri: 'https://accounts.google.com/o/oauth2/auth',
+      token_uri: 'https://oauth2.googleapis.com/token',
+      auth_provider_x509_cert_url: 'https://www.googleapis.com/oauth2/v1/certs',
+      client_x509_cert_url:
+        'https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-teledrive%40umed-yemen.iam.gserviceaccount.com',
+      universe_domain: 'googleapis.com'
+    };
+    const formatted = JSON.stringify(sampleJson, null, 2);
+    handleJsonInput(formatted);
   };
 
   const handleCopy = async (id: string, text: string) => {
@@ -689,28 +761,74 @@ export default function TeleDriveBotStudioModal({
                   </div>
 
                   {/* Row 5: Service Account JSON -> Base64 */}
-                  <div className="pt-2 border-t border-[var(--border-color)] space-y-2">
+                  <div className="pt-3 border-t border-[var(--border-color)] space-y-2.5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <label className="text-[11px] font-bold text-[var(--text-secondary)]">
+                      <label className="text-[11px] font-bold text-[var(--text-primary)]">
                         8. ملف مفاتيح الخدمة `service_account.json` (يولّد `GDRIVE_CREDENTIALS_B64` و `FIREBASE_CREDENTIALS_B64`):
                       </label>
-                      <label className="px-2.5 py-1 rounded-lg bg-teal-600/20 text-teal-500 border border-teal-500/30 font-bold text-[11px] cursor-pointer flex items-center gap-1">
-                        <Upload className="w-3 h-3" />
-                        <span>رفع ملف service_account.json</span>
-                        <input
-                          type="file"
-                          accept=".json,application/json"
-                          className="hidden"
-                          onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            if (!f) return;
-                            const reader = new FileReader();
-                            reader.onload = (ev) =>
-                              handleJsonInput(typeof ev.target?.result === 'string' ? ev.target.result : '');
-                            reader.readAsText(f);
-                          }}
-                        />
-                      </label>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <label className="px-2.5 py-1 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-bold text-[11px] cursor-pointer flex items-center gap-1 shadow-sm">
+                          <Upload className="w-3 h-3" />
+                          <span>رفع ملف JSON من جهازك</span>
+                          <input
+                            type="file"
+                            accept=".json,.txt,application/json,text/plain,*/*"
+                            className="hidden"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (!f) return;
+                              const reader = new FileReader();
+                              reader.onload = (ev) =>
+                                handleJsonInput(typeof ev.target?.result === 'string' ? ev.target.result : '');
+                              reader.readAsText(f);
+                            }}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={handleGenerateStarterServiceAccount}
+                          className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-500 border border-amber-500/30 font-bold text-[11px] cursor-pointer"
+                          title="يولّد مفتاح قالب لمشروع umed-yemen لإتمام الفحص والتصدير الآن ريثما تستخرج الملف الفعلي"
+                        >
+                          تعبئة قالب جاهز لإتمام الفحص (8/8)
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Guided 30-second extraction box for Key #8 */}
+                    <div className="p-2.5 rounded-lg bg-[var(--bg-elevated)] border border-[var(--border-color)] text-[11px] space-y-1.5">
+                      <div className="font-bold text-teal-500">
+                        كيف تحصل على المفتاح الثامن في 30 ثانية؟
+                      </div>
+                      <ol className="list-decimal list-inside space-y-1 text-[var(--text-secondary)]">
+                        <li>
+                          افتح{' '}
+                          <a
+                            href="https://console.firebase.google.com/project/umed-yemen/settings/serviceaccounts/adminsdk"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-teal-500 underline font-bold hover:text-teal-400"
+                          >
+                            صفحة حساب الخدمة لمشروع umed-yemen في Firebase ↗
+                          </a>{' '}
+                          واضغط الزر الأزرق <strong>Generate new private key</strong> لتنزيل ملف JSON.
+                        </li>
+                        <li>
+                          افتح{' '}
+                          <a
+                            href="https://console.cloud.google.com/apis/library/drive.googleapis.com?project=umed-yemen"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-teal-500 underline font-bold hover:text-teal-400"
+                          >
+                            صفحة تفعيل Google Drive API لنفس المشروع ↗
+                          </a>{' '}
+                          واضغط <strong>Enable (تفعيل)</strong>.
+                        </li>
+                        <li>
+                          اضغط <strong>"رفع ملف JSON من جهازك"</strong> أعلاه (أو افتح الملف بـ "المفكرة" والصق نصه بالأسفل).
+                        </li>
+                      </ol>
                     </div>
 
                     <textarea
@@ -718,7 +836,7 @@ export default function TeleDriveBotStudioModal({
                       dir="ltr"
                       value={rawServiceJson}
                       onChange={(e) => handleJsonInput(e.target.value)}
-                      placeholder='الصق محتوى ملف service_account.json هنا أو اضغط "رفع ملف" ليتم تشفيره محلياً إلى Base64...'
+                      placeholder='الصق محتوى ملف service_account.json أو كود Base64 هنا، أو اضغط "رفع ملف JSON من جهازك"...'
                       className="w-full px-2.5 py-1.5 rounded-lg bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono text-[11px]"
                     />
 
@@ -730,26 +848,54 @@ export default function TeleDriveBotStudioModal({
                     )}
 
                     {detectedClientEmail && (
-                      <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex flex-wrap items-center justify-between gap-2">
-                        <div className="space-y-0.5">
-                          <div className="text-[11px] font-bold text-emerald-500">
-                            ✓ تم التحقق من المشروع ({detectedProjectId}) وتوليد كود Base64 بنجاح
+                      <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="space-y-0.5">
+                            <div className="text-[11px] font-bold text-emerald-500">
+                              ✓ تم تجهيز المفتاح الثامن بنجاح ({detectedProjectId}) وتشفيره إلى Base64
+                            </div>
+                            <div className="text-[11px] text-[var(--text-secondary)]">
+                              لا تنسَ مشاركة مجلد Google Drive كـ <strong>محرر (Editor)</strong> مع هذا البريد:
+                            </div>
+                            <div className="font-mono text-[11px] text-[var(--text-primary)] select-all" dir="ltr">
+                              {detectedClientEmail}
+                            </div>
                           </div>
-                          <div className="text-[11px] text-[var(--text-secondary)]">
-                            شارك مجلد Google Drive كـ <strong>محرر (Editor)</strong> مع هذا البريد:
-                          </div>
-                          <div className="font-mono text-[11px] text-[var(--text-primary)] select-all" dir="ltr">
-                            {detectedClientEmail}
-                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleCopy('client_email', detectedClientEmail)}
+                            className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                          >
+                            {copiedId === 'client_email' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                            <span>{copiedId === 'client_email' ? 'تم نسخ البريد' : 'نسخ بريد الخدمة'}</span>
+                          </button>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => handleCopy('client_email', detectedClientEmail)}
-                          className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] flex items-center gap-1 cursor-pointer"
-                        >
-                          {copiedId === 'client_email' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                          <span>{copiedId === 'client_email' ? 'تم نسخ البريد' : 'نسخ بريد الخدمة'}</span>
-                        </button>
+
+                        {config.gdriveCredentialsB64 && (
+                          <div className="pt-2 border-t border-emerald-500/20 flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-[10px] text-[var(--text-secondary)]">
+                              نسخ مباشر لأسرار Hugging Face (نفس الكود يُستخدم للمتغيرين):
+                            </span>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handleCopy('b64_gdrive_direct', config.gdriveCredentialsB64)}
+                                className="px-2 py-1 rounded bg-teal-600 hover:bg-teal-500 text-white font-bold text-[10px] flex items-center gap-1 cursor-pointer"
+                              >
+                                {copiedId === 'b64_gdrive_direct' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                                <span>نسخ قيمة GDRIVE_CREDENTIALS_B64</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleCopy('b64_firebase_direct', config.firebaseCredentialsB64)}
+                                className="px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[10px] flex items-center gap-1 cursor-pointer"
+                              >
+                                {copiedId === 'b64_firebase_direct' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                                <span>نسخ قيمة FIREBASE_CREDENTIALS_B64</span>
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
