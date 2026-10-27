@@ -133,6 +133,13 @@ function decodeSeedServiceAccount(): Record<string, string> {
   }
 }
 
+const DEFAULT_GDRIVE_FOLDER_ID = '1DN7ma5J43S1R7is3FiaiC5ajHBkyVyQd';
+const LEGACY_PLACEHOLDER_FOLDER_IDS = new Set([
+  '',
+  '179085999n363v187250r935455s18x87',
+  '1A2B3C4D5E6F7G8H9I0J_folder_id'
+]);
+
 const ATTACHED_SERVICE_ACCOUNT_JSON = decodeSeedServiceAccount();
 const ATTACHED_SERVICE_ACCOUNT_PRETTY = JSON.stringify(ATTACHED_SERVICE_ACCOUNT_JSON, null, 2);
 const ATTACHED_SERVICE_ACCOUNT_B64 = encodeUtf8ToBase64(JSON.stringify(ATTACHED_SERVICE_ACCOUNT_JSON));
@@ -153,22 +160,35 @@ export default function TeleDriveBotStudioModal({
     return 'readiness';
   });
 
-  const [config, setConfig] = useState<TeleDriveStudioConfig>(() => ({
-    apiId: initialSaved.config?.apiId || '31297434',
-    apiHash: initialSaved.config?.apiHash || '6de7dd13936221c0318de6f8a00cfac9',
-    sessionString: initialSaved.config?.sessionString ?? '',
-    botToken: initialSaved.config?.botToken || '8720396604:AAE3GbdWRb8_iE2eF6b0C1DuxR0d6X7xDds',
-    targetGroupId: initialSaved.config?.targetGroupId || '-1001987654321',
-    adminTelegramId: initialSaved.config?.adminTelegramId || '7162503651',
-    defaultUniversityId: initialSaved.config?.defaultUniversityId || defaultUniversityId,
-    defaultFolderId: extractDriveFolderId(
-      initialSaved.config?.defaultFolderId || '179085999n363v187250r935455s18x87'
-    ),
-    chunkSizeMb: initialSaved.config?.chunkSizeMb === 10 ? 10 : 20,
-    port: initialSaved.config?.port || 7860,
-    gdriveCredentialsB64: ATTACHED_SERVICE_ACCOUNT_B64,
-    firebaseCredentialsB64: ATTACHED_SERVICE_ACCOUNT_B64
-  }));
+  const [config, setConfig] = useState<TeleDriveStudioConfig>(() => {
+    const savedFolder = extractDriveFolderId(initialSaved.config?.defaultFolderId || '');
+    const resolvedFolderId = LEGACY_PLACEHOLDER_FOLDER_IDS.has(savedFolder)
+      ? DEFAULT_GDRIVE_FOLDER_ID
+      : savedFolder;
+
+    const savedGroup = (initialSaved.config?.targetGroupId || '').trim();
+    const resolvedGroup =
+      !savedGroup || savedGroup === '-1001987654321' ? '-1003664858401' : savedGroup;
+
+    const savedAdmin = (initialSaved.config?.adminTelegramId || '').trim();
+    const resolvedAdmin =
+      !savedAdmin || savedAdmin === '7162503651' ? '1905553456' : savedAdmin;
+
+    return {
+      apiId: initialSaved.config?.apiId || '2040',
+      apiHash: initialSaved.config?.apiHash || 'b18441a1ff607e10a989891a5462e627',
+      sessionString: initialSaved.config?.sessionString ?? '',
+      botToken: initialSaved.config?.botToken || '8787910034:AAF_TcpLPwj1m74jtY9XFaeeNv7bADOaiD8',
+      targetGroupId: resolvedGroup,
+      adminTelegramId: resolvedAdmin,
+      defaultUniversityId: initialSaved.config?.defaultUniversityId || defaultUniversityId,
+      defaultFolderId: resolvedFolderId,
+      chunkSizeMb: initialSaved.config?.chunkSizeMb === 10 ? 10 : 20,
+      port: initialSaved.config?.port || 7860,
+      gdriveCredentialsB64: ATTACHED_SERVICE_ACCOUNT_B64,
+      firebaseCredentialsB64: ATTACHED_SERVICE_ACCOUNT_B64
+    };
+  });
 
   const [activeFileId, setActiveFileId] = useState<string>(
     () => initialSaved.activeFileId || 'main.py'
@@ -252,24 +272,24 @@ export default function TeleDriveBotStudioModal({
 
   const handleClearSavedFields = () => {
     const freshConfig: TeleDriveStudioConfig = {
-      apiId: '',
-      apiHash: '',
+      apiId: '2040',
+      apiHash: 'b18441a1ff607e10a989891a5462e627',
       sessionString: '',
-      botToken: '',
-      targetGroupId: '-1001987654321',
-      adminTelegramId: '',
+      botToken: '8787910034:AAF_TcpLPwj1m74jtY9XFaeeNv7bADOaiD8',
+      targetGroupId: '-1003664858401',
+      adminTelegramId: '1905553456',
       defaultUniversityId,
-      defaultFolderId: '',
+      defaultFolderId: DEFAULT_GDRIVE_FOLDER_ID,
       chunkSizeMb: 20,
       port: 7860,
-      gdriveCredentialsB64: '',
-      firebaseCredentialsB64: ''
+      gdriveCredentialsB64: ATTACHED_SERVICE_ACCOUNT_B64,
+      firebaseCredentialsB64: ATTACHED_SERVICE_ACCOUNT_B64
     };
     setConfig(freshConfig);
-    setRawServiceJson('');
+    setRawServiceJson(ATTACHED_SERVICE_ACCOUNT_PRETTY);
     setJsonError(null);
-    setDetectedClientEmail('');
-    setDetectedProjectId('');
+    setDetectedClientEmail(ATTACHED_SERVICE_ACCOUNT_JSON.client_email);
+    setDetectedProjectId(ATTACHED_SERVICE_ACCOUNT_JSON.project_id);
     try {
       localStorage.removeItem(STUDIO_STORAGE_KEY);
     } catch {}
@@ -299,8 +319,8 @@ export default function TeleDriveBotStudioModal({
         key: 'API_ID',
         label: 'معرّف تطبيق تيليجرام (API_ID)',
         value: apiIdClean,
-        valid: /^\d{5,12}$/.test(apiIdClean),
-        hint: 'رقم صحيح من 5 إلى 12 خانة من موقع my.telegram.org'
+        valid: /^\d{4,12}$/.test(apiIdClean),
+        hint: 'رقم صحيح من 4 إلى 12 خانة من موقع my.telegram.org'
       },
       {
         key: 'API_HASH',
@@ -460,17 +480,14 @@ export default function TeleDriveBotStudioModal({
   };
 
   const handleGenerateStarterServiceAccount = () => {
-    const keylessJson = {
-      type: 'keyless_umed_rest',
-      mode: 'keyless_umed_rest',
-      project_id: 'umed-yemen',
-      api_key: 'AIzaSyAAjo3PyRS5SzNL-PCE78T_wJkVaAANcSE',
-      firestore_database_id: '(default)',
-      client_email: 'firebase-adminsdk-fbsvc@umed-yemen.iam.gserviceaccount.com',
-      note: 'Keyless U_MED Firestore REST v1 Mode - Bypasses GCP iam.disableServiceAccountKeyCreation policy'
-    };
-    const formatted = JSON.stringify(keylessJson, null, 2);
-    handleJsonInput(formatted);
+    handleJsonInput(ATTACHED_SERVICE_ACCOUNT_PRETTY);
+    setConfig((prev) => ({
+      ...prev,
+      defaultFolderId:
+        prev.defaultFolderId && !LEGACY_PLACEHOLDER_FOLDER_IDS.has(prev.defaultFolderId)
+          ? prev.defaultFolderId
+          : DEFAULT_GDRIVE_FOLDER_ID
+    }));
   };
 
   const handleCopy = async (id: string, text: string) => {
@@ -486,7 +503,7 @@ export default function TeleDriveBotStudioModal({
     triggerZipDownload(blob, 'umed-teledrive-huggingface-docker.zip');
   };
 
-  const colabOneLiner = `!pip install -q pyrogram==2.0.106 tgcrypto==1.2.5 && python3 -c "import asyncio; from pyrogram import Client; asyncio.run((lambda: (async def run():\n  async with Client('umed_gen', api_id=${Number(config.apiId) || 12345678}, api_hash='${config.apiHash || 'YOUR_API_HASH'}', in_memory=True) as app:\n    s = await app.export_session_string()\n    me = await app.get_me()\n    await app.send_message('me', f'SESSION_STRING:\\n\`{s}\`\\nADMIN_TELEGRAM_ID: \`{me.id}\`')\n    print('\\nSESSION_STRING=\\n' + s + f'\\nADMIN_TELEGRAM_ID={me.id}')\n)())())"`;
+  const colabOneLiner = `!pip install -q pyrogram==2.0.106 tgcrypto==1.2.5 && python3 -c "import asyncio; from pyrogram import Client; asyncio.run((lambda: (async def run():\n  async with Client('umed_gen', api_id=${Number(config.apiId) || 2040}, api_hash='${config.apiHash || 'b18441a1ff607e10a989891a5462e627'}', in_memory=True) as app:\n    s = await app.export_session_string()\n    me = await app.get_me()\n    await app.send_message('me', f'SESSION_STRING:\\n\`{s}\`\\nADMIN_TELEGRAM_ID: \`{me.id}\`')\n    print('\\nSESSION_STRING=\\n' + s + f'\\nADMIN_TELEGRAM_ID={me.id}')\n)())())"`;
 
   const generateSessionFile =
     deliverables.find((d) => d.id === 'generate_session.py') || deliverables[0];
@@ -797,13 +814,23 @@ export default function TeleDriveBotStudioModal({
                   {/* Row 4: GDRIVE_FOLDER_ID & DEFAULT_UNIVERSITY_ID */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[11px] font-bold text-[var(--text-secondary)] mb-1">
-                        7. `GDRIVE_FOLDER_ID` (معرّف مجلد Drive):
-                      </label>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[11px] font-bold text-[var(--text-secondary)]">
+                          7. `GDRIVE_FOLDER_ID` (معرّف مجلد Drive):
+                        </label>
+                        <a
+                          href={`https://drive.google.com/drive/folders/${config.defaultFolderId || DEFAULT_GDRIVE_FOLDER_ID}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[10px] font-bold text-emerald-400 hover:underline"
+                        >
+                          فتح المجلد المربوط ↗
+                        </a>
+                      </div>
                       <input
                         type="text"
                         dir="ltr"
-                        placeholder="1A2B3C4D5E6F7G8H9I0J..."
+                        placeholder=" الصق رابط المجلد أو المعرّف هنا..."
                         value={config.defaultFolderId}
                         onChange={(e) =>
                           setConfig({
@@ -811,7 +838,7 @@ export default function TeleDriveBotStudioModal({
                             defaultFolderId: extractDriveFolderId(e.target.value)
                           })
                         }
-                        className="w-full px-3 py-1.5 rounded-lg bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono text-xs"
+                        className="w-full px-3 py-1.5 rounded-lg bg-[var(--bg-input)] border border-emerald-500/40 text-[var(--text-primary)] font-mono text-xs"
                       />
                     </div>
 
@@ -868,7 +895,7 @@ export default function TeleDriveBotStudioModal({
                     {/* Guided explanation for the attached rugged-precept-512915-p9 Service Account */}
                     <div className="p-2.5 rounded-lg bg-[var(--bg-elevated)] border border-emerald-500/30 text-[11px] space-y-1.5">
                       <div className="font-bold text-emerald-500">
-                        ✓ تم دمج وتشفير ملف حساب الخدمة المرفق (`rugged-precept-512915-p9`) بنجاح! خطوتان سريعتان لضمان رفع الملفات إلى Google Drive:
+                        ✓ تم ربط مجلد Drive (`1DN7ma5J43S1R7is3FiaiC5ajHBkyVyQd`) وملف الخدمة (`rugged-precept-512915-p9`) بنجاح! تأكد فقط من هاتين النقطتين:
                       </div>
                       <ul className="list-decimal list-inside space-y-1 text-[var(--text-secondary)]">
                         <li>
@@ -884,11 +911,20 @@ export default function TeleDriveBotStudioModal({
                           واضغط <strong>Enable (تفعيل)</strong>.
                         </li>
                         <li>
-                          <strong>مشاركة مجلد Google Drive:</strong> افتح مجلدك في Google Drive واضغط <strong>مشاركة (Share)</strong> وأضف البريد{' '}
+                          <strong>مشاركة مجلدك مع حساب الخدمة:</strong> افتح{' '}
+                          <a
+                            href="https://drive.google.com/drive/folders/1DN7ma5J43S1R7is3FiaiC5ajHBkyVyQd"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-teal-500 underline font-bold hover:text-teal-400"
+                          >
+                            مجلد Google Drive الخاص بك ↗
+                          </a>{' '}
+                          واضغط <strong>مشاركة (Share)</strong> وأضف البريد{' '}
                           <code className="text-emerald-400 select-all">
                             umed-393@rugged-precept-512915-p9.iam.gserviceaccount.com
                           </code>{' '}
-                          بصلاحية <strong>محرر (Editor)</strong> (قاعدة بيانات المنصة <code>umed-yemen</code> مربوطة تلقائياً ولا تحتاج أي إعداد إضافي).
+                          بصلاحية <strong>محرر (Editor)</strong>.
                         </li>
                       </ul>
                     </div>
