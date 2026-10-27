@@ -10,9 +10,7 @@ const STATIC_SHELL = [
   '/',
   '/index.html',
   '/manifest.json',
-  '/favicon.png',
-  '/icon-192.png',
-  '/icon-512.png'
+  '/icon.svg'
 ];
 
 self.addEventListener('install', (event) => {
@@ -150,8 +148,8 @@ self.addEventListener('push', (event) => {
 
   const options = {
     body: data.body,
-    icon: '/icon-192.png',
-    badge: '/icon-192.png',
+    icon: '/icon.svg',
+    badge: '/icon.svg',
     dir: 'rtl',
     lang: 'ar',
     vibrate: [200, 100, 200],

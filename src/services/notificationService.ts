@@ -314,8 +314,8 @@ export async function sendNativeBrowserNotification(
 
   const notifOptions: NotificationOptions = {
     body: options.body,
-    icon: '/icon-192.png',
-    badge: '/icon-192.png',
+    icon: '/icon.svg',
+    badge: '/icon.svg',
     dir: 'rtl',
     lang: 'ar',
     tag: options.tag || `umed-${options.category || 'alert'}-${Date.now()}`,

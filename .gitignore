@@ -7,5 +7,9 @@ coverage/
 .env*
 !.env.example
 
-# Ignore generated AI Studio temporary media
+# Ignore generated AI Studio temporary media and attachments
+.aistudio/
 .aistudio/**/.tempmediaStorage/
+public/assets/aistudio/
+*serviceAccount*.json
+

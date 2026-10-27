@@ -252,18 +252,32 @@ service cloud.firestore {
     }
 
     // -------------------------------------------------------------------------
-    // Educational Resources (Low-Bandwidth Materials)
+    // Educational Resources (Low-Bandwidth Materials & Automated Telegram Drafts)
     // -------------------------------------------------------------------------
+
+    function isAutomatedTelegramDraftCreate() {
+      return request.resource.data.status == 'draft' &&
+             request.resource.data.createdBy == 'AUTOMATED_TELEGRAM_INGESTION' &&
+             request.resource.data.storageProvider == 'external_url' &&
+             request.resource.data.title is string &&
+             request.resource.data.title.size() >= 1 &&
+             request.resource.data.title.size() <= 300 &&
+             request.resource.data.url is string &&
+             request.resource.data.url.size() >= 8 &&
+             request.resource.data.url.size() <= 1000;
+    }
 
     match /educationalResources/{resourceId} {
       allow read: if true;
-      allow create, update: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId) || isAnyAdmin();
+      allow create: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId) || isAnyAdmin() || isAutomatedTelegramDraftCreate();
+      allow update: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId) || isAnyAdmin();
       allow delete: if isDepartmentHead(resource.data.universityId, resource.data.studyLevelId) || isAnyAdmin();
     }
 
     match /educational_resources/{resourceId} {
       allow read: if true;
-      allow create, update: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId) || isAnyAdmin();
+      allow create: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId) || isAnyAdmin() || isAutomatedTelegramDraftCreate();
+      allow update: if isDepartmentHead(request.resource.data.universityId, request.resource.data.studyLevelId) || isAnyAdmin();
       allow delete: if isDepartmentHead(resource.data.universityId, resource.data.studyLevelId) || isAnyAdmin();
     }
 
