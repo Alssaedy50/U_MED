@@ -254,6 +254,86 @@ export default function TeleDriveBotStudioModal({
   const [liveTestBanner, setLiveTestBanner] = useState<string | null>(null);
   const [channelPullInput, setChannelPullInput] = useState<string>('');
   const [channelPullBusy, setChannelPullBusy] = useState<boolean>(false);
+  const [uploadCaptionInput, setUploadCaptionInput] = useState<string>('');
+  const [uploadProgressPct, setUploadProgressPct] = useState<number | null>(null);
+
+  const handleDirectAnySizeFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+
+    setUploadProgressPct(1);
+    setLiveTestBanner(null);
+
+    try {
+      const uploadId = `up_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+      const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB per chunk (works on both Cloud Run & Vercel Serverless!)
+      const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+
+      for (let idx = 0; idx < totalChunks; idx++) {
+        const start = idx * CHUNK_SIZE;
+        const end = Math.min(file.size, start + CHUNK_SIZE);
+        const slice = file.slice(start, end);
+        const arrayBuf = await slice.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuf);
+
+        let binary = '';
+        const step = 0x8000;
+        for (let i = 0; i < bytes.length; i += step) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + step));
+        }
+        const chunkBase64 = btoa(binary);
+
+        const chunkRes = await fetch('/api/teledrive/upload-chunk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            uploadId,
+            chunkIndex: idx,
+            chunkBase64
+          })
+        });
+        if (!chunkRes.ok) {
+          throw new Error(`تعذر رفع الجزء رقم ${idx + 1}`);
+        }
+        setUploadProgressPct(Math.min(95, Math.round(((idx + 1) / totalChunks) * 90)));
+      }
+
+      const finalRes = await fetch('/api/teledrive/finalize-upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          uploadId,
+          fileName: file.name,
+          mimeType: file.type || 'application/octet-stream',
+          totalBytes: file.size,
+          caption: uploadCaptionInput.trim() || file.name.replace(/\.[^/.]+$/, ''),
+          targetChannel: channelPullInput.trim() || undefined
+        })
+      });
+
+      const finalData = await finalRes.json();
+      if (Array.isArray(finalData.logs)) setLiveLogs(finalData.logs);
+      if (finalData.resource) {
+        await saveEducationalResource(finalData.resource);
+        onDraftSimulated?.();
+      }
+
+      setUploadProgressPct(100);
+      if (finalData.success) {
+        setLiveTestBanner(
+          `✅ تم رفع الملف (${file.name} • ${finalData.resource?.fileSizeLabel || ''}) إلى Google Drive وبثه في القناة ومنصة U_MED بنجاح!`
+        );
+        setUploadCaptionInput('');
+      } else {
+        setLiveTestBanner(`⚠️ تعذر إتمام رفع الملف: ${finalData.error || ''}`);
+      }
+    } catch (err: any) {
+      setLiveTestBanner(`⚠️ خطأ أثناء رفع الملف: ${err?.message || ''}`);
+    } finally {
+      setTimeout(() => setUploadProgressPct(null), 1500);
+    }
+  };
 
   const handlePullFromChannel = async () => {
     const target = channelPullInput.trim();
@@ -286,7 +366,7 @@ export default function TeleDriveBotStudioModal({
       }
       if (data.success) {
         setLiveTestBanner(
-          `✅ تم سحب (${data.ingestedCount || data.resources?.length || 1}) منشور/ملف من قناة (${data.channelUsername || target}) ورفعها إلى Google Drive وبثها مباشرة في منصة U_MED!`
+          `✅ تم سحب (${data.ingestedCount || data.resources?.length || 1}) منشور/ملف من قناة (${data.channelUsername || target}) ورفعها إلى Google Drive وبثها في القناة ومنصة U_MED!`
         );
       } else {
         setLiveTestBanner(`⚠️ تعذر السحب من القناة: ${data.error || 'تأكد أن القناة عامة أو أن البوت مشرف فيها'}`);
@@ -886,21 +966,23 @@ export default function TeleDriveBotStudioModal({
                   </button>
                 </div>
 
-                {/* DIRECT TELEGRAM CHANNEL PULL + UNIVERSAL FORMAT AUTO-INGESTION */}
-                <div className="p-3 rounded-xl bg-[var(--bg-card)]/90 border border-teal-500/40 space-y-2">
+                {/* DIRECT TELEGRAM CHANNEL PULL + UNLIMITED FILE SIZE UPLOADER & BROADCASTER */}
+                <div className="p-3 rounded-xl bg-[var(--bg-card)]/90 border border-teal-500/40 space-y-2.5">
                   <div className="flex flex-wrap items-center justify-between gap-1.5">
                     <div className="flex items-center gap-1.5 font-black text-[11px] text-emerald-400">
                       <Download className="w-3.5 h-3.5 shrink-0" />
-                      <span>📡 السحب المباشر من قناة تليجرام + الاستقبال الشامل بأي صيغة:</span>
+                      <span>📡 سحب واستقبال أي ملف وبأي حجم مهما كان ➔ Google Drive ➔ البث في القناة وU_MED:</span>
                     </div>
                     <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold">
-                      مفعّل لجميع الصيغ (PDF • فيديو • صوت • صور • Word/PPT/ZIP • نصوص وروابط)
+                      بدون حد للحجم (حتى 2GB / 4GB+) • جميع الصيغ
                     </span>
                   </div>
                   <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
-                    • <strong>تلقائياً 24/7:</strong> أي منشور في قناة تليجرام (البوت مشرف فيها) أو أي رسالة/ملف يُرسل أو يُحوّل (Forward) للبوت بأي صيغة يُرفع تلقائياً إلى <strong>Google Drive</strong> ويُبث فوراً في منصة <strong>U_MED</strong>.<br />
-                    • <strong>سحب فوري من أي قناة عامة:</strong> أدخل معرّف القناة (مثل <code dir="ltr">@channel</code> أو رابط <code dir="ltr">https://t.me/...</code>) لسحب أحدث منشوراتها وملفاتها الآن:
+                    • <strong>استقبال وبث تلقائي بلا حدود للحجم:</strong> أي ملف (مهما كان حجمه أو صيغته) يُرسل للبوت أو يُنشر في القناة يتم رفعه إلى <strong>Google Drive (`UMED STORAGE`)</strong> وبثه مباشرةً في <strong>قناة/قروب تليجرام</strong> ونشره في <strong>منصة U_MED</strong>.<br />
+                    • <strong>سحب مباشر من قناة أو رفع ملف ضخم من جهازك الآن:</strong>
                   </p>
+
+                  {/* Row 1: Channel Pull & Target Broadcast Channel */}
                   <div className="flex flex-col sm:flex-row gap-2">
                     <input
                       type="text"
@@ -919,11 +1001,45 @@ export default function TeleDriveBotStudioModal({
                       <Download className="w-3.5 h-3.5 shrink-0" />
                       <span>
                         {channelPullBusy
-                          ? 'جارٍ السحب والرفع...'
-                          : '📥 سحب من القناة ورفعه لـ Drive وبثه في U_MED'}
+                          ? 'جارٍ السحب والبث...'
+                          : '📥 سحب من القناة ➔ Drive ➔ بث للقناة وU_MED'}
                       </span>
                     </button>
                   </div>
+
+                  {/* Row 2: Direct Any-Size Chunked File Upload to Drive + Telegram Channel + U_MED */}
+                  <div className="pt-2 border-t border-[var(--border-color)]/60 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                    <input
+                      type="text"
+                      value={uploadCaptionInput}
+                      onChange={(e) => setUploadCaptionInput(e.target.value)}
+                      placeholder="وصف أو عنوان الملف والهاشتاجات (اختياري: #سنة_ثانية #دم #نظري)..."
+                      className="flex-1 px-3 py-1.5 rounded-lg bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] text-xs"
+                    />
+                    <label className="py-2 px-3.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shrink-0 cursor-pointer">
+                      <Upload className="w-3.5 h-3.5 shrink-0" />
+                      <span>
+                        {uploadProgressPct !== null
+                          ? `جارٍ الرفع والبث (${uploadProgressPct}%)...`
+                          : '📤 اختر أي ملف بأي حجم ➔ Drive + بث للقناة'}
+                      </span>
+                      <input
+                        type="file"
+                        onChange={handleDirectAnySizeFileUpload}
+                        disabled={uploadProgressPct !== null}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+
+                  {uploadProgressPct !== null && (
+                    <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+                      <div
+                        className="bg-emerald-400 h-full transition-all duration-300"
+                        style={{ width: `${uploadProgressPct}%` }}
+                      />
+                    </div>
+                  )}
                 </div>
 
                 {/* VERCEL 24/7 WEBHOOK ACTIVATION BOX */}
