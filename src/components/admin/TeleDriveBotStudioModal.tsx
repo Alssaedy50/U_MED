@@ -11,7 +11,7 @@
  * 5. Export the complete Hugging Face Spaces Docker bundle (`umed-teledrive-ingestion-bot.zip`).
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   X,
   Check,
@@ -26,7 +26,8 @@ import {
   KeyRound,
   Terminal,
   Rocket,
-  ShieldCheck
+  ShieldCheck,
+  RotateCcw
 } from 'lucide-react';
 import {
   TeleDriveStudioConfig,
@@ -46,6 +47,32 @@ interface TeleDriveBotStudioModalProps {
 
 type StudioTab = 'readiness' | 'session_gen' | 'simulator' | 'code_files';
 
+const STUDIO_STORAGE_KEY = 'umed_teledrive_studio_state_v1';
+
+interface PersistedStudioState {
+  activeTab?: StudioTab;
+  config?: Partial<TeleDriveStudioConfig>;
+  activeFileId?: string;
+  rawServiceJson?: string;
+  detectedClientEmail?: string;
+  detectedProjectId?: string;
+  simFileName?: string;
+  simCaption?: string;
+  simDriveFileId?: string;
+  simFileSizeMb?: string;
+}
+
+function loadPersistedStudioState(): PersistedStudioState {
+  try {
+    const raw = localStorage.getItem(STUDIO_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 function encodeUtf8ToBase64(str: string): string {
   const bytes = new TextEncoder().encode(str);
   let binary = '';
@@ -61,37 +88,137 @@ export default function TeleDriveBotStudioModal({
   defaultUniversityId = 'univ-dar-al-salam',
   onDraftSimulated
 }: TeleDriveBotStudioModalProps) {
-  const [activeTab, setActiveTab] = useState<StudioTab>('readiness');
+  const initialSaved = useMemo(() => loadPersistedStudioState(), []);
 
-  const [config, setConfig] = useState<TeleDriveStudioConfig>({
-    apiId: '',
-    apiHash: '',
-    sessionString: '',
-    botToken: '',
-    targetGroupId: '-1001987654321',
-    adminTelegramId: '',
-    defaultUniversityId,
-    defaultFolderId: '',
-    chunkSizeMb: 20,
-    port: 7860,
-    gdriveCredentialsB64: '',
-    firebaseCredentialsB64: ''
+  const [activeTab, setActiveTab] = useState<StudioTab>(() => {
+    const t = initialSaved.activeTab;
+    if (t === 'readiness' || t === 'session_gen' || t === 'simulator' || t === 'code_files') {
+      return t;
+    }
+    return 'readiness';
   });
 
-  const [activeFileId, setActiveFileId] = useState<string>('main.py');
+  const [config, setConfig] = useState<TeleDriveStudioConfig>(() => ({
+    apiId: initialSaved.config?.apiId ?? '',
+    apiHash: initialSaved.config?.apiHash ?? '',
+    sessionString: initialSaved.config?.sessionString ?? '',
+    botToken: initialSaved.config?.botToken ?? '',
+    targetGroupId: initialSaved.config?.targetGroupId ?? '-1001987654321',
+    adminTelegramId: initialSaved.config?.adminTelegramId ?? '',
+    defaultUniversityId: initialSaved.config?.defaultUniversityId || defaultUniversityId,
+    defaultFolderId: initialSaved.config?.defaultFolderId ?? '',
+    chunkSizeMb: initialSaved.config?.chunkSizeMb === 10 ? 10 : 20,
+    port: initialSaved.config?.port || 7860,
+    gdriveCredentialsB64: initialSaved.config?.gdriveCredentialsB64 ?? '',
+    firebaseCredentialsB64: initialSaved.config?.firebaseCredentialsB64 ?? ''
+  }));
+
+  const [activeFileId, setActiveFileId] = useState<string>(
+    () => initialSaved.activeFileId || 'main.py'
+  );
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [rawServiceJson, setRawServiceJson] = useState<string>('');
+  const [rawServiceJson, setRawServiceJson] = useState<string>(
+    () => initialSaved.rawServiceJson ?? ''
+  );
   const [jsonError, setJsonError] = useState<string | null>(null);
-  const [detectedClientEmail, setDetectedClientEmail] = useState<string>('');
-  const [detectedProjectId, setDetectedProjectId] = useState<string>('');
+  const [detectedClientEmail, setDetectedClientEmail] = useState<string>(
+    () => initialSaved.detectedClientEmail ?? ''
+  );
+  const [detectedProjectId, setDetectedProjectId] = useState<string>(
+    () => initialSaved.detectedProjectId ?? ''
+  );
+  const [clearedToast, setClearedToast] = useState<boolean>(false);
 
   // Live Telegram Draft Simulation State
-  const [simFileName, setSimFileName] = useState<string>('Lecture_05_Hematology_Anemia_Review.pdf');
-  const [simCaption, setSimCaption] = useState<string>('محاضرة الأنيميا وأمراض الدم السريرية #سنة_ثانية #دم #نظري');
-  const [simDriveFileId, setSimDriveFileId] = useState<string>('1x9K_umed_drive_sample_8821');
-  const [simFileSizeMb, setSimFileSizeMb] = useState<string>('18.4');
+  const [simFileName, setSimFileName] = useState<string>(
+    () => initialSaved.simFileName ?? 'Lecture_05_Hematology_Anemia_Review.pdf'
+  );
+  const [simCaption, setSimCaption] = useState<string>(
+    () => initialSaved.simCaption ?? 'محاضرة الأنيميا وأمراض الدم السريرية #سنة_ثانية #دم #نظري'
+  );
+  const [simDriveFileId, setSimDriveFileId] = useState<string>(
+    () => initialSaved.simDriveFileId ?? '1x9K_umed_drive_sample_8821'
+  );
+  const [simFileSizeMb, setSimFileSizeMb] = useState<string>(
+    () => initialSaved.simFileSizeMb ?? '18.4'
+  );
   const [simRunning, setSimRunning] = useState<boolean>(false);
   const [simNotice, setSimNotice] = useState<string | null>(null);
+
+  // Persist all studio state to localStorage on every change and when switching apps/tabs
+  useEffect(() => {
+    const saveNow = () => {
+      try {
+        const payload: PersistedStudioState = {
+          activeTab,
+          config,
+          activeFileId,
+          rawServiceJson,
+          detectedClientEmail,
+          detectedProjectId,
+          simFileName,
+          simCaption,
+          simDriveFileId,
+          simFileSizeMb
+        };
+        localStorage.setItem(STUDIO_STORAGE_KEY, JSON.stringify(payload));
+      } catch {}
+    };
+
+    saveNow();
+
+    const handleVisibilityOrHide = () => {
+      saveNow();
+    };
+
+    window.addEventListener('pagehide', handleVisibilityOrHide);
+    window.addEventListener('beforeunload', handleVisibilityOrHide);
+    document.addEventListener('visibilitychange', handleVisibilityOrHide);
+
+    return () => {
+      window.removeEventListener('pagehide', handleVisibilityOrHide);
+      window.removeEventListener('beforeunload', handleVisibilityOrHide);
+      document.removeEventListener('visibilitychange', handleVisibilityOrHide);
+    };
+  }, [
+    activeTab,
+    config,
+    activeFileId,
+    rawServiceJson,
+    detectedClientEmail,
+    detectedProjectId,
+    simFileName,
+    simCaption,
+    simDriveFileId,
+    simFileSizeMb
+  ]);
+
+  const handleClearSavedFields = () => {
+    const freshConfig: TeleDriveStudioConfig = {
+      apiId: '',
+      apiHash: '',
+      sessionString: '',
+      botToken: '',
+      targetGroupId: '-1001987654321',
+      adminTelegramId: '',
+      defaultUniversityId,
+      defaultFolderId: '',
+      chunkSizeMb: 20,
+      port: 7860,
+      gdriveCredentialsB64: '',
+      firebaseCredentialsB64: ''
+    };
+    setConfig(freshConfig);
+    setRawServiceJson('');
+    setJsonError(null);
+    setDetectedClientEmail('');
+    setDetectedProjectId('');
+    try {
+      localStorage.removeItem(STUDIO_STORAGE_KEY);
+    } catch {}
+    setClearedToast(true);
+    setTimeout(() => setClearedToast(false), 2000);
+  };
 
   const deliverables = useMemo(() => generateTeleDriveDeliverables(config), [config]);
   const activeFile = useMemo(
@@ -306,9 +433,15 @@ export default function TeleDriveBotStudioModal({
         {/* Modal Header */}
         <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3.5 sm:px-6 sm:py-4 border-b border-[var(--border-color)] bg-[var(--bg-elevated)] shrink-0">
           <div>
-            <h3 className="text-sm sm:text-base font-black text-[var(--text-primary)]">
-              مركز الإطلاق النهائي لبوت U_MED على Hugging Face Spaces (Docker)
-            </h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-sm sm:text-base font-black text-[var(--text-primary)]">
+                مركز الإطلاق النهائي لبوت U_MED على Hugging Face Spaces (Docker)
+              </h3>
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[11px] font-bold">
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                <span>محفوظ تلقائياً (لن تختفي المفاتيح عند الخروج أو تحديث الصفحة)</span>
+              </span>
+            </div>
             <p className="text-xs text-[var(--text-muted)] mt-0.5">
               فاحص المفاتيح الـ 8 + مولّد جلسة `SESSION_STRING` + مشفر `Base64` + حزمة النشر الجاهزة مجاناً 24/7 على المنفذ `7860`
             </p>
@@ -318,6 +451,16 @@ export default function TeleDriveBotStudioModal({
             <span className="px-3 py-1.5 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] font-mono text-xs font-bold text-[var(--text-primary)]">
               جاهزية المفاتيح: {validSecretsCount} / 8
             </span>
+
+            <button
+              type="button"
+              onClick={handleClearSavedFields}
+              className="px-3 py-2 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-rose-400 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="مسح كافة الحقول المحفوظة والبدء من جديد"
+            >
+              <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+              <span>{clearedToast ? 'تم المسح' : 'مسح الحقول'}</span>
+            </button>
 
             <button
               type="button"

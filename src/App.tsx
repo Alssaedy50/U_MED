@@ -428,8 +428,10 @@ export default function App() {
 
   const [activeTab, setActiveTabState] = useState<ActiveTabType>(() => {
     try {
-      const saved = sessionStorage.getItem('umed_active_tab') as ActiveTabType | null;
-      if (saved) return saved;
+      const savedLocal = localStorage.getItem('umed_active_tab') as ActiveTabType | null;
+      if (savedLocal) return savedLocal;
+      const savedSession = sessionStorage.getItem('umed_active_tab') as ActiveTabType | null;
+      if (savedSession) return savedSession;
     } catch (e) {}
     return 'student_dashboard';
   });
@@ -438,6 +440,7 @@ export default function App() {
     setActiveTabState(tab);
     setSidebarOpen(false);
     try {
+      localStorage.setItem('umed_active_tab', tab);
       sessionStorage.setItem('umed_active_tab', tab);
     } catch (e) {}
   };
@@ -504,11 +507,13 @@ export default function App() {
     isAuthorizedAdmin;
 
   // Strict Workspace Isolation:
-  // 1) When in Student Mode (!isAdminMode), block access to all admin tabs
-  // 2) Gate student tabs if enrollment was explicitly rejected
-  // 3) When in Leadership Mode (isAdminMode), default to 'roles' or 'enrollment_queue' if currently on a student tab
-  // 4) Block 'users_manager' and 'backup_restore' for anyone except Platform Owner
+  // 1) Wait until auth `loading` finishes so page refreshes never wipe out the saved admin tab
+  // 2) When in Student Mode (!isAdminMode), block access to all admin tabs
+  // 3) Gate student tabs if enrollment was explicitly rejected
+  // 4) When in Leadership Mode (isAdminMode), default to 'roles' or 'enrollment_queue' if currently on a student tab
+  // 5) Block 'users_manager' and 'backup_restore' for anyone except Platform Owner
   useEffect(() => {
+    if (loading) return;
     const studentTabs: ActiveTabType[] = [
       'student_dashboard',
       'student_library',
@@ -533,7 +538,7 @@ export default function App() {
     } else if (!isUniversityAdminOrOwner && activeTab === 'enrollment_queue') {
       setActiveTab('roles');
     }
-  }, [isAdminMode, isOwnerMode, isUniversityAdminOrOwner, activeTab, studentEnrollment?.status]);
+  }, [loading, isAdminMode, isOwnerMode, isUniversityAdminOrOwner, activeTab, studentEnrollment?.status]);
 
   // Live debounced uniqueness check during registration strictly separated by authMethod (phone vs email)
   useEffect(() => {

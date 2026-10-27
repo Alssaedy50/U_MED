@@ -84,7 +84,23 @@ export default function EducationalContentManager({
   const [statusFilter, setStatusFilter] = useState<'all' | 'published' | 'draft' | 'archived'>('all');
   const [typeFilter, setTypeFilter] = useState<ResourceType | 'all'>('all');
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
-  const [showBotStudioModal, setShowBotStudioModal] = useState<boolean>(false);
+  const [showBotStudioModal, setShowBotStudioModalState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('umed_teledrive_studio_open') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const setShowBotStudioModal = (open: boolean) => {
+    setShowBotStudioModalState(open);
+    try {
+      if (open) {
+        localStorage.setItem('umed_teledrive_studio_open', 'true');
+      } else {
+        localStorage.removeItem('umed_teledrive_studio_open');
+      }
+    } catch {}
+  };
   const [editingResource, setEditingResource] = useState<EducationalResource | null>(null);
   const [previewResource, setPreviewResource] = useState<EducationalResource | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
