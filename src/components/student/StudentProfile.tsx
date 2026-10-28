@@ -53,13 +53,21 @@ import {
   getStudentResults
 } from '../../services/assessmentService.ts';
 import { fetchEducationalResources } from '../../services/resourceService.ts';
+import { useAuth } from '../../context/AuthContext.tsx';
+import {
+  checkIdentifierUniqueness,
+  normalizeUsername,
+  validateUsernameFormat,
+  formatUserIdentifier
+} from '../../lib/firebase.ts';
+import { getUserAcademicContext } from '../../services/academicService.ts';
 
 interface StudentProfileProps {
   uid: string;
   userEmail: string;
   displayNameArabic: string;
   initialEnrollment?: StudentEnrollment | null;
-  onNavigateTab?: (tab: 'study' | 'library' | 'assessments') => void;
+  onNavigateTab?: (tab: 'study' | 'library' | 'assessments' | 'auth') => void;
 }
 
 interface ActivityItem {
@@ -79,7 +87,29 @@ export default function StudentProfile({
   initialEnrollment,
   onNavigateTab
 }: StudentProfileProps) {
-  const [enrollment, setEnrollment] = useState<StudentEnrollment | null>(initialEnrollment || null);
+  const { user, userProfile, updateUniqueUsername, registerWithUsername } = useAuth();
+
+  const buildFallbackEnrollment = (): StudentEnrollment => {
+    const savedCtx = getUserAcademicContext();
+    return {
+      id: uid ? `enr-${uid}` : 'enr-visitor-default',
+      uid: uid || 'visitor',
+      studentNameArabic: displayNameArabic || userProfile?.displayNameArabic || 'طالب الطب البشري',
+      academicStudentNumber: userProfile?.academicStudentNumber || '',
+      universityId: savedCtx.universityId || 'univ-dar-al-salam',
+      collegeId: savedCtx.collegeId || 'col-med-dar',
+      programId: savedCtx.programId || 'prog-mbbs',
+      curriculumVersionId: 'cur-dar-2024',
+      currentStudyLevelId: savedCtx.studyLevelId || 'lvl-4',
+      academicYear: '2025-2026',
+      status: 'approved',
+      enrolledAt: new Date().toISOString()
+    };
+  };
+
+  const [enrollment, setEnrollment] = useState<StudentEnrollment | null>(() =>
+    initialEnrollment || buildFallbackEnrollment()
+  );
   const [universityName, setUniversityName] = useState<string>('جامعة دار السلام الدولية للعلوم والتكنولوجيا');
   const [studyLevels, setStudyLevels] = useState<StudyLevel[]>([]);
   const [studyPeriods, setStudyPeriods] = useState<StudyPeriod[]>([]);
@@ -90,6 +120,112 @@ export default function StudentProfile({
   const [results, setResults] = useState<AssessmentResult[]>([]);
   const [myChangeRequests, setMyChangeRequests] = useState<AcademicChangeRequest[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+
+  // Unique Username Editing / Creation State
+  const [editingUsername, setEditingUsername] = useState<boolean>(false);
+  const [usernameInput, setUsernameInput] = useState<string>(userProfile?.username || '');
+  const [nameArInput, setNameArInput] = useState<string>(userProfile?.displayNameArabic || displayNameArabic || '');
+  const [quickPasswordInput, setQuickPasswordInput] = useState<string>('');
+  const [usernameSaving, setUsernameSaving] = useState<boolean>(false);
+  const [usernameStatusMsg, setUsernameStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [usernameAvailability, setUsernameAvailability] = useState<{
+    checking: boolean;
+    available: boolean | null;
+    reason?: string;
+  }>({ checking: false, available: null });
+
+  useEffect(() => {
+    if (userProfile?.username && !editingUsername) {
+      setUsernameInput(userProfile.username);
+    }
+    if (userProfile?.displayNameArabic && !editingUsername) {
+      setNameArInput(userProfile.displayNameArabic);
+    }
+  }, [userProfile?.username, userProfile?.displayNameArabic, editingUsername]);
+
+  useEffect(() => {
+    const candidate = normalizeUsername(usernameInput);
+    if (!candidate || candidate === userProfile?.username) {
+      setUsernameAvailability({ checking: false, available: null });
+      return;
+    }
+    const formatCheck = validateUsernameFormat(candidate);
+    if (!formatCheck.valid) {
+      setUsernameAvailability({
+        checking: false,
+        available: false,
+        reason: formatCheck.message
+      });
+      return;
+    }
+
+    let cancelled = false;
+    setUsernameAvailability({ checking: true, available: null });
+    const timer = setTimeout(async () => {
+      const check = await checkIdentifierUniqueness({
+        username: candidate,
+        excludeUid: user?.uid
+      });
+      if (!cancelled) {
+        setUsernameAvailability({
+          checking: false,
+          available: check.isUnique,
+          reason: check.message
+        });
+      }
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [usernameInput, user?.uid, userProfile?.username]);
+
+  const handleSaveOrClaimUsername = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setUsernameStatusMsg(null);
+    const norm = normalizeUsername(usernameInput);
+    const fmt = validateUsernameFormat(norm);
+    if (!fmt.valid) {
+      setUsernameStatusMsg({ type: 'error', text: fmt.message || 'اسم المستخدم غير صالح' });
+      return;
+    }
+
+    setUsernameSaving(true);
+    try {
+      if (user) {
+        await updateUniqueUsername(norm, nameArInput.trim() || undefined);
+        setEditingUsername(false);
+        setUsernameStatusMsg({
+          type: 'success',
+          text: `تم حفظ وتحديث اسم المستخدم الفريد (@${norm}) في السحابة بنجاح وحذف الاسم السابق فوراً ✓`
+        });
+      } else {
+        if (!quickPasswordInput || quickPasswordInput.length < 6) {
+          setUsernameStatusMsg({
+            type: 'error',
+            text: 'يرجى إدخال كلمة مرور من 6 أحرف أو أرقام على الأقل لحفظ حسابك سحابياً.'
+          });
+          setUsernameSaving(false);
+          return;
+        }
+        await registerWithUsername(norm, quickPasswordInput, nameArInput.trim() || norm);
+        setQuickPasswordInput('');
+        setEditingUsername(false);
+        setUsernameStatusMsg({
+          type: 'success',
+          text: `تم إنشاء حسابك السحابي الفوري باسم المستخدم الفريد (@${norm}) بنجاح بدون أي تعقيدات ✓`
+        });
+      }
+    } catch (err: any) {
+      setUsernameStatusMsg({
+        type: 'error',
+        text: err.message || 'تعذر حفظ اسم المستخدم الفريد في السحابة'
+      });
+    } finally {
+      setUsernameSaving(false);
+    }
+  };
 
   // Academic Change Request Modal/Form State
   const [showChangeForm, setShowChangeForm] = useState<boolean>(false);
@@ -102,17 +238,9 @@ export default function StudentProfile({
   const loadProfileData = async () => {
     setLoading(true);
     try {
-      const freshEnr = await fetchStudentEnrollment(uid);
-      const enr = freshEnr || initialEnrollment || null;
+      const freshEnr = uid && uid !== 'visitor' ? await fetchStudentEnrollment(uid) : null;
+      const enr = freshEnr || initialEnrollment || buildFallbackEnrollment();
       setEnrollment(enr);
-
-      // Allow both approved and pending batch members to view their profile
-      if (!enr || (enr.status !== 'approved' && enr.status !== 'pending')) {
-        setStudyPeriods([]);
-        setResources([]);
-        setAssessments([]);
-        return;
-      }
 
       const univId = enr.universityId || 'univ-dar-al-salam';
       const progId = enr.programId || 'prog-mbbs';
@@ -133,9 +261,9 @@ export default function StudentProfile({
         fetchStudyPeriods(levelId),
         fetchEducationalResources({ universityId: univId, studyLevelId: levelId, status: 'published' }),
         getPublishedAssessmentsForStudent(univId, levelId),
-        getStudentAttempts(uid),
-        getStudentResults(uid),
-        fetchAcademicChangeRequestsForAdmin(univId)
+        uid && uid !== 'visitor' ? getStudentAttempts(uid) : Promise.resolve([]),
+        uid && uid !== 'visitor' ? getStudentResults(uid) : Promise.resolve([]),
+        uid && uid !== 'visitor' ? fetchAcademicChangeRequestsForAdmin(univId) : Promise.resolve([])
       ]);
 
       const matchedUniv = univList.find(u => u.id === univId);
@@ -212,46 +340,6 @@ export default function StudentProfile({
       <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-12 text-center text-xs text-slate-400">
         <RefreshCw className="w-6 h-6 animate-spin mx-auto text-teal-400 mb-2" />
         <span>جارٍ تحميل الملف الأكاديمي وتقدم البلوكات والنشاط الأخير...</span>
-      </div>
-    );
-  }
-
-  // Students who have joined a batch (approved or pending verification) can view their profile
-  if (!enrollment || (enrollment.status !== 'approved' && enrollment.status !== 'pending')) {
-    return (
-      <div className="max-w-xl mx-auto umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-6 sm:p-8 text-center space-y-4 shadow-2xl overflow-hidden" dir="rtl">
-        <div className="w-14 h-14 rounded-2xl bg-amber-500/10 text-amber-400 mx-auto flex items-center justify-center">
-          <Clock className="w-8 h-8" />
-        </div>
-        <h2 className="text-lg font-bold text-white">
-          {!enrollment
-            ? 'يرجى إتمام تسجيل القيد الأكاديمي أولاً'
-            : enrollment.status === 'pending'
-            ? 'ملفك الأكاديمي وتقدم البلوكات بانتظار اعتماد القيد'
-            : 'طلب القيد الأكاديمي غير معتمد حالياً'}
-        </h2>
-        <p className="text-xs text-slate-300 leading-relaxed">
-          {!enrollment
-            ? 'لا يمكن استعراض تقدم البلوكات والمقررات والموارد الطبية قبل تقديم طلب القيد الأكاديمي واعتماده من إدارة الكلية.'
-            : 'تم استلام طلب قيدك الأكاديمي، ولن يتم فتح البلوكات الدراسية أو المحاضرات أو الاختبارات إلا بعد مراجعة واعتماد القيد رسمياً من قبل مشرف الجامعة.'}
-        </p>
-        <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
-          <button
-            onClick={loadProfileData}
-            className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 border border-slate-700"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>تحديث حالة الاعتماد</span>
-          </button>
-          {onNavigateTab && (
-            <button
-              onClick={() => onNavigateTab('study')}
-              className="px-5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold transition-colors"
-            >
-              العودة لبوابة القيد الأكاديمي
-            </button>
-          )}
-        </div>
       </div>
     );
   }
@@ -369,14 +457,19 @@ export default function StudentProfile({
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-lg sm:text-xl font-extrabold text-[var(--text-primary)]">
-                  د. {displayNameArabic}
+                  د. {userProfile?.displayNameArabic || displayNameArabic}
                 </h2>
+                {userProfile?.username && (
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-teal-500/20 text-teal-300 border border-teal-500/40" dir="ltr">
+                    @{userProfile.username}
+                  </span>
+                )}
                 <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
-                  enrollment?.status === 'approved'
+                  user
                     ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
-                    : 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                    : 'bg-sky-500/20 text-sky-300 border-sky-500/30'
                 }`}>
-                  {enrollment?.status === 'approved' ? 'عضو موثق بالدفعة ✓' : 'عضو بالدفعة (بانتظار توثيق المندوب)'}
+                  {user ? 'حساب سحابي مفعل ✓' : 'وضع التصفح الحر (بدون تسجيل إجباري)'}
                 </span>
               </div>
               <p className="text-xs text-slate-300 mt-1 flex items-center gap-1.5">
@@ -384,12 +477,19 @@ export default function StudentProfile({
                 <span>{universityName} • كلية الطب البشري (MBBS)</span>
               </p>
               <p className="text-[11px] text-slate-400 font-mono mt-0.5" dir="ltr">
-                {userEmail}
+                {userProfile?.username ? `@${userProfile.username}` : userEmail}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setIsEditingUsername(!isEditingUsername)}
+              className="px-3.5 py-2 rounded-xl bg-teal-500/20 hover:bg-teal-500/30 text-teal-300 border border-teal-500/40 text-xs font-bold flex items-center gap-1.5 transition-colors"
+            >
+              <AtSign className="w-3.5 h-3.5" />
+              <span>{user ? 'تعديل اسم المستخدم الفريد (@username)' : 'إنشاء اسم مستخدم وحساب سحابي فوري'}</span>
+            </button>
             <button
               onClick={loadProfileData}
               className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 border border-slate-700 transition-colors"
@@ -397,16 +497,112 @@ export default function StudentProfile({
               <RefreshCw className="w-3.5 h-3.5" />
               <span>تحديث البيانات</span>
             </button>
-            {enrollment && (
+            {user && enrollment && (
               <button
                 onClick={() => setShowChangeForm(!showChangeForm)}
                 className="px-4 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-bold transition-colors"
               >
-                {showChangeForm ? 'إغلاق نموذج التعديل' : 'طلب تعديل أكاديمي'}
+                {showChangeForm ? 'إغلاق نموذج التعديل' : 'تعديل المستوى / الدفعة'}
               </button>
             )}
           </div>
         </div>
+
+        {/* Cloud Unique Username (@username) Creation / Editing Panel */}
+        {(isEditingUsername || !user || usernameFeedback) && (
+          <div className="p-4 rounded-2xl bg-slate-950/90 border border-teal-500/30 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <AtSign className="w-4 h-4 text-teal-400" />
+                <h3 className="text-xs sm:text-sm font-bold text-white">
+                  {user
+                    ? 'اسم المستخدم الفريد الخاص بك في السحابة (@username)'
+                    : 'احجز اسم مستخدم فريد خاص بك (@username) لحفظ بياناتك سحابياً بدون إيميل أو تعقيدات'}
+                </h3>
+              </div>
+              {userProfile?.username && (
+                <span className="text-[11px] font-mono text-teal-300 bg-teal-500/10 px-2.5 py-0.5 rounded-lg border border-teal-500/20" dir="ltr">
+                  الحالي: @{userProfile.username}
+                </span>
+              )}
+            </div>
+
+            {usernameFeedback && (
+              <div className={`p-2.5 rounded-xl text-xs font-bold border ${
+                usernameFeedback.type === 'success'
+                  ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
+                  : 'bg-rose-500/15 border-rose-500/30 text-rose-300'
+              }`}>
+                {usernameFeedback.message}
+              </div>
+            )}
+
+            <form onSubmit={handleSaveOrClaimUsername} className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <div>
+                <label className="block text-[11px] text-slate-400 mb-1">اسم المستخدم الفريد (@username)</label>
+                <div className="relative" dir="ltr">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-teal-400 font-mono font-bold text-xs">@</span>
+                  <input
+                    type="text"
+                    required
+                    value={usernameDraft}
+                    onChange={(e) => setUsernameDraft(e.target.value.replace(/[^a-zA-Z0-9_.-]/g, '').toLowerCase())}
+                    placeholder="dr_ahmed"
+                    className="w-full pl-7 pr-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs font-mono focus:outline-none focus:border-teal-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] text-slate-400 mb-1">الاسم المعروض في المنصة (اختياري)</label>
+                <input
+                  type="text"
+                  value={displayNameDraft}
+                  onChange={(e) => setDisplayNameDraft(e.target.value)}
+                  placeholder="د. أحمد محمد"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs focus:outline-none focus:border-teal-500"
+                />
+              </div>
+
+              {!user ? (
+                <div>
+                  <label className="block text-[11px] text-slate-400 mb-1">كلمة مرور سريعة لحسابك</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      required
+                      value={quickPasswordDraft}
+                      onChange={(e) => setQuickPasswordDraft(e.target.value)}
+                      placeholder="6 أحرف أو أكثر"
+                      dir="ltr"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs font-mono focus:outline-none focus:border-teal-500"
+                    />
+                    <button
+                      type="submit"
+                      disabled={savingUsername}
+                      className="px-4 py-2 rounded-xl bg-teal-500 hover:bg-teal-400 disabled:opacity-50 text-slate-950 font-bold text-xs whitespace-nowrap transition-colors"
+                    >
+                      {savingUsername ? 'جاري الحفظ...' : 'إنشاء وحفظ سحابياً'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-end gap-2">
+                  <button
+                    type="submit"
+                    disabled={savingUsername}
+                    className="w-full py-2 px-4 rounded-xl bg-teal-500 hover:bg-teal-400 disabled:opacity-50 text-slate-950 font-bold text-xs transition-colors"
+                  >
+                    {savingUsername ? 'جاري التحديث في السحابة...' : 'حفظ وتحديث اسم المستخدم السحابي'}
+                  </button>
+                </div>
+              )}
+            </form>
+            <p className="text-[11px] text-slate-400">
+              يتم التحقق من تفرد اسم المستخدم سحابياً وحجزه باسمك فوراً، وفي حال تعديله يتم حذف الاسم القديم من السحابة تلقائياً لمنع أي تكرار.
+            </p>
+          </div>
+        )}
 
         {/* Summary Metric Cards */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">

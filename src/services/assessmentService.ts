@@ -1074,13 +1074,17 @@ export async function deleteAssessment(
   const existing = await ensureAssessmentsInitialized(universityId);
 
   try {
-    await deleteDoc(doc(db, 'assessments', assessmentId));
+    await Promise.all([
+      deleteDoc(doc(db, 'assessments', assessmentId)),
+      deleteDoc(doc(db, 'system', `shared_exam_${assessmentId}`)).catch(() => {})
+    ]);
   } catch (err) {}
 
   try {
     const filtered = existing.filter(a => a.id !== assessmentId);
     localStorage.setItem(`${LOCAL_STORAGE_PREFIX}assessments_${universityId}`, JSON.stringify(filtered));
     localStorage.setItem(`${LOCAL_STORAGE_PREFIX}assessments_init_${universityId}`, 'true');
+    localStorage.removeItem(`${LOCAL_STORAGE_PREFIX}shared_exam_${assessmentId}`);
   } catch (e) {}
 
   try {

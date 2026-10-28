@@ -37,7 +37,8 @@ import {
   X,
   Lock,
   Building2,
-  Layers
+  Layers,
+  AtSign
 } from 'lucide-react';
 import {
   UserRole,
@@ -95,6 +96,7 @@ export default function PlatformUsersManager({
   // Edit User Modal State
   const [editingUser, setEditingUser] = useState<ManagedCloudUserRecord | null>(null);
   const [editNameAr, setEditNameAr] = useState<string>('');
+  const [editUsername, setEditUsername] = useState<string>('');
   const [editEmail, setEditEmail] = useState<string>('');
   const [editPhone, setEditPhone] = useState<string>('');
   const [editAcadNum, setEditAcadNum] = useState<string>('');
@@ -194,6 +196,7 @@ export default function PlatformUsersManager({
   const openEditModal = (u: ManagedCloudUserRecord) => {
     setEditingUser(u);
     setEditNameAr(u.displayNameArabic);
+    setEditUsername(u.username || '');
     setEditEmail(u.email);
     setEditPhone(u.phone);
     setEditAcadNum(u.academicStudentNumber);
@@ -219,6 +222,7 @@ export default function PlatformUsersManager({
         callerEmail,
         targetUid: editingUser.uid,
         displayNameArabic: editNameAr,
+        username: editUsername,
         email: editEmail,
         phone: editPhone,
         academicStudentNumber: editAcadNum,
@@ -347,6 +351,7 @@ export default function PlatformUsersManager({
     const q = searchQuery.trim().toLowerCase();
     return (
       u.displayNameArabic.toLowerCase().includes(q) ||
+      (u.username && u.username.toLowerCase().includes(q)) ||
       u.email.toLowerCase().includes(q) ||
       u.phone.toLowerCase().includes(q) ||
       u.academicStudentNumber.toLowerCase().includes(q) ||
@@ -730,6 +735,13 @@ export default function PlatformUsersManager({
 
                       {/* Identifiers Row */}
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-slate-300">
+                        {u.username && (
+                          <span className="flex items-center gap-1 font-mono font-bold text-teal-300 bg-teal-500/10 px-2 py-0.5 rounded border border-teal-500/30" dir="ltr">
+                            <AtSign className="w-3 h-3 text-teal-400 shrink-0" />
+                            <span>{u.username}</span>
+                          </span>
+                        )}
+
                         {u.isPrimaryOwner ? (
                           <span className="flex items-center gap-1.5 font-mono text-amber-300 break-all" dir="ltr">
                             <Mail className="w-3.5 h-3.5 text-amber-400 shrink-0" />
@@ -741,7 +753,7 @@ export default function PlatformUsersManager({
                             <span>{u.email}</span>
                           </span>
                         ) : (
-                          <span className="text-slate-500 text-[11px]">بدون بريد (تسجيل عبر الهاتف)</span>
+                          <span className="text-slate-500 text-[11px]">حساب باسم مستخدم فريد (@username)</span>
                         )}
 
                         {u.phone && (
@@ -772,7 +784,9 @@ export default function PlatformUsersManager({
                         <span>
                           طريقة التسجيل:{' '}
                           <strong className="text-slate-300">
-                            {u.registrationMethod === 'phone'
+                            {u.registrationMethod === 'username'
+                              ? 'اسم مستخدم فريد (@username)'
+                              : u.registrationMethod === 'phone'
                               ? 'برقم الهاتف'
                               : u.registrationMethod === 'google'
                               ? 'حساب Google'
@@ -887,9 +901,9 @@ export default function PlatformUsersManager({
             </div>
 
             <form onSubmit={handleSaveUserEdits} className="space-y-3.5">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-slate-300 mb-1 font-semibold">الاسم الرباعي بالعربية:</label>
+                  <label className="block text-slate-300 mb-1 font-semibold">الاسم المعروض بالعربية:</label>
                   <input
                     type="text"
                     required
@@ -900,7 +914,21 @@ export default function PlatformUsersManager({
                 </div>
 
                 <div>
-                  <label className="block text-slate-300 mb-1 font-semibold">رقم القيد الأكاديمي (فريد):</label>
+                  <label className="block text-slate-300 mb-1 font-semibold">اسم المستخدم الفريد (@username):</label>
+                  <div className="relative" dir="ltr">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-teal-400 font-mono font-bold">@</span>
+                    <input
+                      type="text"
+                      value={editUsername}
+                      onChange={(e) => setEditUsername(e.target.value.replace(/[^a-zA-Z0-9_.-]/g, '').toLowerCase())}
+                      placeholder="dr_ahmed"
+                      className="w-full pl-6 pr-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 mb-1 font-semibold">رقم القيد الأكاديمي (اختياري):</label>
                   <input
                     type="text"
                     value={editAcadNum}

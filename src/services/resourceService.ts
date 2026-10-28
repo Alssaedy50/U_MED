@@ -851,7 +851,12 @@ export async function deleteEducationalResource(resourceId: string): Promise<voi
   try {
     await Promise.all([
       deleteDoc(doc(db, 'educationalResources', resourceId)),
-      deleteDoc(doc(db, 'educational_resources', resourceId)).catch(() => {})
+      deleteDoc(doc(db, 'educational_resources', resourceId)).catch(() => {}),
+      fetch('/api/teledrive/delete-resource', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resourceId })
+      }).catch(() => {})
     ]);
     if (target?.url?.startsWith('umed-cloud://')) {
       await deleteCloudFileChunks(target.url, target.chunkCount);

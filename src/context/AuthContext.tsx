@@ -19,6 +19,12 @@ import {
   signUpWithEmail, 
   signInWithPhone,
   signUpWithPhone,
+  signUpWithUsername,
+  signInWithIdentifier,
+  claimOrUpdateUniqueUsername,
+  ensureUserHasUniqueCloudUsername,
+  normalizeUsername,
+  validateUsernameFormat,
   normalizeYemenPhone,
   normalizeEmail,
   normalizeAcademicId,
@@ -50,19 +56,31 @@ interface AuthContextType {
   firestoreLatency: number | null;
   firestoreError: string | null;
   loginGoogle: () => Promise<void>;
+  loginWithIdentifier: (identifier: string, pass: string) => Promise<void>;
+  registerWithUsername: (
+    username: string,
+    pass: string,
+    nameArabic?: string
+  ) => Promise<UserProfile>;
+  updateUniqueUsername: (
+    newUsername: string,
+    displayNameArabic?: string
+  ) => Promise<UserProfile>;
   loginEmail: (email: string, pass: string) => Promise<void>;
   registerEmail: (
     email: string,
     pass: string,
-    nameArabic: string,
-    academicStudentNumber?: string
+    nameArabic?: string,
+    academicStudentNumber?: string,
+    customUsername?: string
   ) => Promise<void>;
   loginPhone: (phone: string, pass: string) => Promise<void>;
   registerPhone: (
     phone: string,
     pass: string,
-    nameArabic: string,
-    academicStudentNumber?: string
+    nameArabic?: string,
+    academicStudentNumber?: string,
+    customUsername?: string
   ) => Promise<void>;
   verifyCurrentAccount: (params: {
     phoneCodeInput?: string;
@@ -184,6 +202,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (currentUser) {
         setUser(currentUser);
+        setPendingVerification(null);
 
         // Immediately hydrate cached role and profile so UI renders without waiting on slow mobile networks
         try {
@@ -211,7 +230,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Release initial loading screen immediately
         setLoading(false);
 
-        // Background cloud verification & synchronization
+        // Background cloud synchronization & unique username guarantee
         (async () => {
           if (!isInitialOwnerEmail(currentUser.email)) {
             const wasDeleted = await isAccountDeletedInCloud(currentUser.uid);
@@ -230,18 +249,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
           }
 
-          if (!isInitialOwnerEmail(currentUser.email)) {
-            getVerificationChallenge(currentUser.uid).then((ch) => {
-              if (ch && (!ch.emailVerified || !ch.phoneVerified)) {
-                setPendingVerification(ch);
-              } else {
-                setPendingVerification(null);
-              }
-            }).catch(() => {});
-          } else {
-            setPendingVerification(null);
-          }
-
           try {
             await currentUser.getIdToken();
           } catch (err: any) {
@@ -250,16 +257,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
           try {
             await loadRoleForUser(currentUser);
-            const profile = await fetchUserProfile(currentUser.uid);
-            if (profile) {
-              setUserProfile(profile);
-              if (profile.isVerified) {
-                setPendingVerification(null);
-              }
-              try {
-                localStorage.setItem(`umed_cached_profile_${currentUser.uid}`, JSON.stringify(profile));
-              } catch (e) {}
-            }
+            const existingProfile = await fetchUserProfile(currentUser.uid);
+            const ensuredProfile = await ensureUserHasUniqueCloudUsername(currentUser, existingProfile);
+            setUserProfile(ensuredProfile);
+            setPendingVerification(null);
+            try {
+              localStorage.setItem(`umed_cached_profile_${currentUser.uid}`, JSON.stringify(ensuredProfile));
+            } catch (e) {}
           } catch (err) {
             console.warn('Could not load user data from remote Firestore:', err);
           }
@@ -281,9 +285,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (snap.exists()) {
               const p = snap.data() as UserProfile;
               setUserProfile(p);
-              if (p.isVerified) {
-                setPendingVerification(null);
-              }
+              setPendingVerification(null);
               try {
                 localStorage.setItem(`umed_cached_profile_${currentUser.uid}`, JSON.stringify(p));
               } catch (e) {}
@@ -330,48 +332,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         });
       }
       const existing = await fetchUserProfile(u.uid);
-      if (!existing) {
-        const uniqueCheck = await checkIdentifierUniqueness({
-          email: u.email || undefined,
-          excludeUid: u.uid,
-          allowOwnerSelfRegister: isOwner
-        });
-        if (!uniqueCheck.isUnique) {
-          await logOut();
-          throw new Error(uniqueCheck.message || 'هذا البريد مسجل مسبقاً لحساب آخر');
-        }
-        const nowIso = new Date().toISOString();
-        const newProf: UserProfile = {
-          uid: u.uid,
-          email: u.email ? normalizeEmail(u.email) : '',
-          displayNameArabic: u.displayName || 'طالب طب بشري',
-          avatarUrl: u.photoURL || undefined,
-          registrationMethod: 'google',
-          isActive: true,
-          isArchived: false,
-          emailVerified: true,
-          phoneVerified: true,
-          isVerified: true,
-          verifiedAt: nowIso,
-          createdAt: nowIso,
-          updatedAt: nowIso
-        };
-        await saveUserProfile(newProf);
-        setUserProfile(newProf);
-      }
-      await loadRoleForUser(u);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loginEmail = async (email: string, pass: string) => {
-    setLoading(true);
-    try {
-      const u = await signInWithEmail(email, pass);
-      if (isInitialOwnerEmail(u.email)) {
-        await syncAndDeduplicatePrimaryOwnerIdentity({ ownerUid: u.uid });
-      }
+      const ensured = await ensureUserHasUniqueCloudUsername(u, existing);
+      setUserProfile(ensured);
+      setPendingVerification(null);
       await loadRoleForUser(u);
     } finally {
       setLoading(false);
@@ -379,13 +342,81 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   /**
-   * Separated Email Registration: Registers using Email ONLY (no phone required).
+   * Frictionless Instant Account Creation with Unique Username ONLY (zero email/OTP/academic ID complexity)
+   */
+  const registerWithUsername = async (
+    username: string,
+    pass: string,
+    nameArabic?: string
+  ): Promise<UserProfile> => {
+    setLoading(true);
+    try {
+      const { user: u, profile } = await signUpWithUsername(username, pass, nameArabic);
+      setUserProfile(profile);
+      setPendingVerification(null);
+      try {
+        localStorage.setItem(`umed_cached_profile_${u.uid}`, JSON.stringify(profile));
+      } catch (e) {}
+      await loadRoleForUser(u);
+      return profile;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /**
+   * Unified Sign-In: Accepts Unique Username (@username), Email, or Yemen Phone Number
+   */
+  const loginWithIdentifier = async (identifier: string, pass: string) => {
+    setLoading(true);
+    try {
+      const u = await signInWithIdentifier(identifier, pass);
+      if (isInitialOwnerEmail(u.email)) {
+        await syncAndDeduplicatePrimaryOwnerIdentity({ ownerUid: u.uid });
+      }
+      const existing = await fetchUserProfile(u.uid);
+      const ensured = await ensureUserHasUniqueCloudUsername(u, existing);
+      setUserProfile(ensured);
+      setPendingVerification(null);
+      await loadRoleForUser(u);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /**
+   * Updates the current user's unique username in Cloud Firestore, immediately deleting the old username reservation.
+   */
+  const updateUniqueUsername = async (
+    newUsername: string,
+    displayNameArabic?: string
+  ): Promise<UserProfile> => {
+    if (!user) throw new Error('يجب تسجيل الدخول أو إنشاء حساب أولاً لتعديل اسم المستخدم الفريد.');
+    const updated = await claimOrUpdateUniqueUsername({
+      uid: user.uid,
+      newUsername,
+      displayNameArabic
+    });
+    setUserProfile(updated);
+    try {
+      localStorage.setItem(`umed_cached_profile_${user.uid}`, JSON.stringify(updated));
+    } catch (e) {}
+    return updated;
+  };
+
+  const loginEmail = async (email: string, pass: string) => {
+    return loginWithIdentifier(email, pass);
+  };
+
+  /**
+   * Optional Email Registration (no mandatory verification or academic ID required)
    */
   const registerEmail = async (
     email: string,
     pass: string,
-    nameArabic: string,
-    academicStudentNumber?: string
+    nameArabic?: string,
+    academicStudentNumber?: string,
+    customUsername?: string
   ) => {
     setLoading(true);
     try {
@@ -394,9 +425,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const normAcad = academicStudentNumber && academicStudentNumber.trim()
         ? normalizeAcademicId(academicStudentNumber)
         : undefined;
+      const normUser = customUsername && customUsername.trim()
+        ? normalizeUsername(customUsername)
+        : undefined;
 
-      // 1. Pre-Creation Uniqueness Validation (Email + Academic Student Number)
       const uniqueness = await checkIdentifierUniqueness({
+        username: normUser,
         email: normEmail,
         academicStudentNumber: normAcad,
         allowOwnerSelfRegister: isOwner
@@ -405,14 +439,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         throw new Error(uniqueness.message || 'البيانات المدخلة مسجلة مسبقاً لحساب آخر في المنصة.');
       }
 
-      // 2. Create Firebase Auth Account
       const u = await signUpWithEmail(normEmail, pass);
       const nowIso = new Date().toISOString();
 
       if (isOwner) {
         await syncAndDeduplicatePrimaryOwnerIdentity({
           ownerUid: u.uid,
-          displayNameArabic: nameArabic.trim(),
+          displayNameArabic: nameArabic?.trim() || undefined,
           academicStudentNumber: normAcad
         });
         setPendingVerification(null);
@@ -420,39 +453,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
-      // 3. Reserve Unique Identifiers in Cloud Firestore (Email + Academic ID)
-      await reserveUniqueIdentifiers({
+      const baseProf: UserProfile = {
         uid: u.uid,
+        ...(normUser ? { username: normUser } : {}),
         email: normEmail,
-        academicStudentNumber: normAcad
-      });
-
-      // 4. Issue Email-Only Verification Challenge
-      const challenge = await issueVerificationChallenge(u, {
-        email: normEmail,
-        method: 'email'
-      });
-      setPendingVerification(challenge);
-
-      const newProf: UserProfile = {
-        uid: u.uid,
-        email: normEmail,
-        displayNameArabic: nameArabic.trim(),
+        displayNameArabic: (nameArabic && nameArabic.trim()) || normUser || normEmail.split('@')[0],
         ...(normAcad ? { academicStudentNumber: normAcad } : {}),
         registrationMethod: 'email',
         isActive: true,
         isArchived: false,
-        emailVerified: Boolean(challenge.emailVerified),
+        emailVerified: true,
         phoneVerified: true,
-        isVerified: Boolean(challenge.emailVerified),
+        isVerified: true,
+        verifiedAt: nowIso,
         createdAt: nowIso,
         updatedAt: nowIso
       };
 
-      await saveUserProfile(newProf);
-      setUserProfile(newProf);
+      const ensuredProf = await ensureUserHasUniqueCloudUsername(u, baseProf);
+      await reserveUniqueIdentifiers({
+        uid: u.uid,
+        username: ensuredProf.username,
+        email: normEmail,
+        academicStudentNumber: normAcad
+      });
+
+      setPendingVerification(null);
+      setUserProfile(ensuredProf);
       try {
-        localStorage.setItem(`umed_cached_profile_${u.uid}`, JSON.stringify(newProf));
+        localStorage.setItem(`umed_cached_profile_${u.uid}`, JSON.stringify(ensuredProf));
       } catch (e) {}
       await loadRoleForUser(u);
     } finally {
@@ -461,23 +490,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const loginPhone = async (phone: string, pass: string) => {
-    setLoading(true);
-    try {
-      const u = await signInWithPhone(phone, pass);
-      await loadRoleForUser(u);
-    } finally {
-      setLoading(false);
-    }
+    return loginWithIdentifier(phone, pass);
   };
 
   /**
-   * Separated Phone Registration: Registers using Yemen Phone Number ONLY (no email required).
+   * Optional Phone Registration (no mandatory verification or academic ID required)
    */
   const registerPhone = async (
     phone: string,
     pass: string,
-    nameArabic: string,
-    academicStudentNumber?: string
+    nameArabic?: string,
+    academicStudentNumber?: string,
+    customUsername?: string
   ) => {
     setLoading(true);
     try {
@@ -488,9 +512,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const normAcad = academicStudentNumber && academicStudentNumber.trim()
         ? normalizeAcademicId(academicStudentNumber)
         : undefined;
+      const normUser = customUsername && customUsername.trim()
+        ? normalizeUsername(customUsername)
+        : undefined;
 
-      // 1. Pre-Creation Uniqueness Validation (Phone + Academic Student Number)
       const uniqueness = await checkIdentifierUniqueness({
+        username: normUser,
         phone: normPhone,
         academicStudentNumber: normAcad
       });
@@ -498,44 +525,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         throw new Error(uniqueness.message || 'البيانات المدخلة مسجلة مسبقاً لحساب آخر في المنصة.');
       }
 
-      // 2. Create Firebase Auth Account for Phone
       const { user: u, normalizedPhone } = await signUpWithPhone(normPhone, pass);
       const nowIso = new Date().toISOString();
 
-      // 3. Reserve Unique Identifiers in Cloud Firestore (Phone + Academic ID)
-      await reserveUniqueIdentifiers({
+      const baseProf: UserProfile = {
         uid: u.uid,
-        phone: normalizedPhone,
-        academicStudentNumber: normAcad
-      });
-
-      // 4. Issue Phone-Only Verification Challenge
-      const challenge = await issueVerificationChallenge(u, {
-        phone: normalizedPhone,
-        method: 'phone'
-      });
-      setPendingVerification(challenge);
-
-      const newProf: UserProfile = {
-        uid: u.uid,
+        ...(normUser ? { username: normUser } : {}),
         email: '',
         phone: normalizedPhone,
         ...(normAcad ? { academicStudentNumber: normAcad } : {}),
-        displayNameArabic: nameArabic.trim(),
+        displayNameArabic: (nameArabic && nameArabic.trim()) || normUser || `user_${normalizedPhone.slice(-4)}`,
         registrationMethod: 'phone',
         isActive: true,
         isArchived: false,
         emailVerified: true,
-        phoneVerified: Boolean(challenge.phoneVerified),
-        isVerified: Boolean(challenge.phoneVerified),
+        phoneVerified: true,
+        isVerified: true,
+        verifiedAt: nowIso,
         createdAt: nowIso,
         updatedAt: nowIso
       };
 
-      await saveUserProfile(newProf);
-      setUserProfile(newProf);
+      const ensuredProf = await ensureUserHasUniqueCloudUsername(u, baseProf);
+      await reserveUniqueIdentifiers({
+        uid: u.uid,
+        username: ensuredProf.username,
+        phone: normalizedPhone,
+        academicStudentNumber: normAcad
+      });
+
+      setPendingVerification(null);
+      setUserProfile(ensuredProf);
       try {
-        localStorage.setItem(`umed_cached_profile_${u.uid}`, JSON.stringify(newProf));
+        localStorage.setItem(`umed_cached_profile_${u.uid}`, JSON.stringify(ensuredProf));
       } catch (e) {}
       await loadRoleForUser(u);
     } finally {
@@ -715,6 +737,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         firestoreLatency,
         firestoreError,
         loginGoogle,
+        loginWithIdentifier,
+        registerWithUsername,
+        updateUniqueUsername,
         loginEmail,
         registerEmail,
         loginPhone,

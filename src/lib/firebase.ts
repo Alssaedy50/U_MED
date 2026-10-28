@@ -236,6 +236,90 @@ export function normalizeAcademicId(academicInput: string): string {
     .replace(/-+/g, '-');
 }
 
+export function normalizeUsername(usernameInput: string): string {
+  return (usernameInput || '')
+    .trim()
+    .replace(/^@+/, '')
+    .replace(/\s+/g, '_')
+    .toLowerCase()
+    .replace(/[^a-z0-9._\-\u0600-\u06FF]/gi, '');
+}
+
+export function validateUsernameFormat(usernameInput: string): {
+  valid: boolean;
+  normalized: string;
+  message?: string;
+} {
+  const normalized = normalizeUsername(usernameInput);
+  if (!normalized || normalized.length < 3) {
+    return {
+      valid: false,
+      normalized,
+      message: 'اسم المستخدم يجب أن يتكون من 3 أحرف أو أرقام على الأقل (مثال: ahmed_med).'
+    };
+  }
+  if (normalized.length > 30) {
+    return {
+      valid: false,
+      normalized: normalized.slice(0, 30),
+      message: 'اسم المستخدم يجب ألا يتجاوز 30 حرفاً.'
+    };
+  }
+  return { valid: true, normalized };
+}
+
+export function getUsernameDocKey(usernameInput: string): string {
+  const norm = normalizeUsername(usernameInput);
+  if (!norm) return '';
+  return `username_${norm}`;
+}
+
+export function usernameToAuthEmail(usernameInput: string): string {
+  const check = validateUsernameFormat(usernameInput);
+  if (!check.valid || !check.normalized) {
+    throw new Error(check.message || 'INVALID_USERNAME');
+  }
+  const norm = check.normalized;
+  if (/^[a-z0-9._-]+$/.test(norm)) {
+    return `user_${norm}@users.umed.edu.ye`;
+  }
+  const hexEncoded = Array.from(norm)
+    .map((ch) => ch.charCodeAt(0).toString(16))
+    .join('_');
+  return `user_u${hexEncoded}@users.umed.edu.ye`;
+}
+
+export function isSyntheticUserEmail(email?: string | null): boolean {
+  if (!email) return false;
+  const lower = email.trim().toLowerCase();
+  return (
+    (lower.startsWith('phone_') && lower.endsWith('@umed.edu.ye')) ||
+    (lower.startsWith('user_') && lower.endsWith('@users.umed.edu.ye'))
+  );
+}
+
+export function extractUsernameFromAuthEmail(email?: string | null): string {
+  if (!email) return '';
+  const lower = email.trim().toLowerCase();
+  const mAscii = lower.match(/^user_([a-z0-9._-]+)@users\.umed\.edu\.ye$/i);
+  if (mAscii && !mAscii[1].startsWith('u')) {
+    return mAscii[1];
+  }
+  const mHex = lower.match(/^user_u([0-9a-f_]+)@users\.umed\.edu\.ye$/i);
+  if (mHex && mHex[1]) {
+    try {
+      return mHex[1]
+        .split('_')
+        .filter(Boolean)
+        .map((hex) => String.fromCharCode(parseInt(hex, 16)))
+        .join('');
+    } catch {
+      return mHex[1];
+    }
+  }
+  return '';
+}
+
 export function getAcademicIdDocKey(academicInput: string): string {
   const alphanumeric = academicInput.trim().toUpperCase().replace(/[^A-Z0-9\u0600-\u06FF]/g, '');
   return `acad_${alphanumeric}`;
@@ -256,7 +340,7 @@ export function isPhoneIdentifier(input: string): boolean {
   const trimmed = input.trim();
   if (!trimmed || trimmed.includes('@')) return false;
   const digits = trimmed.replace(/\D/g, '');
-  return digits.length >= 8;
+  return digits.length >= 8 && /^[\d+\s()-]+$/.test(trimmed);
 }
 
 export function phoneToAuthEmail(phoneInput: string): string {
@@ -268,7 +352,14 @@ export function phoneToAuthEmail(phoneInput: string): string {
   return `phone_${cleanDigits}@umed.edu.ye`;
 }
 
-export function formatUserIdentifier(email?: string | null, phone?: string | null): string {
+export function formatUserIdentifier(
+  email?: string | null,
+  phone?: string | null,
+  username?: string | null
+): string {
+  if (username && username.trim()) return `@${normalizeUsername(username)}`;
+  const extractedUser = extractUsernameFromAuthEmail(email);
+  if (extractedUser) return `@${extractedUser}`;
   if (phone && phone.trim()) return phone.trim();
   if (!email) return '';
   const match = email.match(/^phone_(\d+)@umed\.edu\.ye$/i);
@@ -337,6 +428,7 @@ export function getCachedPrimaryOwnerIdentity(): PrimaryOwnerIdentityConfig {
         secondaryEmail: 'alssaedy500@gmail.com',
         emails: ['alssaedy50@gmail.com', 'alssaedy500@gmail.com'],
         phone: normalizeYemenPhone(parsed.phone || DEFAULT_OWNER_PHONE) || DEFAULT_OWNER_PHONE,
+        username: parsed.username || 'umed_owner',
         displayNameArabic: parsed.displayNameArabic || DEFAULT_OWNER_NAME_ARABIC,
         academicStudentNumber: parsed.academicStudentNumber || DEFAULT_OWNER_ACADEMIC_ID
       };
@@ -347,6 +439,7 @@ export function getCachedPrimaryOwnerIdentity(): PrimaryOwnerIdentityConfig {
     secondaryEmail: 'alssaedy500@gmail.com',
     emails: ['alssaedy50@gmail.com', 'alssaedy500@gmail.com'],
     phone: DEFAULT_OWNER_PHONE,
+    username: 'umed_owner',
     displayNameArabic: DEFAULT_OWNER_NAME_ARABIC,
     academicStudentNumber: DEFAULT_OWNER_ACADEMIC_ID,
     updatedAt: new Date().toISOString()
@@ -364,6 +457,7 @@ export async function fetchPrimaryOwnerIdentity(): Promise<PrimaryOwnerIdentityC
         secondaryEmail: 'alssaedy500@gmail.com',
         emails: ['alssaedy50@gmail.com', 'alssaedy500@gmail.com'],
         phone: normalizeYemenPhone(data.phone || fallback.phone) || DEFAULT_OWNER_PHONE,
+        username: data.username || fallback.username || 'umed_owner',
         displayNameArabic: data.displayNameArabic || fallback.displayNameArabic,
         academicStudentNumber: data.academicStudentNumber || fallback.academicStudentNumber,
         ownerUid: data.ownerUid || fallback.ownerUid,
@@ -421,12 +515,11 @@ export async function releaseIdentifierKeyFromCloud(docKey?: string): Promise<vo
 }
 
 /**
- * Checks that Email, Phone Number, and Academic Student Number are 100% unique
+ * Checks that Username, Email, Phone Number, and Academic Student Number are 100% unique
  * and not registered to any other active user account (`uid !== excludeUid`).
- * Also enforces Primary Owner identifier protection so no other account can claim
- * alssaedy50@gmail.com, alssaedy500@gmail.com, or the Primary Owner's phone number.
  */
 export async function checkIdentifierUniqueness(params: {
+  username?: string;
   email?: string;
   phone?: string;
   academicStudentNumber?: string;
@@ -434,15 +527,80 @@ export async function checkIdentifierUniqueness(params: {
   allowOwnerSelfRegister?: boolean;
 }): Promise<{
   isUnique: boolean;
-  conflictField?: 'email' | 'phone' | 'academic_id';
+  conflictField?: 'username' | 'email' | 'phone' | 'academic_id';
   message?: string;
 }> {
   const excludeUid = params.excludeUid?.trim() || '';
   const ownerIdentity = await fetchPrimaryOwnerIdentity();
   const isCallerOwnerEmail = Boolean(params.email && isInitialOwnerEmail(params.email));
 
+  // 0. Check Unique Username (`username`) Uniqueness in Cloud Firestore
+  if (params.username && params.username.trim()) {
+    const usernameValidation = validateUsernameFormat(params.username);
+    if (!usernameValidation.valid) {
+      return {
+        isUnique: false,
+        conflictField: 'username',
+        message: usernameValidation.message
+      };
+    }
+    const normUsername = usernameValidation.normalized;
+    const usernameDocId = getUsernameDocKey(normUsername);
+
+    let cloudChecked = false;
+    try {
+      const snap = await getDoc(doc(db, 'uniqueIdentifiers', usernameDocId));
+      cloudChecked = true;
+      if (snap.exists()) {
+        const data = snap.data() as UniqueIdentifierRecord;
+        const isDeleted = data.uid ? await isAccountDeletedInCloud(data.uid) : false;
+        if (isDeleted) {
+          await releaseIdentifierKeyFromCloud(usernameDocId);
+        } else {
+          saveLocalUniqueRecord(data);
+          if (data.uid && data.uid !== excludeUid) {
+            return {
+              isUnique: false,
+              conflictField: 'username',
+              message: `اسم المستخدم (@${normUsername}) محجوز ومستخدم مسبقاً في السحابة. يرجى اختيار اسم مستخدم فريد آخر.`
+            };
+          }
+        }
+      } else {
+        removeLocalUniqueRecord(usernameDocId);
+      }
+    } catch (e) {}
+
+    if (!cloudChecked) {
+      const localCache = getLocalUniqueCache();
+      const cachedRec = localCache[usernameDocId];
+      if (cachedRec && cachedRec.uid && cachedRec.uid !== excludeUid) {
+        return {
+          isUnique: false,
+          conflictField: 'username',
+          message: `اسم المستخدم (@${normUsername}) مستخدم مسبقاً لحساب آخر.`
+        };
+      }
+    }
+
+    // Also verify against userProfiles collection in Firestore
+    try {
+      const q = query(collection(db, 'userProfiles'), where('username', '==', normUsername));
+      const snap = await getDocs(q);
+      for (const d of snap.docs) {
+        if (d.id !== excludeUid && !(await isAccountDeletedInCloud(d.id))) {
+          return {
+            isUnique: false,
+            conflictField: 'username',
+            message: `اسم المستخدم (@${normUsername}) مرتبط بحساب مستخدم آخر في السحابة.`
+          };
+        }
+      }
+    } catch (e) {}
+  }
+
   // 1. Check Email Uniqueness
-  if (params.email && params.email.trim() && !params.email.startsWith('phone_')) {
+  if (params.email && params.email.trim() && !isSyntheticUserEmail(params.email)) {
     const emailValidation = validateEmailFormat(params.email);
     if (!emailValidation.valid) {
       return { isUnique: false, conflictField: 'email', message: emailValidation.message };
@@ -461,21 +619,18 @@ export async function checkIdentifierUniqueness(params: {
       }
     }
 
-    // Check Firestore uniqueIdentifiers first (Cloud Source of Truth)
     let cloudChecked = false;
     try {
       const snap = await getDoc(doc(db, 'uniqueIdentifiers', emailDocId));
       cloudChecked = true;
       if (snap.exists()) {
         const data = snap.data() as UniqueIdentifierRecord;
-        // Check if this uid was deleted
         const isDeleted = data.uid ? await isAccountDeletedInCloud(data.uid) : false;
         if (isDeleted) {
           await releaseIdentifierKeyFromCloud(emailDocId);
         } else {
           saveLocalUniqueRecord(data);
           if (data.uid && data.uid !== excludeUid) {
-            // Allow primary owner to claim/unify their own reserved record
             if (!(isInitialOwnerEmail(normEmail) && (data.uid === 'PRIMARY_OWNER_RESERVED' || params.allowOwnerSelfRegister))) {
               return {
                 isUnique: false,
@@ -486,7 +641,6 @@ export async function checkIdentifierUniqueness(params: {
           }
         }
       } else {
-        // Not in Firestore -> purge any stale local cache
         removeLocalUniqueRecord(emailDocId);
       }
     } catch (e) {}
@@ -503,7 +657,6 @@ export async function checkIdentifierUniqueness(params: {
       }
     }
 
-    // Check Firestore userProfiles query (when authenticated)
     try {
       const q = query(collection(db, 'userProfiles'), where('email', '==', normEmail));
       const snap = await getDocs(q);
@@ -530,7 +683,6 @@ export async function checkIdentifierUniqueness(params: {
     const normPhone = phoneValidation.normalized;
     const phoneDocId = getPhoneDocKey(normPhone);
 
-    // Protect Primary Owner Phone from non-owner claims
     if (normPhone === ownerIdentity.phone && !isCallerOwnerEmail) {
       if (!excludeUid || (ownerIdentity.ownerUid && excludeUid !== ownerIdentity.ownerUid)) {
         return {
@@ -581,7 +733,6 @@ export async function checkIdentifierUniqueness(params: {
       }
     }
 
-    // Check Firestore userProfiles query for phone (when authenticated)
     try {
       const q = query(collection(db, 'userProfiles'), where('phone', '==', normPhone));
       const snap = await getDocs(q);
@@ -658,7 +809,6 @@ export async function checkIdentifierUniqueness(params: {
       }
     }
 
-    // Check Firestore studentEnrollments
     try {
       const qEnr = query(collection(db, 'studentEnrollments'), where('academicStudentNumber', '==', normAcad));
       const snapEnr = await getDocs(qEnr);
@@ -679,11 +829,12 @@ export async function checkIdentifierUniqueness(params: {
 }
 
 /**
- * Reserves Email, Phone Number, and Academic Registration Number in Firestore `uniqueIdentifiers`
+ * Reserves Username, Email, Phone Number, and Academic Registration Number in Firestore `uniqueIdentifiers`
  * so no other account can claim them.
  */
 export async function reserveUniqueIdentifiers(params: {
   uid: string;
+  username?: string;
   email?: string;
   phone?: string;
   academicStudentNumber?: string;
@@ -693,7 +844,23 @@ export async function reserveUniqueIdentifiers(params: {
   const nowIso = new Date().toISOString();
   const recordsToWrite: UniqueIdentifierRecord[] = [];
 
-  if (params.email && params.email.trim() && !params.email.startsWith('phone_')) {
+  if (params.username && params.username.trim()) {
+    const normUser = normalizeUsername(params.username);
+    const userKey = getUsernameDocKey(normUser);
+    if (normUser && userKey) {
+      recordsToWrite.push({
+        id: userKey,
+        type: 'username',
+        value: normUser,
+        normalizedValue: normUser,
+        uid: params.uid,
+        createdAt: nowIso,
+        updatedAt: nowIso
+      });
+    }
+  }
+
+  if (params.email && params.email.trim() && !isSyntheticUserEmail(params.email)) {
     const normEmail = normalizeEmail(params.email);
     recordsToWrite.push({
       id: getEmailDocKey(normEmail),
@@ -751,6 +918,12 @@ export async function releaseAcademicIdentifier(academicStudentNumber?: string):
   if (!academicStudentNumber || !academicStudentNumber.trim()) return;
   const acadKey = getAcademicIdDocKey(academicStudentNumber);
   await releaseIdentifierKeyFromCloud(acadKey);
+}
+
+export async function releaseUsernameIdentifier(username?: string): Promise<void> {
+  if (!username || !username.trim()) return;
+  const userKey = getUsernameDocKey(username);
+  await releaseIdentifierKeyFromCloud(userKey);
 }
 
 /**
@@ -873,12 +1046,8 @@ export async function syncAndDeduplicatePrimaryOwnerIdentity(params: {
 }
 
 // ---------------------------------------------------------------------------
-// 5C. Separated Account Verification Engine (Phone OR Email Verification)
+// 5C. Zero-Friction Verification Bypass (No Mandatory OTP / Email / Phone Verification)
 // ---------------------------------------------------------------------------
-
-function generateSixDigitOtp(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
 
 export async function issueVerificationChallenge(
   user: User,
@@ -888,98 +1057,32 @@ export async function issueVerificationChallenge(
     method?: 'email' | 'phone' | 'both';
   }
 ): Promise<VerificationChallenge> {
-  const realEmail =
-    params.email && !params.email.startsWith('phone_')
-      ? normalizeEmail(params.email)
-      : user.email && !user.email.startsWith('phone_')
-      ? normalizeEmail(user.email)
-      : undefined;
-
-  const normPhone = params.phone ? normalizeYemenPhone(params.phone) : undefined;
-
-  // Determine strict separated method: 'phone' only verifies phone, 'email' only verifies email
-  const method: 'email' | 'phone' | 'both' =
-    params.method ||
-    (normPhone && !realEmail ? 'phone' : realEmail && !normPhone ? 'email' : 'both');
-
-  let firebaseEmailLinkSent = false;
-
-  // Trigger real Firebase Email Verification link if verifying email
-  if ((method === 'email' || method === 'both') && realEmail && user && !user.emailVerified) {
-    try {
-      await sendEmailVerification(user);
-      firebaseEmailLinkSent = true;
-    } catch (e) {
-      console.warn('Firebase sendEmailVerification info:', e);
-    }
-  }
-
-  const needPhoneVerify = method === 'phone' || (method === 'both' && Boolean(normPhone));
-  const needEmailVerify = method === 'email' || (method === 'both' && Boolean(realEmail));
-
-  const phoneCode = needPhoneVerify && normPhone ? generateSixDigitOtp() : undefined;
-  const emailCode = needEmailVerify && realEmail ? generateSixDigitOtp() : undefined;
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + 15 * 60 * 1000).toISOString();
-
-  const challenge: VerificationChallenge = cleanFirestoreData({
+  const now = new Date().toISOString();
+  try {
+    localStorage.removeItem(`umed_verification_${user.uid}`);
+    await deleteDoc(doc(db, 'verificationChallenges', user.uid)).catch(() => {});
+  } catch (e) {}
+  return {
     uid: user.uid,
-    verificationMethod: method,
-    ...(needEmailVerify && realEmail ? { email: realEmail, emailCode } : {}),
-    ...(needPhoneVerify && normPhone ? { phone: normPhone, phoneCode } : {}),
-    emailVerified: needEmailVerify ? Boolean(user.emailVerified) : true,
-    phoneVerified: needPhoneVerify ? false : true,
-    firebaseEmailLinkSent,
-    expiresAt,
-    createdAt: now.toISOString()
-  });
-
-  try {
-    localStorage.setItem(`umed_verification_${user.uid}`, JSON.stringify(challenge));
-  } catch (e) {}
-
-  try {
-    await setDoc(doc(db, 'verificationChallenges', user.uid), cleanFirestoreData(challenge), { merge: true });
-  } catch (e) {}
-
-  return challenge;
+    verificationMethod: params.method || 'email',
+    emailVerified: true,
+    phoneVerified: true,
+    expiresAt: now,
+    createdAt: now
+  };
 }
 
 export async function getVerificationChallenge(uid: string): Promise<VerificationChallenge | null> {
   if (!uid) return null;
   try {
-    const snap = await getDoc(doc(db, 'verificationChallenges', uid));
-    if (snap.exists()) {
-      const ch = snap.data() as VerificationChallenge;
-      if (ch.emailVerified && ch.phoneVerified) {
-        try {
-          localStorage.removeItem(`umed_verification_${uid}`);
-        } catch (e) {}
-        return null;
-      }
-      try {
-        localStorage.setItem(`umed_verification_${uid}`, JSON.stringify(ch));
-      } catch (e) {}
-      return ch;
-    } else {
-      try {
-        localStorage.removeItem(`umed_verification_${uid}`);
-      } catch (e) {}
-      return null;
-    }
+    localStorage.removeItem(`umed_verification_${uid}`);
   } catch (e) {}
-
-  try {
-    const cached = localStorage.getItem(`umed_verification_${uid}`);
-    if (cached) return JSON.parse(cached) as VerificationChallenge;
-  } catch (e) {}
-
   return null;
 }
 
 export async function verifyAccountChallenge(
   user: User,
-  params: {
+  _params: {
     phoneCodeInput?: string;
     emailCodeInput?: string;
     checkFirebaseEmailLink?: boolean;
@@ -991,98 +1094,21 @@ export async function verifyAccountChallenge(
   challenge: VerificationChallenge | null;
   message: string;
 }> {
-  let currentChallenge = await getVerificationChallenge(user.uid);
-  if (!currentChallenge) {
-    return {
-      verified: true,
-      emailVerified: true,
-      phoneVerified: true,
-      challenge: null,
-      message: 'تم تأكيد توثيق الحساب بنجاح ✓'
-    };
-  }
-
-  let emailVerified = currentChallenge.emailVerified;
-  let phoneVerified = currentChallenge.phoneVerified;
-
-  // 1. Check if user clicked the official Firebase verification link in their email
-  if (!emailVerified) {
-    try {
-      await user.reload();
-      if (auth.currentUser?.emailVerified || user.emailVerified) {
-        emailVerified = true;
-      }
-    } catch (e) {}
-  }
-
-  // 2. Check Email OTP Code if needed
-  if (!emailVerified && currentChallenge.emailCode) {
-    if (params.emailCodeInput && params.emailCodeInput.trim()) {
-      if (params.emailCodeInput.trim() === currentChallenge.emailCode.trim()) {
-        emailVerified = true;
-      } else {
-        throw new Error('رمز التحقق من البريد الإلكتروني غير صحيح. يرجى التأكد من الأرقام الستة.');
-      }
-    } else if (!emailVerified) {
-      throw new Error('يرجى إدخال رمز التحقق المرسل للبريد الإلكتروني (6 أرقام) أو الضغط على رابط التفعيل في بريدك.');
-    }
-  }
-
-  // 3. Check Phone OTP Code if needed
-  if (!phoneVerified && currentChallenge.phoneCode) {
-    if (!params.phoneCodeInput || !params.phoneCodeInput.trim()) {
-      throw new Error('يرجى إدخال رمز التحقق المرسل لرقم الهاتف المكون من 6 أرقام.');
-    } else if (params.phoneCodeInput.trim() === currentChallenge.phoneCode.trim()) {
-      phoneVerified = true;
-    } else {
-      throw new Error('رمز التحقق من رقم الهاتف غير صحيح. يرجى التأكد من الأرقام الستة.');
-    }
-  }
-
-  const allVerified = emailVerified && phoneVerified;
-
-  if (allVerified) {
-    try {
-      localStorage.removeItem(`umed_verification_${user.uid}`);
-    } catch (e) {}
-    try {
-      await deleteDoc(doc(db, 'verificationChallenges', user.uid));
-    } catch (e) {
-      try {
-        await setDoc(
-          doc(db, 'verificationChallenges', user.uid),
-          cleanFirestoreData({ ...currentChallenge, emailVerified: true, phoneVerified: true }),
-          { merge: true }
-        );
-      } catch {}
-    }
-  } else {
-    const updatedChallenge: VerificationChallenge = cleanFirestoreData({
-      ...currentChallenge,
-      emailVerified,
-      phoneVerified
-    });
-    try {
-      localStorage.setItem(`umed_verification_${user.uid}`, JSON.stringify(updatedChallenge));
-    } catch (e) {}
-    try {
-      await setDoc(doc(db, 'verificationChallenges', user.uid), cleanFirestoreData(updatedChallenge), { merge: true });
-    } catch (e) {}
-  }
-
+  try {
+    localStorage.removeItem(`umed_verification_${user.uid}`);
+    await deleteDoc(doc(db, 'verificationChallenges', user.uid)).catch(() => {});
+  } catch (e) {}
   return {
-    verified: allVerified,
-    emailVerified,
-    phoneVerified,
-    challenge: allVerified ? null : { ...currentChallenge, emailVerified, phoneVerified },
-    message: allVerified
-      ? 'تم تأكيد توثيق الحساب وتفعيله سحابياً بنجاح ✓'
-      : 'تم تحديث حالة التحقق، يرجى إكمال الرمز المتبقي.'
+    verified: true,
+    emailVerified: true,
+    phoneVerified: true,
+    challenge: null,
+    message: 'الحساب مفعل وموثق تلقائياً ✓'
   };
 }
 
 // ---------------------------------------------------------------------------
-// 6. Authentication Service Functions (Separated Email vs. Phone + Cloud Checks)
+// 6. Authentication Service Functions (Username, Email, Phone & Google + Cloud Sync)
 // ---------------------------------------------------------------------------
 
 async function enforceCloudAccountIntegrityAfterSignIn(signedInUser: User): Promise<User> {
@@ -1123,6 +1149,189 @@ export async function signInWithGoogle(): Promise<User> {
   return enforceCloudAccountIntegrityAfterSignIn(result.user);
 }
 
+/**
+ * Frictionless Account Creation using a Unique Username + Password.
+ * Requires NO email verification, NO phone OTP, and NO academic registration number.
+ * Reserves the unique username in Cloud Firestore (`uniqueIdentifiers/username_<norm>`)
+ * and persists the profile in `userProfiles/{uid}` and `users/{uid}`.
+ */
+export async function signUpWithUsername(
+  usernameInput: string,
+  pass: string,
+  displayNameArabicInput?: string
+): Promise<{ user: User; normalizedUsername: string }> {
+  const check = validateUsernameFormat(usernameInput);
+  if (!check.valid || !check.normalized) {
+    throw new Error(check.message || 'INVALID_USERNAME');
+  }
+  const normUsername = check.normalized;
+
+  const uniqueness = await checkIdentifierUniqueness({ username: normUsername });
+  if (!uniqueness.isUnique) {
+    throw new Error(uniqueness.message || `اسم المستخدم (@${normUsername}) مستخدم مسبقاً.`);
+  }
+
+  const authEmail = usernameToAuthEmail(normUsername);
+
+  let createdUser: User;
+  try {
+    const result = await createUserWithEmailAndPassword(auth, authEmail, pass);
+    unmarkUidDeletedLocally(result.user.uid);
+    createdUser = result.user;
+  } catch (err: any) {
+    if (err?.code === 'auth/email-already-in-use') {
+      try {
+        const userDocId = getUsernameDocKey(normUsername);
+        const idSnap = userDocId ? await getDoc(doc(db, 'uniqueIdentifiers', userDocId)) : null;
+        const hasActiveIdentifier =
+          idSnap && idSnap.exists() && !(await isAccountDeletedInCloud((idSnap.data() as UniqueIdentifierRecord).uid));
+        if (!hasActiveIdentifier) {
+          const oldSignIn = await signInWithEmailAndPassword(auth, authEmail, pass);
+          const oldUid = oldSignIn.user.uid;
+          try {
+            await deleteDoc(doc(db, 'deletedAccounts', oldUid));
+          } catch {}
+          await deleteUser(oldSignIn.user);
+          const freshResult = await createUserWithEmailAndPassword(auth, authEmail, pass);
+          unmarkUidDeletedLocally(freshResult.user.uid);
+          createdUser = freshResult.user;
+        } else {
+          throw err;
+        }
+      } catch {
+        throw err;
+      }
+    } else {
+      throw err;
+    }
+  }
+
+  const nowIso = new Date().toISOString();
+  const displayNameArabic = (displayNameArabicInput || '').trim() || normUsername;
+  const profile: UserProfile = {
+    uid: createdUser.uid,
+    email: authEmail,
+    username: normUsername,
+    displayNameArabic,
+    leaderboardNameMode: 'custom_username',
+    registrationMethod: 'username',
+    isActive: true,
+    isArchived: false,
+    emailVerified: true,
+    phoneVerified: true,
+    isVerified: true,
+    verifiedAt: nowIso,
+    createdAt: nowIso,
+    updatedAt: nowIso
+  };
+
+  await saveUserProfile(profile);
+  return { user: createdUser, normalizedUsername: normUsername };
+}
+
+/**
+ * Signs in a user using their Unique Username, Email, or Phone Number.
+ * Automatically resolves renamed usernames from Cloud Firestore (`uniqueIdentifiers` & `userProfiles`).
+ */
+export async function signInWithUsername(usernameInput: string, pass: string): Promise<User> {
+  const check = validateUsernameFormat(usernameInput);
+  if (!check.valid || !check.normalized) {
+    throw new Error(check.message || 'INVALID_USERNAME');
+  }
+  const normUsername = check.normalized;
+  const directAuthEmail = usernameToAuthEmail(normUsername);
+
+  // 1. First look up the username in Cloud Firestore `uniqueIdentifiers` or `userProfiles`
+  // in case the user renamed their username or originally registered with Email/Phone
+  let resolvedAuthEmails: string[] = [];
+  try {
+    const userDocId = getUsernameDocKey(normUsername);
+    const idSnap = await getDoc(doc(db, 'uniqueIdentifiers', userDocId));
+    if (idSnap.exists()) {
+      const idData = idSnap.data() as UniqueIdentifierRecord;
+      if (idData.uid && !(await isAccountDeletedInCloud(idData.uid))) {
+        const profSnap = await getDoc(doc(db, 'userProfiles', idData.uid));
+        if (profSnap.exists()) {
+          const prof = profSnap.data() as UserProfile;
+          if (prof.email) resolvedAuthEmails.push(prof.email);
+          if (prof.phone) {
+            try {
+              resolvedAuthEmails.push(phoneToAuthEmail(prof.phone));
+            } catch {}
+          }
+        }
+      }
+    }
+  } catch (e) {}
+
+  if (!resolvedAuthEmails.includes(directAuthEmail)) {
+    resolvedAuthEmails.push(directAuthEmail);
+  }
+
+  let lastErr: any = null;
+  for (const candidateEmail of resolvedAuthEmails) {
+    try {
+      const result = await signInWithEmailAndPassword(auth, candidateEmail, pass);
+      return await enforceCloudAccountIntegrityAfterSignIn(result.user);
+    } catch (err: any) {
+      if (err?.message === 'ACCOUNT_DELETED_FROM_CLOUD' || err?.message === 'ACCOUNT_ARCHIVED') {
+        throw err;
+      }
+      lastErr = err;
+    }
+  }
+
+  // Fallback query on userProfiles where username == normUsername
+  try {
+    const q = query(collection(db, 'userProfiles'), where('username', '==', normUsername));
+    const snap = await getDocs(q);
+    for (const d of snap.docs) {
+      const prof = d.data() as UserProfile;
+      if (prof.email && !resolvedAuthEmails.includes(prof.email)) {
+        const result = await signInWithEmailAndPassword(auth, prof.email, pass);
+        return await enforceCloudAccountIntegrityAfterSignIn(result.user);
+      }
+    }
+  } catch (err: any) {
+    if (err?.message === 'ACCOUNT_DELETED_FROM_CLOUD' || err?.message === 'ACCOUNT_ARCHIVED') {
+      throw err;
+    }
+  }
+
+  throw lastErr || new Error('auth/invalid-credential');
+}
+
+/**
+ * Smart Unified Sign-In: accepts a Unique Username (@username), Email, or Yemen Phone Number.
+ */
+export async function signInWithIdentifier(identifierInput: string, pass: string): Promise<User> {
+  const raw = (identifierInput || '').trim();
+  if (!raw) {
+    throw new Error('يرجى إدخال اسم المستخدم أو البريد الإلكتروني أو رقم الهاتف.');
+  }
+
+  // If it looks like an email address (contains @ not at index 0 and has a domain dot)
+  if (!raw.startsWith('@') && raw.includes('@') && raw.split('@')[1]?.includes('.')) {
+    return signInWithEmail(raw, pass);
+  }
+
+  // If it looks like a Yemen phone number
+  if (isPhoneIdentifier(raw)) {
+    try {
+      return await signInWithPhone(raw, pass);
+    } catch (phoneErr: any) {
+      if (phoneErr?.message === 'ACCOUNT_DELETED_FROM_CLOUD' || phoneErr?.message === 'ACCOUNT_ARCHIVED') {
+        throw phoneErr;
+      }
+      // Fallback to username if someone chose a numeric username
+      return signInWithUsername(raw, pass);
+    }
+  }
+
+  // Otherwise treat as a Unique Username
+  return signInWithUsername(raw, pass);
+}
+
 export async function signInWithEmail(emailInput: string, pass: string): Promise<User> {
   const emailCheck = validateEmailFormat(emailInput);
   if (!emailCheck.valid) {
@@ -1134,7 +1343,7 @@ export async function signInWithEmail(emailInput: string, pass: string): Promise
     const result = await signInWithEmailAndPassword(auth, normEmail, pass);
     return await enforceCloudAccountIntegrityAfterSignIn(result.user);
   } catch (err: any) {
-    // Fallback: if the user registered by phone and later linked an email in userProfiles
+    // Fallback: if the user registered by phone or username and later linked an email in userProfiles
     if (
       err?.code === 'auth/user-not-found' ||
       err?.code === 'auth/invalid-credential'
@@ -1178,15 +1387,12 @@ export async function signUpWithEmail(email: string, pass: string): Promise<User
     unmarkUidDeletedLocally(result.user.uid);
     return result.user;
   } catch (err: any) {
-    // If Firebase Auth still had an orphaned credential from an account that was deleted from Firestore Cloud,
-    // recover cleanly if the user signs in or purge the deleted Firebase Auth record and recreate it!
     if (err?.code === 'auth/email-already-in-use') {
       try {
         const emailDocId = getEmailDocKey(normEmail);
         const idSnap = await getDoc(doc(db, 'uniqueIdentifiers', emailDocId));
         const hasActiveIdentifier = idSnap.exists() && !(await isAccountDeletedInCloud((idSnap.data() as UniqueIdentifierRecord).uid));
         if (!hasActiveIdentifier) {
-          // Orphaned auth user from a previously deleted cloud account: sign in, delete old auth user, and create fresh!
           const oldSignIn = await signInWithEmailAndPassword(auth, normEmail, pass);
           const oldUid = oldSignIn.user.uid;
           try {
@@ -1215,7 +1421,6 @@ export async function signInWithPhone(phone: string, pass: string): Promise<User
     const result = await signInWithEmailAndPassword(auth, authEmail, pass);
     return await enforceCloudAccountIntegrityAfterSignIn(result.user);
   } catch (err: any) {
-    // Fallback: if the user registered via Email (or is the Primary Owner with linked phone)
     if (
       err?.code === 'auth/user-not-found' ||
       err?.code === 'auth/invalid-credential'
@@ -1317,17 +1522,198 @@ function removeLocalRoleEntry(uid: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// 7. User Profile & Role Helpers
+// 7. User Profile, Unique Cloud Username Management & Role Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Atomically creates or updates a user's unique `username` in Cloud Firestore:
+ * 1. Validates format and checks uniqueness in `uniqueIdentifiers` & `userProfiles`.
+ * 2. Immediately deletes any previous `username_<old>` document from `uniqueIdentifiers` in Cloud Firestore (`deleteDoc`) so old usernames never remain in the cloud.
+ * 3. Reserves the new `username_<new>` document in `uniqueIdentifiers`.
+ * 4. Updates `userProfiles/{uid}`, `users/{uid}`, `userRoles/{uid}`, and `studentEnrollments/enr-{uid}` in Cloud Firestore.
+ */
+export async function claimOrUpdateUniqueUsername(params: {
+  uid: string;
+  newUsername: string;
+  displayNameArabic?: string;
+}): Promise<{ username: string; profile: UserProfile }> {
+  const { uid, newUsername, displayNameArabic } = params;
+  if (!uid) throw new Error('معرف المستخدم غير صالح.');
+
+  const formatCheck = validateUsernameFormat(newUsername);
+  if (!formatCheck.valid || !formatCheck.normalized) {
+    throw new Error(formatCheck.message || 'صيغة اسم المستخدم غير صالحة.');
+  }
+  const normNew = formatCheck.normalized;
+
+  const uniqueness = await checkIdentifierUniqueness({
+    username: normNew,
+    excludeUid: uid
+  });
+  if (!uniqueness.isUnique) {
+    throw new Error(uniqueness.message || `اسم المستخدم (@${normNew}) محجوز مسبقاً لمستخدم آخر.`);
+  }
+
+  const existingProfile = await fetchUserProfile(uid);
+  const oldUsername = existingProfile?.username ? normalizeUsername(existingProfile.username) : '';
+
+  // 1. Immediately delete old username key from Cloud Firestore if changed
+  if (oldUsername && oldUsername !== normNew) {
+    await releaseUsernameIdentifier(oldUsername);
+  }
+
+  // Also clean up any other stale username_* documents owned by this uid in uniqueIdentifiers
+  try {
+    const qIds = query(collection(db, 'uniqueIdentifiers'), where('uid', '==', uid));
+    const snapIds = await getDocs(qIds);
+    const targetDocId = getUsernameDocKey(normNew);
+    for (const d of snapIds.docs) {
+      const rec = d.data() as UniqueIdentifierRecord;
+      if ((rec.type === 'username' || d.id.startsWith('username_')) && d.id !== targetDocId) {
+        await releaseIdentifierKeyFromCloud(d.id);
+      }
+    }
+  } catch (e) {}
+
+  const nowIso = new Date().toISOString();
+  const updatedProfile: UserProfile = cleanFirestoreData({
+    ...(existingProfile || {}),
+    uid,
+    email: existingProfile?.email || auth.currentUser?.email || usernameToAuthEmail(normNew),
+    username: normNew,
+    displayNameArabic:
+      (displayNameArabic && displayNameArabic.trim()) ||
+      existingProfile?.displayNameArabic ||
+      auth.currentUser?.displayName ||
+      normNew,
+    isActive: existingProfile?.isActive ?? true,
+    isArchived: existingProfile?.isArchived ?? false,
+    isVerified: true,
+    emailVerified: true,
+    phoneVerified: true,
+    verifiedAt: existingProfile?.verifiedAt || nowIso,
+    createdAt: existingProfile?.createdAt || nowIso,
+    updatedAt: nowIso
+  });
+
+  await saveUserProfile(updatedProfile);
+
+  // Sync username into userRoles if role doc exists
+  try {
+    const roleSnap = await getDoc(doc(db, 'userRoles', uid));
+    if (roleSnap.exists()) {
+      const rData = roleSnap.data() as UserRoleDoc;
+      const updatedRole: UserRoleDoc = cleanFirestoreData({
+        ...rData,
+        username: normNew,
+        displayNameArabic: updatedProfile.displayNameArabic
+      });
+      await saveUserRoleToFirestore(updatedRole);
+    }
+  } catch (e) {}
+
+  // Sync displayNameArabic into studentEnrollments if enrollment exists
+  if (displayNameArabic && displayNameArabic.trim()) {
+    try {
+      const enrId = `enr-${uid}`;
+      const enrSnap = await getDoc(doc(db, 'studentEnrollments', enrId));
+      if (enrSnap.exists()) {
+        await setDoc(
+          doc(db, 'studentEnrollments', enrId),
+          cleanFirestoreData({
+            studentNameArabic: displayNameArabic.trim(),
+            updatedAt: nowIso
+          }),
+          { merge: true }
+        );
+      }
+    } catch (e) {}
+  }
+
+  try {
+    localStorage.setItem(`umed_cached_profile_${uid}`, JSON.stringify(updatedProfile));
+  } catch (e) {}
+
+  return { username: normNew, profile: updatedProfile };
+}
+
+/**
+ * Ensures any signed-in user has a unique `username` persisted in Cloud Firestore
+ * (`userProfiles/{uid}`, `users/{uid}`, and `uniqueIdentifiers/username_<norm>`).
+ */
+export async function ensureUserHasUniqueCloudUsername(
+  user: User,
+  existingProfile?: UserProfile | null,
+  preferredUsername?: string,
+  preferredDisplayNameArabic?: string
+): Promise<UserProfile> {
+  const nowIso = new Date().toISOString();
+  const isOwner = isInitialOwnerEmail(user.email);
+
+  let candidateUsername = normalizeUsername(
+    preferredUsername ||
+      existingProfile?.username ||
+      extractUsernameFromAuthEmail(user.email) ||
+      (isOwner ? 'umed_owner' : '') ||
+      (user.email && !isSyntheticUserEmail(user.email) ? user.email.split('@')[0] : '') ||
+      `user_${user.uid.slice(0, 6).toLowerCase()}`
+  );
+
+  if (candidateUsername.length < 3) {
+    candidateUsername = `user_${user.uid.slice(0, 6).toLowerCase()}`;
+  }
+
+  // Verify uniqueness in Cloud Firestore; if taken by another user, append short uid suffix
+  const uniqueness = await checkIdentifierUniqueness({
+    username: candidateUsername,
+    excludeUid: user.uid
+  });
+  if (!uniqueness.isUnique) {
+    candidateUsername = `${candidateUsername.slice(0, 22)}_${user.uid.slice(0, 5).toLowerCase()}`;
+  }
+
+  const profile: UserProfile = cleanFirestoreData({
+    ...(existingProfile || {}),
+    uid: user.uid,
+    email: existingProfile?.email || user.email || usernameToAuthEmail(candidateUsername),
+    username: candidateUsername,
+    displayNameArabic:
+      (preferredDisplayNameArabic && preferredDisplayNameArabic.trim()) ||
+      existingProfile?.displayNameArabic ||
+      user.displayName ||
+      candidateUsername,
+    registrationMethod:
+      existingProfile?.registrationMethod ||
+      (user.email?.startsWith('user_')
+        ? 'username'
+        : user.email?.startsWith('phone_')
+        ? 'phone'
+        : user.providerData?.[0]?.providerId === 'google.com'
+        ? 'google'
+        : 'username'),
+    isPrimaryOwner: isOwner || Boolean(existingProfile?.isPrimaryOwner),
+    isActive: isOwner ? true : (existingProfile?.isActive ?? true),
+    isArchived: isOwner ? false : Boolean(existingProfile?.isArchived),
+    emailVerified: true,
+    phoneVerified: true,
+    isVerified: true,
+    verifiedAt: existingProfile?.verifiedAt || nowIso,
+    createdAt: existingProfile?.createdAt || nowIso,
+    updatedAt: nowIso
+  });
+
+  await saveUserProfile(profile);
+  return profile;
+}
+
 export async function fetchUserRole(uid: string, email?: string | null): Promise<UserRoleDoc | null> {
-  // Automatic Owner Recognition & Deduplication if email matches INITIAL_OWNER_EMAILS
   if (email && isInitialOwnerEmail(email)) {
     const ownerIdentity = getCachedPrimaryOwnerIdentity();
     const ownerDoc: UserRoleDoc = {
       uid,
       role: 'platform_owner',
       email: email.trim().toLowerCase(),
+      username: ownerIdentity.username || 'umed_owner',
       displayNameArabic: ownerIdentity.displayNameArabic,
       phone: ownerIdentity.phone,
       academicStudentNumber: ownerIdentity.academicStudentNumber,
@@ -1354,7 +1740,6 @@ export async function fetchUserRole(uid: string, email?: string | null): Promise
     console.warn('Could not fetch user role from Firestore:', err);
   }
 
-  // Fallback to local roles map if offline
   const localMap = readLocalRolesMap();
   if (localMap[uid]) {
     return localMap[uid];
@@ -1418,6 +1803,7 @@ export async function assignUserRole(params: {
   callerRole?: UserRole;
   targetUid: string;
   email: string;
+  username?: string;
   displayNameArabic?: string;
   phone?: string;
   academicStudentNumber?: string;
@@ -1440,6 +1826,7 @@ export async function assignUserRole(params: {
     uid: params.targetUid.trim(),
     role: params.role,
     email: params.email.trim().toLowerCase(),
+    ...(params.username ? { username: normalizeUsername(params.username) } : {}),
     ...(params.displayNameArabic ? { displayNameArabic: params.displayNameArabic.trim() } : {}),
     ...(params.phone ? { phone: params.phone.trim() } : {}),
     ...(params.academicStudentNumber ? { academicStudentNumber: params.academicStudentNumber.trim() } : {}),
@@ -1460,10 +1847,8 @@ export async function assignUserRole(params: {
     ...(params.callerRole ? { assignedByRole: params.callerRole } : {})
   });
 
-  // 1. Save to Firestore & Local Cache
   await saveUserRoleToFirestore(roleDoc);
 
-  // 2. Record Audit Log in Firestore
   await writeAuditLogToCloud({
     action: 'ROLE_ASSIGNED',
     performedBy: params.callerEmail || params.callerUid,
@@ -1478,7 +1863,6 @@ export async function assignUserRole(params: {
     }
   });
 
-  // 3. Also sync with backend API if reachable
   try {
     await fetch('/api/admin/assign-role', {
       method: 'POST',
@@ -1501,7 +1885,6 @@ export async function revokeUserRole(params: {
   try {
     await deleteDoc(doc(db, 'userRoles', params.targetUid));
   } catch (e) {
-    // Fallback: set role to 'student'
     try {
       await setDoc(
         doc(db, 'userRoles', params.targetUid),
@@ -1535,6 +1918,7 @@ export async function fetchUserProfile(uid: string): Promise<UserProfile | null>
       const prof = snap.data() as UserProfile;
       reserveUniqueIdentifiers({
         uid: prof.uid,
+        username: prof.username,
         email: prof.email,
         phone: prof.phone,
         academicStudentNumber: prof.academicStudentNumber
@@ -1549,11 +1933,18 @@ export async function fetchUserProfile(uid: string): Promise<UserProfile | null>
 }
 
 export async function saveUserProfile(profile: UserProfile): Promise<void> {
+  const cleaned = cleanFirestoreData(profile);
   try {
-    const profileRef = doc(db, 'userProfiles', profile.uid);
-    await setDoc(profileRef, cleanFirestoreData(profile), { merge: true });
+    localStorage.setItem(`umed_cached_profile_${profile.uid}`, JSON.stringify(cleaned));
+  } catch (e) {}
+  try {
+    await Promise.all([
+      setDoc(doc(db, 'userProfiles', profile.uid), cleaned, { merge: true }),
+      setDoc(doc(db, 'users', profile.uid), cleaned, { merge: true }).catch(() => {})
+    ]);
     await reserveUniqueIdentifiers({
       uid: profile.uid,
+      username: profile.username,
       email: profile.email,
       phone: profile.phone,
       academicStudentNumber: profile.academicStudentNumber
@@ -1569,7 +1960,7 @@ export async function saveUserProfile(profile: UserProfile): Promise<void> {
 
 /**
  * Completely deletes a user account and all of its associated records from Cloud Firestore
- * (`userProfiles`, `userRoles`, `uniqueIdentifiers`, `verificationChallenges`,
+ * (`userProfiles`, `users`, `userRoles`, `uniqueIdentifiers`, `verificationChallenges`,
  *  `studentEnrollments`, `academicChangeRequests`, `assessmentAttempts`, `assessmentResults`),
  * clears local caches, and if `isSelfDelete` is true, also deletes the Firebase Auth user.
  */
@@ -1582,6 +1973,7 @@ export async function deleteUserAccountCompletelyFromCloud(params: {
   if (!targetUid) throw new Error('معرف المستخدم غير صالح للحذف.');
 
   // 1. Gather user's existing identifiers before deletion so we release all unique keys
+  let usernameToRelease: string | undefined;
   let emailToRelease: string | undefined;
   let phoneToRelease: string | undefined;
   let acadToRelease: string | undefined;
@@ -1590,6 +1982,7 @@ export async function deleteUserAccountCompletelyFromCloud(params: {
     const profSnap = await getDoc(doc(db, 'userProfiles', targetUid));
     if (profSnap.exists()) {
       const p = profSnap.data() as UserProfile;
+      usernameToRelease = p.username;
       emailToRelease = p.email;
       phoneToRelease = p.phone;
       acadToRelease = p.academicStudentNumber;
@@ -1606,13 +1999,15 @@ export async function deleteUserAccountCompletelyFromCloud(params: {
     }
   } catch (e) {}
 
-  // Protect Primary Owner account from being deleted by mistake
   if (emailToRelease && isInitialOwnerEmail(emailToRelease)) {
     throw new Error('لا يمكن حذف الحساب الأساسي لمالك المنصة (Primary Platform Owner).');
   }
 
-  // 2. Delete all reserved uniqueIdentifiers in Firestore & Local Cache
-  if (emailToRelease && !emailToRelease.startsWith('phone_')) {
+  // 2. Immediately delete all reserved uniqueIdentifiers in Firestore & Local Cache
+  if (usernameToRelease) {
+    await releaseIdentifierKeyFromCloud(getUsernameDocKey(usernameToRelease));
+  }
+  if (emailToRelease && !isSyntheticUserEmail(emailToRelease)) {
     await releaseIdentifierKeyFromCloud(getEmailDocKey(emailToRelease));
   }
   if (phoneToRelease) {
@@ -1666,7 +2061,7 @@ export async function deleteUserAccountCompletelyFromCloud(params: {
     }
   } catch (e) {}
 
-  // 6. Delete Verification Challenge, User Role, and User Profile in Firestore
+  // 6. Delete Verification Challenge, User Role, and User Profile (`userProfiles` & `users`) in Firestore
   try {
     await deleteDoc(doc(db, 'verificationChallenges', targetUid));
   } catch (e) {}
@@ -1677,7 +2072,10 @@ export async function deleteUserAccountCompletelyFromCloud(params: {
   } catch (e) {}
 
   try {
-    await deleteDoc(doc(db, 'userProfiles', targetUid));
+    await Promise.all([
+      deleteDoc(doc(db, 'userProfiles', targetUid)),
+      deleteDoc(doc(db, 'users', targetUid)).catch(() => {})
+    ]);
   } catch (e) {}
 
   // 7. Record Tombstone in Firestore `deletedAccounts` so any cached session is invalidated
@@ -1687,6 +2085,7 @@ export async function deleteUserAccountCompletelyFromCloud(params: {
       uid: targetUid,
       deletedAt: new Date().toISOString(),
       deletedBy: performedBy,
+      username: usernameToRelease || '',
       email: emailToRelease || '',
       phone: phoneToRelease || ''
     });
@@ -1713,6 +2112,7 @@ export async function deleteUserAccountCompletelyFromCloud(params: {
     targetEmail: emailToRelease,
     details: {
       isSelfDelete: Boolean(isSelfDelete),
+      releasedUsername: usernameToRelease,
       releasedEmail: emailToRelease,
       releasedPhone: phoneToRelease,
       releasedAcademicId: acadToRelease
@@ -1723,9 +2123,7 @@ export async function deleteUserAccountCompletelyFromCloud(params: {
   if (isSelfDelete && auth.currentUser && auth.currentUser.uid === targetUid) {
     try {
       await deleteUser(auth.currentUser);
-    } catch (e) {
-      // Even if Firebase Auth requires recent login, sign out immediately; tombstone in deletedAccounts blocks future access
-    }
+    } catch (e) {}
     try {
       await signOut(auth);
     } catch (e) {}
@@ -1738,6 +2136,7 @@ export async function deleteUserAccountCompletelyFromCloud(params: {
 
 export interface ManagedCloudUserRecord {
   uid: string;
+  username: string;
   displayNameArabic: string;
   email: string;
   phone: string;
@@ -1749,7 +2148,7 @@ export interface ManagedCloudUserRecord {
   departmentTitle?: string;
   enrollmentStatus: EnrollmentStatus | 'not_enrolled';
   enrollmentId?: string;
-  registrationMethod: 'email' | 'phone' | 'google';
+  registrationMethod: 'username' | 'email' | 'phone' | 'google';
   isVerified: boolean;
   emailVerified: boolean;
   phoneVerified: boolean;
@@ -1771,7 +2170,6 @@ export interface ManagedCloudUserRecord {
 export async function fetchAllUsersForPlatformOwner(): Promise<ManagedCloudUserRecord[]> {
   const deletedUids = getLocalDeletedUids();
 
-  // 1. Load deleted accounts from Cloud Firestore
   try {
     const delSnap = await getDocs(collection(db, 'deletedAccounts'));
     delSnap.forEach((d) => {
@@ -1784,7 +2182,6 @@ export async function fetchAllUsersForPlatformOwner(): Promise<ManagedCloudUserR
   const rolesMap = new Map<string, UserRoleDoc>();
   const enrollmentsMap = new Map<string, StudentEnrollment>();
 
-  // 2. Load all userProfiles from Firestore
   try {
     const profSnap = await getDocs(collection(db, 'userProfiles'));
     profSnap.forEach((d) => {
@@ -1796,7 +2193,6 @@ export async function fetchAllUsersForPlatformOwner(): Promise<ManagedCloudUserR
     });
   } catch (e) {}
 
-  // 3. Load all userRoles from Firestore
   try {
     const rolesList = await fetchAllUserRoles();
     rolesList.forEach((r) => {
@@ -1806,7 +2202,6 @@ export async function fetchAllUsersForPlatformOwner(): Promise<ManagedCloudUserR
     });
   } catch (e) {}
 
-  // 4. Load all studentEnrollments from Firestore
   try {
     const enrSnap = await getDocs(collection(db, 'studentEnrollments'));
     enrSnap.forEach((d) => {
@@ -1834,11 +2229,21 @@ export async function fetchAllUsersForPlatformOwner(): Promise<ManagedCloudUserR
 
     const rawEmail = prof?.email || roleDoc?.email || enr?.studentEmail || '';
     const isSyntheticPhoneEmail = rawEmail.startsWith('phone_') && rawEmail.endsWith('@umed.edu.ye');
-    const cleanEmail = isSyntheticPhoneEmail ? '' : rawEmail;
+    const isSyntheticUsernameEmail = rawEmail.startsWith('user_') && rawEmail.endsWith('@users.umed.edu.ye');
+    const cleanEmail = isSyntheticPhoneEmail || isSyntheticUsernameEmail ? '' : rawEmail;
 
     const extractedPhoneFromEmail = isSyntheticPhoneEmail
       ? `+${rawEmail.replace(/^phone_/, '').replace(/@umed\.edu\.ye$/, '')}`
       : '';
+    const extractedUsernameFromEmail = extractUsernameFromAuthEmail(rawEmail);
+    const username = normalizeUsername(
+      prof?.username ||
+        roleDoc?.username ||
+        extractedUsernameFromEmail ||
+        (cleanEmail ? cleanEmail.split('@')[0] : '') ||
+        `user_${uid.slice(0, 6)}`
+    );
+
     const phone = prof?.phone || roleDoc?.phone || enr?.studentPhone || extractedPhoneFromEmail || '';
     const academicStudentNumber =
       prof?.academicStudentNumber || roleDoc?.academicStudentNumber || enr?.academicStudentNumber || '';
@@ -1848,22 +2253,25 @@ export async function fetchAllUsersForPlatformOwner(): Promise<ManagedCloudUserR
       isInitialOwnerEmail(cleanEmail) ||
       (ownerConfig.ownerUid ? uid === ownerConfig.ownerUid : false);
 
-    const regMethod: 'email' | 'phone' | 'google' =
+    const regMethod: 'username' | 'email' | 'phone' | 'google' =
       prof?.registrationMethod ||
-      (isSyntheticPhoneEmail || (phone && !cleanEmail) ? 'phone' : 'email');
+      (isSyntheticUsernameEmail
+        ? 'username'
+        : isSyntheticPhoneEmail || (phone && !cleanEmail)
+        ? 'phone'
+        : 'email');
 
-    const emailVerified = isOwner ? true : Boolean(prof?.emailVerified ?? (cleanEmail ? true : false));
-    const phoneVerified = isOwner ? true : Boolean(prof?.phoneVerified ?? (phone ? true : false));
-    const isVerified = isOwner ? true : Boolean(prof?.isVerified ?? (emailVerified && phoneVerified));
     const isArchived = isOwner ? false : Boolean(prof?.isArchived || prof?.isActive === false);
 
     rawRecords.push({
       uid,
+      username: isOwner ? (ownerConfig.username || 'umed_owner') : username,
       displayNameArabic:
         (isOwner ? ownerConfig.displayNameArabic : '') ||
         prof?.displayNameArabic ||
         roleDoc?.displayNameArabic ||
         enr?.studentNameArabic ||
+        username ||
         'مستخدم مسجل',
       email: isOwner ? ownerConfig.primaryEmail : cleanEmail,
       phone: isOwner ? ownerConfig.phone : phone,
@@ -1873,12 +2281,12 @@ export async function fetchAllUsersForPlatformOwner(): Promise<ManagedCloudUserR
       studyLevelId: roleDoc?.assignedStudyLevelId || enr?.currentStudyLevelId || 'lvl-4',
       assignedCourseId: roleDoc?.assignedCourseId,
       departmentTitle: roleDoc?.departmentTitle,
-      enrollmentStatus: enr ? (enr.status || enr.enrollmentStatus || 'pending') : 'not_enrolled',
+      enrollmentStatus: enr ? (enr.status || 'approved') : 'approved',
       enrollmentId: enr?.id,
       registrationMethod: regMethod,
-      isVerified,
-      emailVerified,
-      phoneVerified,
+      isVerified: true,
+      emailVerified: true,
+      phoneVerified: true,
       isActive: !isArchived,
       isArchived,
       archivedAt: prof?.archivedAt,
@@ -1890,11 +2298,9 @@ export async function fetchAllUsersForPlatformOwner(): Promise<ManagedCloudUserR
     });
   }
 
-  // Deduplicate Primary Owner records so only ONE unified Primary Owner record is ever shown
   const ownerRecords = rawRecords.filter(r => r.isPrimaryOwner);
   const nonOwnerRecords = rawRecords.filter(r => !r.isPrimaryOwner);
 
-  let unifiedOwner: ManagedCloudUserRecord;
   const preferredOwnerUid =
     (auth.currentUser && isInitialOwnerEmail(auth.currentUser.email) ? auth.currentUser.uid : undefined) ||
     ownerConfig.ownerUid ||
@@ -1906,8 +2312,9 @@ export async function fetchAllUsersForPlatformOwner(): Promise<ManagedCloudUserR
     ownerConfig.primaryEmail ||
     INITIAL_OWNER_EMAILS[0];
 
-  unifiedOwner = {
+  const unifiedOwner: ManagedCloudUserRecord = {
     uid: preferredOwnerUid,
+    username: ownerConfig.username || 'umed_owner',
     displayNameArabic: ownerConfig.displayNameArabic || DEFAULT_OWNER_NAME_ARABIC,
     email: preferredOwnerEmail,
     phone: ownerConfig.phone || DEFAULT_OWNER_PHONE,
@@ -1928,7 +2335,7 @@ export async function fetchAllUsersForPlatformOwner(): Promise<ManagedCloudUserR
     updatedAt: ownerConfig.updatedAt || new Date().toISOString()
   };
 
-  // Deduplicate non-owner records by email or phone if any legacy duplicate existed
+  const seenUsernames = new Set<string>([unifiedOwner.username]);
   const seenEmails = new Set<string>(INITIAL_OWNER_EMAILS.map(e => e.toLowerCase()));
   const seenPhones = new Set<string>([unifiedOwner.phone]);
   const deduplicatedUsers: ManagedCloudUserRecord[] = [unifiedOwner];
@@ -1936,10 +2343,13 @@ export async function fetchAllUsersForPlatformOwner(): Promise<ManagedCloudUserR
   nonOwnerRecords.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
   for (const item of nonOwnerRecords) {
+    const normU = item.username ? normalizeUsername(item.username) : '';
     const normE = item.email ? normalizeEmail(item.email) : '';
     const normP = item.phone ? normalizeYemenPhone(item.phone) : '';
+    if (normU && seenUsernames.has(normU)) continue;
     if (normE && seenEmails.has(normE)) continue;
     if (normP && seenPhones.has(normP)) continue;
+    if (normU) seenUsernames.add(normU);
     if (normE) seenEmails.add(normE);
     if (normP) seenPhones.add(normP);
     deduplicatedUsers.push(item);
@@ -1949,13 +2359,14 @@ export async function fetchAllUsersForPlatformOwner(): Promise<ManagedCloudUserR
 }
 
 /**
- * Updates a user's profile, role, verification status, archive status, and enrollment in Cloud Firestore.
+ * Updates a user's profile, unique username, role, archive status, and enrollment in Cloud Firestore.
  * Exclusively callable by the Platform Owner.
  */
 export async function updateUserAccountByPlatformOwner(params: {
   callerUid: string;
   callerEmail: string;
   targetUid: string;
+  username?: string;
   displayNameArabic: string;
   email?: string;
   phone?: string;
@@ -1971,6 +2382,9 @@ export async function updateUserAccountByPlatformOwner(params: {
   const nowIso = new Date().toISOString();
   const existingProfile = await fetchUserProfile(params.targetUid);
 
+  const cleanUsername = params.username && params.username.trim()
+    ? normalizeUsername(params.username)
+    : existingProfile?.username || `user_${params.targetUid.slice(0, 6)}`;
   const cleanEmail = params.email && params.email.trim() ? normalizeEmail(params.email) : '';
   const cleanPhone = params.phone && params.phone.trim() ? normalizeYemenPhone(params.phone) : '';
   const cleanAcad =
@@ -1978,8 +2392,8 @@ export async function updateUserAccountByPlatformOwner(params: {
       ? normalizeAcademicId(params.academicStudentNumber)
       : '';
 
-  // Validate uniqueness excluding targetUid
   const uniqueness = await checkIdentifierUniqueness({
+    username: cleanUsername || undefined,
     email: cleanEmail || undefined,
     phone: cleanPhone || undefined,
     academicStudentNumber: cleanAcad || undefined,
@@ -1991,10 +2405,16 @@ export async function updateUserAccountByPlatformOwner(params: {
     throw new Error(uniqueness.message || 'البيانات المدخلة متعارضة مع حساب مستخدم آخر في المنصة.');
   }
 
-  // Release old identifiers if they were changed
+  // Immediately delete old identifiers from Cloud Firestore if changed
+  if (
+    existingProfile?.username &&
+    normalizeUsername(existingProfile.username) !== cleanUsername
+  ) {
+    await releaseUsernameIdentifier(existingProfile.username);
+  }
   if (
     existingProfile?.email &&
-    !existingProfile.email.startsWith('phone_') &&
+    !isSyntheticUserEmail(existingProfile.email) &&
     normalizeEmail(existingProfile.email) !== cleanEmail
   ) {
     await releaseIdentifierKeyFromCloud(getEmailDocKey(existingProfile.email));
@@ -2017,7 +2437,8 @@ export async function updateUserAccountByPlatformOwner(params: {
   const updatedProfile: UserProfile = cleanFirestoreData({
     ...(existingProfile || {}),
     uid: params.targetUid,
-    email: cleanEmail || existingProfile?.email || '',
+    username: cleanUsername,
+    email: cleanEmail || existingProfile?.email || usernameToAuthEmail(cleanUsername),
     phone: cleanPhone || undefined,
     academicStudentNumber: cleanAcad || undefined,
     displayNameArabic: params.displayNameArabic.trim(),
@@ -2033,25 +2454,16 @@ export async function updateUserAccountByPlatformOwner(params: {
           archivedAt: '',
           archiveReason: ''
         }),
-    emailVerified: params.isVerified ? true : Boolean(existingProfile?.emailVerified),
-    phoneVerified: params.isVerified ? true : Boolean(existingProfile?.phoneVerified),
-    isVerified: isOwnerTarget ? true : params.isVerified,
-    ...(params.isVerified ? { verifiedAt: existingProfile?.verifiedAt || nowIso } : {}),
+    emailVerified: true,
+    phoneVerified: true,
+    isVerified: true,
+    verifiedAt: existingProfile?.verifiedAt || nowIso,
     createdAt: existingProfile?.createdAt || nowIso,
     updatedAt: nowIso
   });
 
   await saveUserProfile(updatedProfile);
 
-  // If verified by owner, remove any pending verification challenge from Firestore
-  if (params.isVerified) {
-    try {
-      await deleteDoc(doc(db, 'verificationChallenges', params.targetUid));
-      localStorage.removeItem(`umed_verification_${params.targetUid}`);
-    } catch (e) {}
-  }
-
-  // Update Role in Firestore
   if (params.role === 'student' && !isOwnerTarget) {
     await revokeUserRole({
       callerUid: params.callerUid,
@@ -2067,6 +2479,7 @@ export async function updateUserAccountByPlatformOwner(params: {
       callerRole: 'platform_owner',
       targetUid: params.targetUid,
       email: cleanEmail || `${params.targetUid}@umed.edu.ye`,
+      username: cleanUsername,
       displayNameArabic: params.displayNameArabic.trim(),
       phone: cleanPhone || undefined,
       academicStudentNumber: cleanAcad || undefined,
@@ -2076,7 +2489,6 @@ export async function updateUserAccountByPlatformOwner(params: {
     });
   }
 
-  // Update or Create Student Enrollment in Firestore if enrollmentStatus is set
   if (params.enrollmentStatus && params.enrollmentStatus !== 'not_enrolled') {
     const enrId = `enr-${params.targetUid}`;
     const enrDoc: StudentEnrollment = cleanFirestoreData({
@@ -2085,7 +2497,7 @@ export async function updateUserAccountByPlatformOwner(params: {
       studentNameArabic: params.displayNameArabic.trim(),
       ...(cleanEmail ? { studentEmail: cleanEmail } : {}),
       ...(cleanPhone ? { studentPhone: cleanPhone } : {}),
-      academicStudentNumber: cleanAcad || `MED-${params.targetUid.slice(0, 6).toUpperCase()}`,
+      academicStudentNumber: cleanAcad || cleanUsername,
       universityId: params.universityId || 'univ-dar-al-salam',
       collegeId: 'col-medicine-dar',
       programId: 'prog-mbbs',
@@ -2104,7 +2516,6 @@ export async function updateUserAccountByPlatformOwner(params: {
     } catch (e) {}
   }
 
-  // If this is the Primary Owner, also sync owner_identity in Firestore
   if (isOwnerTarget) {
     await syncAndDeduplicatePrimaryOwnerIdentity({
       ownerUid: params.targetUid,
@@ -2121,9 +2532,9 @@ export async function updateUserAccountByPlatformOwner(params: {
     targetEmail: cleanEmail,
     universityId: params.universityId,
     details: {
+      username: cleanUsername,
       displayNameArabic: params.displayNameArabic,
       role: params.role,
-      isVerified: params.isVerified,
       isArchived: params.isArchived
     }
   });
@@ -2153,7 +2564,10 @@ export async function toggleArchiveUserByPlatformOwner(params: {
   };
 
   try {
-    await setDoc(doc(db, 'userProfiles', params.targetUid), cleanFirestoreData(updated), { merge: true });
+    await Promise.all([
+      setDoc(doc(db, 'userProfiles', params.targetUid), cleanFirestoreData(updated), { merge: true }),
+      setDoc(doc(db, 'users', params.targetUid), cleanFirestoreData(updated), { merge: true }).catch(() => {})
+    ]);
   } catch (e) {}
 
   await writeAuditLogToCloud({
@@ -2222,6 +2636,7 @@ export async function requestPlatformOwnerBootstrap(
     uid,
     role: 'platform_owner',
     email: normalizedEmail,
+    username: 'umed_owner',
     assignedAt: new Date().toISOString(),
     assignedBy: 'SERVER_BOOTSTRAP'
   };

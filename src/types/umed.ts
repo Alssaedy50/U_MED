@@ -21,6 +21,7 @@ export interface UserRoleDoc {
   uid: string;
   role: UserRole;
   email: string;
+  username?: string;
   displayNameArabic?: string;
   phone?: string;
   academicStudentNumber?: string;
@@ -49,7 +50,7 @@ export interface UserProfile {
   phone?: string;
   academicStudentNumber?: string;
   avatarUrl?: string;
-  registrationMethod?: 'email' | 'phone' | 'google';
+  registrationMethod?: 'username' | 'email' | 'phone' | 'google';
   isActive: boolean;
   isArchived?: boolean;
   archivedAt?: string;
@@ -70,6 +71,7 @@ export interface PrimaryOwnerIdentityConfig {
   secondaryEmail: string;
   emails: string[];
   phone: string;
+  username?: string;
   displayNameArabic: string;
   academicStudentNumber: string;
   ownerUid?: string;
@@ -77,8 +79,8 @@ export interface PrimaryOwnerIdentityConfig {
 }
 
 export interface UniqueIdentifierRecord {
-  id: string; // e.g. 'email_...', 'phone_...', 'acad_...'
-  type: 'email' | 'phone' | 'academic_id';
+  id: string; // e.g. 'username_...', 'email_...', 'phone_...', 'acad_...'
+  type: 'username' | 'email' | 'phone' | 'academic_id';
   value: string;
   normalizedValue: string;
   uid: string;

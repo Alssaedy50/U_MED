@@ -100,18 +100,18 @@ export default function StudentDashboard({
   previewStudyLevelId,
   assessmentNavTarget
 }: StudentDashboardProps) {
-  const buildAdminPreviewEnrollment = (): StudentEnrollment => {
+  const buildDefaultEnrollment = (overrideLevelId?: string): StudentEnrollment => {
     const savedCtx = getUserAcademicContext();
     return {
-      id: `enr-preview-${uid}`,
-      uid,
-      studentNameArabic: displayNameArabic || 'معاينة المسؤول',
-      academicStudentNumber: 'ADMIN-PREVIEW',
+      id: uid ? `enr-${uid}` : 'enr-visitor-default',
+      uid: uid || 'visitor',
+      studentNameArabic: displayNameArabic || 'طالب الطب البشري',
+      academicStudentNumber: '',
       universityId: savedCtx.universityId || previewUniversityId || 'univ-dar-al-salam',
       collegeId: savedCtx.collegeId || 'col-med-dar',
       programId: savedCtx.programId || 'prog-mbbs',
       curriculumVersionId: 'cur-dar-2024',
-      currentStudyLevelId: previewStudyLevelId || savedCtx.studyLevelId || 'lvl-2',
+      currentStudyLevelId: overrideLevelId || previewStudyLevelId || savedCtx.studyLevelId || 'lvl-4',
       academicYear: '2025-2026',
       status: 'approved',
       enrolledAt: new Date().toISOString()
@@ -120,24 +120,22 @@ export default function StudentDashboard({
 
   const [enrollment, setEnrollment] = useState<StudentEnrollment | null>(() => {
     try {
-      const cached = localStorage.getItem(`umed_enrollment_${uid}`);
+      const cached = localStorage.getItem(`umed_enrollment_${uid || 'visitor'}`);
       if (cached) {
         const parsed = JSON.parse(cached) as StudentEnrollment;
-        if (parsed && (parsed.status === 'approved' || !isAdminPreview)) {
+        if (parsed && parsed.status !== 'rejected') {
           return parsed;
         }
       }
     } catch (e) {}
-    if (isAdminPreview) {
-      return buildAdminPreviewEnrollment();
-    }
-    return null;
+    return buildDefaultEnrollment();
   });
+  const [showOptionalEnrollmentModal, setShowOptionalEnrollmentModal] = useState<boolean>(false);
   const [universities, setUniversities] = useState<University[]>(() =>
     getCachedCollection<University>('universities')
   );
-  // Instant 0ms render if enrollment is already cached
-  const [loading, setLoading] = useState<boolean>(() => !enrollment);
+  // Instant 0ms render
+  const [loading, setLoading] = useState<boolean>(false);
   const [internalTab, setInternalTab] = useState<'study' | 'library' | 'assessments'>(activeSection);
 
   // Academic Content & Batch Governance State (Strictly scoped to Student's University & Batch)
@@ -208,28 +206,27 @@ export default function StudentDashboard({
     }
   };
 
-  const loadStudentData = async (showSpinner = false) => {
-    if (showSpinner || !enrollment) {
+  const loadStudentData = async (showSpinner = false, overrideEnr?: StudentEnrollment) => {
+    if (showSpinner) {
       setLoading(true);
     }
     try {
       const [enr, univList] = await Promise.all([
-        fetchStudentEnrollment(uid),
+        uid && uid !== 'visitor' ? fetchStudentEnrollment(uid) : Promise.resolve(null),
         fetchUniversities('YE')
       ]);
       setUniversities(univList);
       const effectiveEnrollment =
-        enr && (enr.status === 'approved' || enr.status === 'pending')
+        overrideEnr ||
+        (enr && (enr.status === 'approved' || enr.status === 'pending')
           ? enr
-          : isAdminPreview
-          ? buildAdminPreviewEnrollment()
-          : enr;
+          : enrollment || buildDefaultEnrollment());
       setEnrollment(effectiveEnrollment);
       if (onEnrollmentStatusChange) {
         onEnrollmentStatusChange(effectiveEnrollment);
       }
 
-      if (effectiveEnrollment && (effectiveEnrollment.status === 'approved' || effectiveEnrollment.status === 'pending')) {
+      if (effectiveEnrollment) {
         const [periods, instList, notifList, resList, asmntList] = await Promise.all([
           fetchStudyPeriods(effectiveEnrollment.currentStudyLevelId, effectiveEnrollment.universityId),
           fetchCourseInstructors({ universityId: effectiveEnrollment.universityId, studyLevelId: effectiveEnrollment.currentStudyLevelId }),
@@ -247,7 +244,7 @@ export default function StudentDashboard({
         setLevelResources(resList);
         setLevelAssessments(asmntList);
         syncNotificationsForBatchPosts(
-          uid,
+          uid || 'visitor',
           notifList,
           effectiveEnrollment.universityId,
           effectiveEnrollment.currentStudyLevelId
@@ -402,54 +399,24 @@ export default function StudentDashboard({
     );
   }
 
-  if (!enrollment) {
-    return (
-      <div className="space-y-4">
-        <div className="p-4 bg-teal-950/30 border border-teal-800/50 rounded-2xl text-xs text-teal-300 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-amber-300 flex-shrink-0" />
-            <span>مرحباً بك د. {displayNameArabic}! اختر جامعتك ودفعتك الدراسية لفتح محاضرات ومقررات واختبارات دفعتك فوراً.</span>
-          </div>
-        </div>
-        <RegisterEnrollment
-          uid={uid}
-          studentNameArabic={displayNameArabic}
-          onEnrollmentComplete={(newEnr) => {
-            setEnrollment(newEnr);
-            loadStudentData();
-          }}
-        />
-      </div>
-    );
-  }
+  const activeEnrollment = enrollment || buildDefaultEnrollment();
 
-  if (enrollment.status === 'rejected') {
-    return (
-      <div className="max-w-xl mx-auto bg-slate-900/90 border border-rose-800/50 rounded-2xl p-6 sm:p-8 text-center space-y-4 shadow-2xl">
-        <div className="w-14 h-14 rounded-2xl bg-rose-500/10 text-rose-400 mx-auto flex items-center justify-center">
-          <AlertCircle className="w-8 h-8" />
-        </div>
-        <h2 className="text-lg font-bold text-white">لم يتم قبول طلب القيد الأكاديمي</h2>
-        {enrollment.rejectionReason && (
-          <div className="p-3 bg-rose-950/40 rounded-xl border border-rose-800/60 text-xs text-rose-300">
-            <strong>سبب عدم القبول:</strong> {enrollment.rejectionReason}
-          </div>
-        )}
-        <p className="text-xs text-slate-400">
-          يمكنك إعادة إدخال بيانات القيد الصحيحة وإرسالها مجدداً.
-        </p>
-        <button
-          onClick={() => setEnrollment(null)}
-          className="px-5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold transition-colors"
-        >
-          إعادة تسجيل القيد ببيانات مصححة
-        </button>
-      </div>
-    );
-  }
+  const handleQuickLevelChange = (newLevelId: string) => {
+    saveUserAcademicContext({ studyLevelId: newLevelId });
+    const updatedEnr: StudentEnrollment = {
+      ...activeEnrollment,
+      currentStudyLevelId: newLevelId,
+      status: activeEnrollment.status === 'rejected' ? 'approved' : activeEnrollment.status
+    };
+    setEnrollment(updatedEnr);
+    try {
+      localStorage.setItem(`umed_enrollment_${uid || 'visitor'}`, JSON.stringify(updatedEnr));
+    } catch (e) {}
+    loadStudentData(false, updatedEnr);
+  };
 
-  const isInternship = enrollment.currentStudyLevelId === 'lvl-internship';
-  const currentUniversityName = getUniversityName(enrollment.universityId);
+  const isInternship = activeEnrollment.currentStudyLevelId === 'lvl-internship';
+  const currentUniversityName = getUniversityName(activeEnrollment.universityId);
 
   return (
     <div className="space-y-5">
@@ -467,21 +434,15 @@ export default function StudentDashboard({
                   <h2 className="font-extrabold text-sm sm:text-base text-[var(--text-primary)]">
                     د. {displayNameArabic}
                   </h2>
-                  {enrollment.status === 'approved' ? (
-                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
-                      عضو موثق بالدفعة ✓
-                    </span>
-                  ) : (
-                    <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-bold">
-                      عضو بالدفعة (بانتظار توثيق المندوب)
-                    </span>
-                  )}
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
+                    وصول كامل ومفتوح ✓
+                  </span>
                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
                     isInternship 
                       ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' 
                       : 'bg-teal-500/20 text-teal-300 border-teal-500/30'
                   }`}>
-                    {isInternship ? 'سنة الامتياز السريرية' : `دفعة المستوى ${enrollment.currentStudyLevelId.replace('lvl-', '')}`}
+                    {isInternship ? 'سنة الامتياز السريرية' : `دفعة المستوى ${activeEnrollment.currentStudyLevelId.replace('lvl-', '')}`}
                   </span>
                 </div>
                 <p className="text-xs text-[var(--text-secondary)] mt-1">
@@ -490,24 +451,56 @@ export default function StudentDashboard({
               </div>
             </div>
 
-            {enrollment.academicStudentNumber && (
-              <div className="text-right sm:text-left flex items-center gap-2">
-                <div className="bg-[var(--bg-elevated)] px-3 py-1.5 rounded-xl border border-[var(--border-color)] text-xs">
-                  <span className="text-[var(--text-muted)] block text-[10px]">رقم الكشف / المعرف بالدفعة:</span>
-                  <span className="font-mono text-teal-300 font-bold" dir="ltr">{enrollment.academicStudentNumber}</span>
-                </div>
-              </div>
-            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={activeEnrollment.currentStudyLevelId}
+                onChange={(e) => handleQuickLevelChange(e.target.value)}
+                className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-700 text-teal-300 text-xs font-bold focus:outline-none focus:border-teal-500"
+                title="تغيير المستوى الدراسي / الدفعة"
+              >
+                <option value="lvl-1">المستوى الأول (Year 1)</option>
+                <option value="lvl-2">المستوى الثاني (Year 2)</option>
+                <option value="lvl-3">المستوى الثالث (Year 3)</option>
+                <option value="lvl-4">المستوى الرابع (Year 4)</option>
+                <option value="lvl-5">المستوى الخامس (Year 5)</option>
+                <option value="lvl-6">المستوى السادس (Year 6)</option>
+                <option value="lvl-internship">سنة الامتياز السريرية</option>
+              </select>
+
+              {uid && uid !== 'visitor' && (
+                <button
+                  type="button"
+                  onClick={() => setShowOptionalEnrollmentModal((prev) => !prev)}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold transition-colors"
+                >
+                  {showOptionalEnrollmentModal ? 'إغلاق تخصيص الدفعة' : 'تخصيص الجامعة والدفعة'}
+                </button>
+              )}
+            </div>
           </div>
+
+          {showOptionalEnrollmentModal && uid && uid !== 'visitor' && (
+            <div className="mt-4 pt-4 border-t border-slate-800">
+              <RegisterEnrollment
+                uid={uid}
+                studentNameArabic={displayNameArabic}
+                onEnrollmentComplete={(newEnr) => {
+                  setEnrollment(newEnr);
+                  setShowOptionalEnrollmentModal(false);
+                  loadStudentData(false, newEnr);
+                }}
+              />
+            </div>
+          )}
         </div>
       )}
 
       {/* SECTION: MEDICAL LIBRARY */}
       {internalTab === 'library' && (
         <StudentMedicalLibrary
-          universityId={enrollment.universityId}
-          programId={enrollment.programId}
-          studyLevelId={enrollment.currentStudyLevelId}
+          universityId={activeEnrollment.universityId}
+          programId={activeEnrollment.programId}
+          studyLevelId={activeEnrollment.currentStudyLevelId}
           studentNameArabic={displayNameArabic}
           initialCourseId={selectedCourseFilter?.id}
           initialCourseTitle={selectedCourseFilter?.title}
@@ -518,9 +511,9 @@ export default function StudentDashboard({
       {/* SECTION: ASSESSMENTS & COMPETITIONS */}
       {internalTab === 'assessments' && (
         <StudentAssessmentList
-          universityId={enrollment.universityId}
-          studyLevelId={enrollment.currentStudyLevelId}
-          uid={uid}
+          universityId={activeEnrollment.universityId}
+          studyLevelId={activeEnrollment.currentStudyLevelId}
+          uid={uid || 'visitor'}
           studentNameArabic={displayNameArabic}
           initialAssessmentType={assessmentNavTarget?.assessmentType}
           highlightedAssessmentId={assessmentNavTarget?.assessmentId}

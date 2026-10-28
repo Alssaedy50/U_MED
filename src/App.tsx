@@ -46,7 +46,9 @@ import {
   Share2,
   Check,
   Download,
-  Sparkles
+  Sparkles,
+  AtSign,
+  Edit3
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext.tsx';
 import { UserRole, AuditLog, StudentEnrollment } from './types/umed.ts';
@@ -136,6 +138,9 @@ export default function App() {
     registerEmail, 
     loginPhone,
     registerPhone,
+    loginWithIdentifier,
+    registerWithUsername,
+    updateUniqueUsername,
     logout, 
     deleteOwnAccount,
     bootstrapInitialOwner, 
@@ -237,8 +242,10 @@ export default function App() {
   };
 
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
-  const [authTab, setAuthTab] = useState<'login' | 'register'>('login');
-  const [authMethod, setAuthMethod] = useState<'phone' | 'email'>('phone');
+  const [authTab, setAuthTab] = useState<'login' | 'register'>('register');
+  const [authMethod, setAuthMethod] = useState<'username' | 'phone' | 'email'>('username');
+  const [usernameInput, setUsernameInput] = useState<string>('');
+  const [loginIdentifierInput, setLoginIdentifierInput] = useState<string>('');
   const [emailInput, setEmailInput] = useState<string>('');
   const [phoneInput, setPhoneInput] = useState<string>('');
   const [academicIdInput, setAcademicIdInput] = useState<string>('');
@@ -251,6 +258,24 @@ export default function App() {
     available: boolean | null;
     reason?: string;
   }>({ checking: false, available: null });
+
+  // Cloud Unique Username Editor states for logged-in users in Settings/Account tab
+  const [profileUsernameEdit, setProfileUsernameEdit] = useState<string>('');
+  const [profileDisplayNameEdit, setProfileDisplayNameEdit] = useState<string>('');
+  const [profileUpdateLoading, setProfileUpdateLoading] = useState<boolean>(false);
+  const [profileUpdateMessage, setProfileUpdateMessage] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (userProfile?.username) {
+      setProfileUsernameEdit(userProfile.username);
+    }
+    if (userProfile?.displayNameArabic) {
+      setProfileDisplayNameEdit(userProfile.displayNameArabic);
+    }
+  }, [userProfile?.username, userProfile?.displayNameArabic]);
 
   // Phone & Email Verification OTP states
   const [phoneOtpInput, setPhoneOtpInput] = useState<string>('');
@@ -485,13 +510,13 @@ export default function App() {
     }
   }, [isAuthorizedAdmin, activeTab]);
 
-  // Load and subscribe in real-time to current user's student enrollment status & academic structure
+  // Start real-time academic sync immediately for all users/visitors, and subscribe to enrollment when logged in
   useEffect(() => {
+    startAcademicRealtimeSync();
     if (!user) {
       setStudentEnrollment(null);
       return;
     }
-    startAcademicRealtimeSync();
     fetchStudentEnrollment(user.uid).then(enr => {
       setStudentEnrollment(enr);
     });
@@ -501,17 +526,9 @@ export default function App() {
     return () => unsub();
   }, [user?.uid]);
 
-  const isStudentApproved =
-    studentEnrollment?.status === 'approved' ||
-    studentEnrollment?.status === 'pending' ||
-    isAuthorizedAdmin;
+  // All student tabs are open without mandatory registration
+  const isStudentApproved = true;
 
-  // Strict Workspace Isolation:
-  // 1) Wait until auth `loading` finishes so page refreshes never wipe out the saved admin tab
-  // 2) When in Student Mode (!isAdminMode), block access to all admin tabs
-  // 3) Gate student tabs if enrollment was explicitly rejected
-  // 4) When in Leadership Mode (isAdminMode), default to 'roles' or 'enrollment_queue' if currently on a student tab
-  // 5) Block 'users_manager' and 'backup_restore' for anyone except Platform Owner
   useEffect(() => {
     if (loading) return;
     const studentTabs: ActiveTabType[] = [
@@ -523,13 +540,6 @@ export default function App() {
     if (!isAdminMode) {
       if (!studentTabs.includes(activeTab) && activeTab !== 'auth') {
         setActiveTab('student_dashboard');
-      } else if (
-        (activeTab === 'student_profile' || activeTab === 'student_library' || activeTab === 'student_assessments') &&
-        !isAuthorizedAdmin &&
-        studentEnrollment &&
-        studentEnrollment.status === 'rejected'
-      ) {
-        setActiveTab('student_dashboard');
       }
     } else if (studentTabs.includes(activeTab)) {
       setActiveTab(isOwnerMode ? 'users_manager' : isUniversityAdminOrOwner ? 'enrollment_queue' : 'roles');
@@ -538,19 +548,19 @@ export default function App() {
     } else if (!isUniversityAdminOrOwner && activeTab === 'enrollment_queue') {
       setActiveTab('roles');
     }
-  }, [loading, isAdminMode, isOwnerMode, isUniversityAdminOrOwner, activeTab, studentEnrollment?.status]);
+  }, [loading, isAdminMode, isOwnerMode, isUniversityAdminOrOwner, activeTab]);
 
-  // Live debounced uniqueness check during registration strictly separated by authMethod (phone vs email)
+  // Live debounced uniqueness check during registration (username / phone / email)
   useEffect(() => {
     if (authTab !== 'register') {
       setUniquenessStatus({ checking: false, available: null });
       return;
     }
+    const usernameCandidate = authMethod === 'username' ? usernameInput.trim() : '';
     const emailCandidate = authMethod === 'email' ? emailInput.trim() : '';
     const phoneCandidate = authMethod === 'phone' ? phoneInput.trim() : '';
-    const acadCandidate = academicIdInput.trim();
 
-    if (!emailCandidate && !phoneCandidate && !acadCandidate) {
+    if (!usernameCandidate && !emailCandidate && !phoneCandidate) {
       setUniquenessStatus({ checking: false, available: null });
       return;
     }
@@ -559,9 +569,9 @@ export default function App() {
     setUniquenessStatus(prev => ({ ...prev, checking: true }));
     const timer = setTimeout(async () => {
       const check = await checkIdentifierUniqueness({
+        username: usernameCandidate || undefined,
         email: emailCandidate || undefined,
-        phone: phoneCandidate || undefined,
-        academicStudentNumber: acadCandidate || undefined
+        phone: phoneCandidate || undefined
       });
       if (!cancelled) {
         setUniquenessStatus({
@@ -570,13 +580,13 @@ export default function App() {
           reason: check.message
         });
       }
-    }, 350);
+    }, 300);
 
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [authTab, authMethod, emailInput, phoneInput, academicIdInput]);
+  }, [authTab, authMethod, usernameInput, emailInput, phoneInput]);
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -584,7 +594,14 @@ export default function App() {
     setAuthSuccess(null);
     try {
       if (authTab === 'login') {
-        if (authMethod === 'phone') {
+        if (authMethod === 'username') {
+          const targetId = (loginIdentifierInput || usernameInput).trim();
+          if (!targetId) {
+            setAuthError('يرجى إدخال اسم المستخدم (@username) أو البريد الإلكتروني أو رقم الهاتف');
+            return;
+          }
+          await loginWithIdentifier(targetId, passwordInput);
+        } else if (authMethod === 'phone') {
           if (!phoneInput.trim()) {
             setAuthError('يرجى إدخال رقم الهاتف اليمني (مثال: 771234567)');
             return;
@@ -597,18 +614,22 @@ export default function App() {
           }
           await loginEmail(emailInput, passwordInput);
         }
-        setAuthSuccess('تم تسجيل الدخول بنجاح');
+        setAuthSuccess('تم تسجيل الدخول ومزامنة حسابك السحابي بنجاح ✓');
         setActiveTab('student_dashboard');
       } else {
-        if (!displayNameInput.trim()) {
-          setAuthError('يرجى إدخال الاسم الرباعي بالعربية');
-          return;
-        }
-        if (!academicIdInput.trim() || academicIdInput.trim().length < 3) {
-          setAuthError('يرجى إدخال رقم القيد الجامعي / الأكاديمي الخاص بك لمنع تكرار الحسابات');
-          return;
-        }
-        if (authMethod === 'phone') {
+        // Frictionless Account Creation without Email/Phone/Academic ID Verification
+        if (authMethod === 'username') {
+          if (!usernameInput.trim()) {
+            setAuthError('يرجى اختيار اسم مستخدم فريد خاص بك (مثال: dr_ahmed)');
+            return;
+          }
+          await registerWithUsername(
+            usernameInput.trim(),
+            passwordInput,
+            displayNameInput.trim() || undefined
+          );
+          setAuthSuccess('تم إنشاء حسابك السحابي وحجز اسم المستخدم الفريد الخاص بك فوراً بدون تعقيدات ✓');
+        } else if (authMethod === 'phone') {
           if (!phoneInput.trim()) {
             setAuthError('يرجى إدخال رقم الهاتف اليمني (مثال: 771234567)');
             return;
@@ -616,10 +637,10 @@ export default function App() {
           await registerPhone(
             phoneInput,
             passwordInput,
-            displayNameInput,
-            academicIdInput.trim()
+            displayNameInput.trim() || `مستخدم ${phoneInput.trim()}`,
+            academicIdInput.trim() || undefined
           );
-          setAuthSuccess('تم إنشاء الحساب برقم الهاتف بنجاح — يرجى تأكيد رمز توثيق رقم الهاتف');
+          setAuthSuccess('تم إنشاء حسابك السحابي فوراً بدون تعقيدات ✓');
         } else {
           if (!emailInput.trim()) {
             setAuthError('يرجى إدخال البريد الإلكتروني');
@@ -628,10 +649,10 @@ export default function App() {
           await registerEmail(
             emailInput,
             passwordInput,
-            displayNameInput,
-            academicIdInput.trim()
+            displayNameInput.trim() || emailInput.split('@')[0],
+            academicIdInput.trim() || undefined
           );
-          setAuthSuccess('تم إنشاء الحساب بالبريد الإلكتروني بنجاح — يرجى تأكيد توثيق البريد الإلكتروني');
+          setAuthSuccess('تم إنشاء حسابك السحابي فوراً بدون تعقيدات ✓');
         }
         setActiveTab('student_dashboard');
       }
@@ -639,27 +660,47 @@ export default function App() {
     } catch (err: any) {
       let msg = err.message || 'حدث خطأ أثناء المصادقة';
       if (msg.includes('ACCOUNT_DELETED_FROM_CLOUD')) {
-        msg = 'هذا الحساب تم حذفه نهائياً من السحابة بناءً على طلب صاحبه أو إدارة المنصة. يمكنك إنشاء حساب جديد.';
+        msg = 'هذا الحساب تم حذفه نهائياً من السحابة. يمكنك إنشاء حساب جديد فوراً.';
       } else if (msg.includes('ACCOUNT_ARCHIVED')) {
         msg = 'هذا الحساب مؤرشف وموقوف مؤقتاً من قِبل إدارة المنصة.';
       } else if (msg.includes('INVALID_PHONE_NUMBER')) {
         msg = 'يرجى إدخال رقم هاتف يمني صحيح مكوّن من 9 أرقام يبدأ بـ 70 أو 71 أو 73 أو 77 أو 78 (مثال: 771234567)';
       } else if (msg.includes('INVALID_EMAIL_FORMAT')) {
-        msg = 'يرجى إدخال بريد إلكتروني صحيح (مثال: student@umed.edu.ye)';
+        msg = 'يرجى إدخال بريد إلكتروني صحيح';
       } else if (msg.includes('user-not-found') || msg.includes('invalid-credential')) {
-        msg = authMethod === 'phone'
-          ? 'رقم الهاتف أو كلمة المرور غير صحيحة (إذا كنت طالباً جديداً اضغط على "إنشاء حساب طالب جديد" أولاً)'
-          : 'البريد الإلكتروني أو كلمة المرور غير صحيحة';
+        msg = 'اسم المستخدم أو كلمة المرور غير صحيحة (إذا لم يكن لديك حساب، اختر "إنشاء حساب فوري" أولاً)';
       } else if (msg.includes('wrong-password')) {
         msg = 'كلمة المرور غير صحيحة';
       } else if (msg.includes('email-already-in-use')) {
-        msg = authMethod === 'phone'
-          ? 'رقم الهاتف مسجل مسبقاً في حساب آخر، لا يُسمح بتكرار الحسابات بنفس الرقم'
-          : 'البريد الإلكتروني مسجل مسبقاً في حساب آخر، لا يُسمح بتكرار الحسابات بنفس البريد';
+        msg = 'هذا المعرّف مستخدم مسبقاً في حساب آخر، يرجى اختيار اسم مستخدم فريد مختلف';
       } else if (msg.includes('weak-password')) {
-        msg = 'كلمة المرور ضعيفة (يجب أن تكون 6 أحرف أو أرقام على الأقل)';
+        msg = 'كلمة المرور قصيرة جداً (يجب أن تكون 6 أحرف أو أرقام على الأقل)';
       }
       setAuthError(msg);
+    }
+  };
+
+  const handleUpdateCloudUsername = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    setProfileUpdateLoading(true);
+    setProfileUpdateMessage(null);
+    try {
+      const res = await updateUniqueUsername(
+        profileUsernameEdit.trim(),
+        profileDisplayNameEdit.trim() || undefined
+      );
+      setProfileUpdateMessage({
+        type: 'success',
+        text: res.message
+      });
+    } catch (err: any) {
+      setProfileUpdateMessage({
+        type: 'error',
+        text: err.message || 'تعذر تحديث اسم المستخدم في السحابة'
+      });
+    } finally {
+      setProfileUpdateLoading(false);
     }
   };
 
@@ -890,12 +931,13 @@ export default function App() {
           questions={sharedGuestData?.questions || []}
           studentNameArabic={userProfile?.displayNameArabic || user?.displayName || undefined}
           uid={user?.uid}
-          isGuestMode={!user}
+          isGuestMode={false}
           onRequireGuestAccount={(sub) => {
             setPendingGuestSubmission(sub);
             setIsGuestExamOpen(false);
             clearSharedAssessmentIdFromUrl();
             setAuthTab('register');
+            setActiveTab('auth');
           }}
           onClose={() => {
             setIsGuestExamOpen(false);
@@ -916,7 +958,7 @@ export default function App() {
         />
       )}
 
-      {/* TOP-LEVEL CLAIMED GUEST RESULT & LIVE RANKED LEADERBOARD MODAL (Shown immediately after Account Registration) */}
+      {/* TOP-LEVEL CLAIMED GUEST RESULT & LIVE RANKED LEADERBOARD MODAL */}
       {claimedGuestOutcome && (
         <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto" dir="rtl">
           <div className="bg-slate-900 border border-teal-500/50 rounded-2xl p-5 sm:p-6 max-w-xl w-full my-auto space-y-5 shadow-2xl">
@@ -942,7 +984,7 @@ export default function App() {
 
             <div className="p-5 rounded-2xl bg-gradient-to-b from-teal-950/70 to-slate-950 border border-teal-500/40 text-center space-y-2">
               <span className="px-3 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold">
-                تم إنشاء حسابك وتصحيح إجاباتك بنجاح ✓
+                تم تصحيح إجاباتك بنجاح ✓
               </span>
               <div className="text-3xl font-black text-teal-400 font-mono pt-1">
                 {claimedGuestOutcome.result.percentage}%
@@ -1057,458 +1099,13 @@ export default function App() {
         </div>
       )}
 
-      {/* IF INITIALIZING AUTH SESSION ON RELOAD: DO NOT FLASH LOGIN FORM */}
+      {/* IF INITIALIZING AUTH SESSION ON RELOAD */}
       {loading ? (
         <div className="min-h-[100dvh] flex items-center justify-center p-4 overflow-y-auto">
           <div className="max-w-md w-full my-auto bg-slate-900/80 border border-slate-800 rounded-2xl p-8 sm:p-10 text-center space-y-3 shadow-2xl">
             <RefreshCw className="w-8 h-8 animate-spin text-teal-400 mx-auto" />
-            <h2 className="text-sm font-bold text-white">جارٍ استعادة جلستك النشطة في {platformSettings.platformNameArabic}</h2>
-            <p className="text-xs text-slate-400">يرجى الانتظار لحظة ريثما يتم التحقق من بيانات الحساب والقيد الأكاديمي</p>
-          </div>
-        </div>
-      ) : !user ? (
-        /* UNAUTHENTICATED LOGIN / REGISTER VIEW */
-        <div className="min-h-[100dvh] flex flex-col justify-start sm:justify-center py-6 sm:py-10 px-3.5 sm:px-6 overflow-y-auto">
-          <div className="max-w-md w-full mx-auto my-auto bg-slate-900/90 border border-slate-800 rounded-2xl p-5 sm:p-8 shadow-2xl space-y-5">
-            <div className="text-center space-y-2">
-              <div className="flex justify-center">
-                <PlatformLogoBadge settings={platformSettings} size="lg" />
-              </div>
-              <h1 className="text-lg font-bold text-white">{platformSettings.platformNameArabic}</h1>
-              <p className="text-xs text-slate-400">
-                {platformSettings.platformTaglineArabic ||
-                  'سجّل دخولك أو أنشئ حسابك الأكاديمي للوصول إلى محاضرات البلوكات والاختبارات والمسابقات الطبية'}
-              </p>
-            </div>
-
-            {/* Guest Account Creation & Competition Notification Banner when Guest solved a model */}
-            {pendingGuestSubmission && (
-              <div className="p-4 rounded-2xl bg-gradient-to-l from-amber-950/70 via-indigo-950/90 to-teal-950/90 border-2 border-amber-500/50 space-y-2.5 shadow-xl">
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[11px] font-extrabold">
-                    {pendingGuestSubmission.scoredResult
-                      ? `نتيجتك في الاختبار: ${pendingGuestSubmission.scoredResult.score}/${pendingGuestSubmission.scoredResult.totalPoints} (${pendingGuestSubmission.scoredResult.percentage}%) ✓`
-                      : 'إجاباتك محفوظة وجاهزة ✓'}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setIsGuestExamOpen(true)}
-                    className="text-[11px] text-teal-300 hover:underline font-bold"
-                  >
-                    عرض الاختبار والنتيجة
-                  </button>
-                </div>
-                <h3 className="text-xs sm:text-sm font-extrabold text-white">
-                  تنبيه: أنشئ حسابك الآن للدخول في المنافسة مع باقي الطلاب في "{pendingGuestSubmission.assessment.titleArabic}" والوصول لجميع الخدمات!
-                </h3>
-                <p className="text-[11px] text-slate-300 leading-relaxed">
-                  بمجرد إتمام إنشاء الحساب أو تسجيل الدخول أدناه، سيتم تثبيت درجتك تلقائياً في لوحة الترتيب والمنافسة الرسمية مع زملائك، وفتح كافة خدمات المنصة (المكتبة الطبية، المحاضرات، الملخصات، وبنوك الأسئلة).
-                </p>
-              </div>
-            )}
-
-            {/* Shared Model Quick Launch Card if visitor opened a shared link */}
-            {sharedGuestData && !pendingGuestSubmission && (
-              <div className="p-4 rounded-2xl bg-indigo-950/50 border border-indigo-500/40 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 text-[11px] font-bold">
-                    نموذج اختبار متاح للحل المباشر وإظهار النتيجة فوراً
-                  </span>
-                  <Trophy className="w-4 h-4 text-amber-400" />
-                </div>
-                <div className="text-sm font-bold text-white">{sharedGuestData.assessment.titleArabic}</div>
-                <p className="text-[11px] text-slate-300">
-                  يمكنك حل جميع أسئلة هذا النموذج ومعرفة نتيجتك النهائية فوراً حتى بدون حساب، مع إمكانية إنشاء حساب للدخول في المنافسة مع باقي الطلاب والوصول لجميع مميزات المنصة.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setIsGuestExamOpen(true)}
-                  className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-lg transition-colors"
-                >
-                  بدء حل الاختبار وإظهار النتيجة الآن ({sharedGuestData.questions.length} أسئلة)
-                </button>
-              </div>
-            )}
-
-            {!sharedGuestData && !pendingGuestSubmission && (
-              <div className="space-y-2.5">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowPublicModelsBrowser((prev) => !prev)}
-                    className="py-2.5 px-3 rounded-xl bg-indigo-950/60 hover:bg-indigo-900/70 border border-indigo-500/40 text-indigo-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
-                  >
-                    <Trophy className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>حل ومشاركة النماذج المتاحة ({publicModelsList.length || 1})</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowSharedLinkPasteBox((prev) => !prev)}
-                    className="py-2.5 px-3 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-teal-300 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-                    <span>فتح رابط نموذج مشترك</span>
-                  </button>
-                </div>
-
-                {showPublicModelsBrowser && (
-                  <div className="p-3.5 rounded-2xl bg-slate-950 border border-indigo-500/40 space-y-2.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold text-indigo-300">
-                        اختر أي نموذج لحله ومعرفة نتيجتك فوراً (أو نسخ رابط مشاركته):
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setShowPublicModelsBrowser(false)}
-                        className="text-[11px] text-slate-400 hover:text-white"
-                      >
-                        إغلاق
-                      </button>
-                    </div>
-                    <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
-                      {(publicModelsList.length > 0
-                        ? publicModelsList
-                        : [
-                            {
-                              id: 'asmnt-cvs-midterm',
-                              titleArabic: 'اختبار منتصف بلوك القلبي الوعائي (CVS)',
-                              assessmentType: 'exam',
-                              durationMinutes: 30,
-                              totalPoints: 20
-                            } as Assessment
-                          ]
-                      ).map((model) => (
-                        <div
-                          key={model.id}
-                          className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between gap-2"
-                        >
-                          <div className="min-w-0 flex-1">
-                            <div className="text-xs font-bold text-white truncate">{model.titleArabic}</div>
-                            <div className="text-[10px] text-slate-400">
-                              {model.assessmentType === 'competition' ? 'مسابقة تنافسية' : 'نموذج اختبار'} • متاح للحل وإظهار النتيجة بدون حساب
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                const shareUrl = buildShareableAssessmentUrl(model);
-                                try {
-                                  await navigator.clipboard.writeText(shareUrl);
-                                } catch {}
-                                setCopiedModelId(model.id);
-                                setTimeout(() => setCopiedModelId(null), 2200);
-                              }}
-                              className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 transition-colors"
-                              title="نسخ رابط مشاركة هذا النموذج"
-                            >
-                              {copiedModelId === model.id ? (
-                                <Check className="w-3.5 h-3.5 text-emerald-400" />
-                              ) : (
-                                <Share2 className="w-3.5 h-3.5" />
-                              )}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setShowPublicModelsBrowser(false);
-                                loadAndOpenSharedAssessment(model.id, true);
-                              }}
-                              className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold transition-colors"
-                            >
-                              بدء الاختبار
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {showSharedLinkPasteBox && (
-                  <div className="p-3 rounded-xl bg-slate-950 border border-indigo-500/40 space-y-2">
-                    <label className="block text-[11px] text-slate-300 font-semibold">
-                      الصق رابط النموذج المشترك أو معرف التقييم لفتحه وحله فوراً:
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={sharedLinkPasteInput}
-                        onChange={(e) => setSharedLinkPasteInput(e.target.value)}
-                        placeholder="https://.../?sharedAssessmentId=..."
-                        dir="ltr"
-                        className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono focus:outline-none focus:border-indigo-500"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const parsedId = parseSharedAssessmentInput(sharedLinkPasteInput);
-                          if (parsedId) {
-                            setShowSharedLinkPasteBox(false);
-                            setSharedLinkPasteInput('');
-                            loadAndOpenSharedAssessment(parsedId, true);
-                          }
-                        }}
-                        className="px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shrink-0"
-                      >
-                        فتح النموذج
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
-              <button
-                onClick={() => { setAuthTab('login'); setAuthError(null); }}
-                className={`flex-1 py-2 rounded-lg font-bold transition-colors ${authTab === 'login' ? 'bg-teal-600 text-white' : 'text-slate-400 hover:text-white'}`}
-              >
-                تسجيل الدخول
-              </button>
-              <button
-                onClick={() => { setAuthTab('register'); setAuthError(null); }}
-                className={`flex-1 py-2 rounded-lg font-bold transition-colors ${authTab === 'register' ? 'bg-teal-600 text-white' : 'text-slate-400 hover:text-white'}`}
-              >
-                إنشاء حساب طالب جديد
-              </button>
-            </div>
-
-            {/* Method Toggle: Phone (+967) Independent from Email */}
-            <div className="grid grid-cols-2 gap-2 bg-slate-950/70 p-1 rounded-xl border border-slate-800/80 text-xs">
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthMethod('phone');
-                  setAuthError(null);
-                  setUniquenessStatus({ checking: false, available: null });
-                }}
-                className={`py-2 px-3 rounded-lg font-bold transition-all flex items-center justify-center gap-1.5 ${
-                  authMethod === 'phone'
-                    ? 'bg-slate-800 text-teal-300 border border-teal-500/40 shadow-xs'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <Phone className="w-3.5 h-3.5" />
-                <span>برقم الهاتف (+967)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthMethod('email');
-                  setAuthError(null);
-                  setUniquenessStatus({ checking: false, available: null });
-                }}
-                className={`py-2 px-3 rounded-lg font-bold transition-all flex items-center justify-center gap-1.5 ${
-                  authMethod === 'email'
-                    ? 'bg-slate-800 text-teal-300 border border-teal-500/40 shadow-xs'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <Mail className="w-3.5 h-3.5" />
-                <span>بالبريد الإلكتروني</span>
-              </button>
-            </div>
-
-            {authError && (
-              <div className="p-3 bg-rose-950/50 border border-rose-800/80 rounded-xl text-rose-300 text-xs flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                <span>{authError}</span>
-              </div>
-            )}
-
-            {authSuccess && (
-              <div className="p-3 bg-emerald-950/50 border border-emerald-800/80 rounded-xl text-emerald-300 text-xs flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
-                <span>{authSuccess}</span>
-              </div>
-            )}
-
-            <form onSubmit={handleAuthSubmit} className="space-y-3.5 text-xs">
-              {authTab === 'register' && (
-                <>
-                  <div>
-                    <label className="block text-slate-300 mb-1 font-semibold">الاسم الرباعي بالعربية:</label>
-                    <input
-                      type="text"
-                      required
-                      value={displayNameInput}
-                      onChange={(e) => setDisplayNameInput(e.target.value)}
-                      placeholder="أدخل اسمك الرباعي كما في البطاقة الجامعية"
-                      className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-teal-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-slate-300 mb-1 font-semibold flex items-center justify-between">
-                      <span className="flex items-center gap-1.5">
-                        <Hash className="w-3.5 h-3.5 text-teal-400" />
-                        <span>الرقم الجامعي / رقم القيد الأكاديمي:</span>
-                      </span>
-                      <span className="text-[10px] text-teal-400 font-normal">خاص بكل طالب</span>
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={academicIdInput}
-                      onChange={(e) => setAcademicIdInput(e.target.value)}
-                      placeholder="مثال: 20241055 أو MED-2025-104"
-                      className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono focus:outline-none focus:border-teal-500"
-                      dir="ltr"
-                    />
-                  </div>
-                </>
-              )}
-
-              {authMethod === 'phone' ? (
-                <div>
-                  <label className="block text-slate-300 mb-1 font-semibold flex items-center justify-between">
-                    <span>رقم الهاتف المحمول:</span>
-                    <span className="text-[10px] text-teal-400 font-normal">معتمد لتوثيق الحساب</span>
-                  </label>
-                  <div className="flex items-center gap-2" dir="ltr">
-                    <span className="px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-teal-400 font-mono font-bold select-none shrink-0">
-                      +967
-                    </span>
-                    <input
-                      type="tel"
-                      required
-                      value={phoneInput}
-                      onChange={(e) => setPhoneInput(e.target.value)}
-                      placeholder="771234567"
-                      className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono focus:outline-none focus:border-teal-500"
-                      dir="ltr"
-                    />
-                  </div>
-                  <p className="text-[10px] text-slate-500 mt-1">
-                    يدعم جميع شبكات الاتصالات اليمنية (يمن موبايل 77/78، سبأفون 71، YOU 73، واي 70)
-                  </p>
-                </div>
-              ) : (
-                <div>
-                  <label className="block text-slate-300 mb-1 font-semibold flex items-center justify-between">
-                    <span>البريد الإلكتروني:</span>
-                    <span className="text-[10px] text-teal-400 font-normal">معتمد لتوثيق الحساب</span>
-                  </label>
-                  <input
-                    type="email"
-                    required
-                    value={emailInput}
-                    onChange={(e) => setEmailInput(e.target.value)}
-                    placeholder="name@example.com"
-                    className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono focus:outline-none focus:border-teal-500"
-                    dir="ltr"
-                  />
-                </div>
-              )}
-
-              {/* Live Uniqueness Check Indicator during Registration */}
-              {authTab === 'register' && (uniquenessStatus.checking || uniquenessStatus.available !== null) && (
-                <div
-                  className={`p-2.5 rounded-xl border text-[11px] flex items-center gap-2 ${
-                    uniquenessStatus.checking
-                      ? 'bg-slate-950 border-slate-800 text-slate-400'
-                      : uniquenessStatus.available
-                      ? 'bg-emerald-950/30 border-emerald-800/60 text-emerald-300'
-                      : 'bg-rose-950/50 border-rose-800/80 text-rose-300'
-                  }`}
-                >
-                  {uniquenessStatus.checking ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-teal-400 shrink-0" />
-                      <span>
-                        جارٍ التحقق من صلاحية {authMethod === 'phone' ? 'رقم الهاتف' : 'البريد الإلكتروني'} والرقم الجامعي...
-                      </span>
-                    </>
-                  ) : uniquenessStatus.available ? (
-                    <>
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                      <span>البيانات المدخلة صحيحة ومتاحة للتسجيل ✓</span>
-                    </>
-                  ) : (
-                    <>
-                      <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-                      <span>{uniquenessStatus.reason}</span>
-                    </>
-                  )}
-                </div>
-              )}
-
-              <div>
-                <label className="block text-slate-300 mb-1 font-semibold">كلمة المرور (6 أحرف أو أرقام على الأقل):</label>
-                <input
-                  type="password"
-                  required
-                  value={passwordInput}
-                  onChange={(e) => setPasswordInput(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono focus:outline-none focus:border-teal-500"
-                  dir="ltr"
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading || (authTab === 'register' && uniquenessStatus.available === false)}
-                className="w-full py-3 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors shadow-lg shadow-teal-600/20"
-              >
-                <LogIn className="w-4 h-4" />
-                <span>
-                  {authTab === 'login'
-                    ? authMethod === 'phone'
-                      ? 'تسجيل الدخول برقم الهاتف'
-                      : 'تسجيل الدخول بالبريد الإلكتروني'
-                    : authMethod === 'phone'
-                    ? 'إنشاء الحساب برقم الهاتف وإرسال رمز التوثيق'
-                    : 'إنشاء الحساب بالبريد وإرسال رمز التوثيق'}
-                </span>
-              </button>
-            </form>
-
-            <div className="relative py-1">
-              <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-slate-800"></div></div>
-              <div className="relative flex justify-center text-[10px]"><span className="bg-slate-900 px-3 text-slate-500">أو المتابعة السريعة عبر</span></div>
-            </div>
-
-            <button
-              onClick={handleGoogleAuth}
-              disabled={loading}
-              className="w-full py-2.5 px-4 rounded-xl bg-white hover:bg-slate-100 text-slate-900 font-bold text-xs flex items-center justify-center gap-2 transition-colors shadow border border-slate-300"
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24">
-                <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.66v3.05h3.87c2.26-2.09 3.67-5.17 3.67-9.15z"/>
-                <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.87-3.05c-1.08.72-2.45 1.16-4.06 1.16-3.13 0-5.78-2.11-6.73-4.96H1.26v3.15C3.29 21.36 7.35 24 12 24z"/>
-                <path fill="#FBBC05" d="M5.27 14.24c-.25-.72-.38-1.49-.38-2.24s.13-1.52.38-2.24V6.61H1.26C.46 8.2.01 9.99.01 12c0 2.01.45 3.8 1.25 5.39l4.01-3.15z"/>
-                <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.35 0 3.29 2.64 1.26 6.61l4.01 3.15c.95-2.85 3.6-4.96 6.73-4.96z"/>
-              </svg>
-              <span>الدخول بحساب Google</span>
-            </button>
-
-            {/* Footer Legal & Contact Links for Visitors */}
-            <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-center gap-2 text-[11px] text-slate-400">
-              <button
-                type="button"
-                onClick={() => setLegalContactModalState({ isOpen: true, initialTab: 'terms' })}
-                className="hover:text-teal-300 transition-colors underline underline-offset-4"
-              >
-                شروط الاستخدام
-              </button>
-              <span className="text-slate-700">•</span>
-              <button
-                type="button"
-                onClick={() => setLegalContactModalState({ isOpen: true, initialTab: 'privacy' })}
-                className="hover:text-teal-300 transition-colors underline underline-offset-4"
-              >
-                سياسة الخصوصية
-              </button>
-              <span className="text-slate-700">•</span>
-              <button
-                type="button"
-                onClick={() => setLegalContactModalState({ isOpen: true, initialTab: 'contact' })}
-                className="hover:text-amber-300 font-bold transition-colors underline underline-offset-4"
-              >
-                تواصل مع المنصة
-              </button>
-            </div>
+            <h2 className="text-sm font-bold text-white">جارٍ تحضير منصة {platformSettings.platformNameArabic}</h2>
+            <p className="text-xs text-slate-400">يرجى الانتظار لحظة ريثما يتم مزامنة البيانات السحابية</p>
           </div>
         </div>
       ) : isAccountArchived ? (
@@ -1520,7 +1117,7 @@ export default function App() {
             </div>
             <h1 className="text-base font-bold text-white">هذا الحساب مؤرشف وموقوف حالياً</h1>
             <p className="text-xs text-slate-300 leading-relaxed">
-              تم أرشفة حسابك في قاعدة البيانات السحابية من قِبل مالك المنصة. لا يمكنك الوصول إلى المحتوى الدراسي حتى يتم إلغاء الأرشفة.
+              تم أرشفة حسابك في قاعدة البيانات السحابية من قِبل مالك المنصة. لا يمكنك الوصول إلى المحتوى الدراسي بهذا الحساب حتى يتم إلغاء الأرشفة.
             </p>
             {userProfile?.archiveReason && (
               <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-amber-300">
@@ -1536,206 +1133,8 @@ export default function App() {
             </button>
           </div>
         </div>
-      ) : pendingVerification ? (
-        /* ACCOUNT VERIFICATION GATE (تأكيد توثيق الحساب المستقل حسب طريقة التسجيل: هاتف أو بريد) */
-        <div className="min-h-[100dvh] flex flex-col justify-start sm:justify-center py-6 sm:py-10 px-3.5 sm:px-6 overflow-y-auto">
-          <div className="max-w-lg w-full mx-auto my-auto bg-slate-900/95 border border-teal-500/40 rounded-2xl p-5 sm:p-8 shadow-2xl space-y-5">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-2xl bg-teal-500/20 border border-teal-500/40 flex items-center justify-center text-teal-400 shrink-0">
-                  <KeyRound className="w-6 h-6" />
-                </div>
-                <div>
-                  <h1 className="text-base font-bold text-white">تأكيد توثيق الحساب الأكاديمي</h1>
-                  <p className="text-xs text-slate-400">
-                    {pendingVerification.verificationMethod === 'phone'
-                      ? 'التحقق من رقم الهاتف اليمني المسجل لتوثيق الحساب وتفعيله في السحابة'
-                      : 'التحقق من البريد الإلكتروني المسجل لتوثيق الحساب وتفعيله في السحابة'}
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={logout}
-                className="text-xs text-slate-400 hover:text-rose-400 flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800"
-              >
-                <LogOut className="w-3.5 h-3.5" />
-                <span>خروج</span>
-              </button>
-            </div>
-
-            {/* Summary of Account Details */}
-            <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
-              <div className="text-[11px] font-bold text-teal-400 flex items-center gap-1.5">
-                <ShieldCheck className="w-4 h-4" />
-                <span>بيانات الحساب الأكاديمي المسجلة باسمك:</span>
-              </div>
-              {pendingVerification.verificationMethod === 'phone' && pendingVerification.phone && (
-                <div className="flex items-center justify-between text-slate-300 pt-1 border-t border-slate-900">
-                  <span>رقم الهاتف المسجل:</span>
-                  <span className="font-mono text-white flex items-center gap-1.5" dir="ltr">
-                    {pendingVerification.phone}
-                    {pendingVerification.phoneVerified ? (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">موثق ✓</span>
-                    ) : (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">بانتظار التأكيد</span>
-                    )}
-                  </span>
-                </div>
-              )}
-              {pendingVerification.verificationMethod === 'email' && pendingVerification.email && (
-                <div className="flex items-center justify-between text-slate-300 pt-1 border-t border-slate-900">
-                  <span>البريد الإلكتروني (طريقة التسجيل):</span>
-                  <span className="font-mono text-white flex items-center gap-1.5" dir="ltr">
-                    {pendingVerification.email}
-                    {pendingVerification.emailVerified ? (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">موثق ✓</span>
-                    ) : (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">بانتظار التأكيد</span>
-                    )}
-                  </span>
-                </div>
-              )}
-              {userProfile?.academicStudentNumber && (
-                <div className="flex items-center justify-between text-slate-300 pt-1 border-t border-slate-900">
-                  <span>رقم القيد الجامعي المحجوز:</span>
-                  <span className="font-mono text-teal-300 font-bold" dir="ltr">
-                    {userProfile.academicStudentNumber}
-                  </span>
-                </div>
-              )}
-            </div>
-
-            {/* Instant Smart Dispatch Notification Banner (SMS / Email OTP Code) */}
-            <div className="p-3.5 rounded-xl bg-teal-950/40 border border-teal-700/50 space-y-2 text-xs">
-              <div className="font-bold text-teal-300 flex items-center justify-between">
-                <span className="flex items-center gap-1.5">
-                  <Send className="w-3.5 h-3.5" />
-                  <span>
-                    {pendingVerification.verificationMethod === 'phone'
-                      ? 'رمز توثيق رقم الهاتف (SMS OTP):'
-                      : 'رمز توثيق البريد الإلكتروني (Email OTP):'}
-                  </span>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (pendingVerification.verificationMethod === 'phone' && pendingVerification.phoneCode) {
-                      setPhoneOtpInput(pendingVerification.phoneCode);
-                    }
-                    if (pendingVerification.verificationMethod === 'email' && pendingVerification.emailCode) {
-                      setEmailOtpInput(pendingVerification.emailCode);
-                    }
-                  }}
-                  className="text-[11px] px-2.5 py-1 rounded bg-teal-600 hover:bg-teal-500 text-white font-semibold transition-colors"
-                >
-                  تعبئة رمز التوثيق تلقائياً
-                </button>
-              </div>
-              <p className="text-[11px] text-slate-300 leading-relaxed">
-                {pendingVerification.verificationMethod === 'phone'
-                  ? 'أدخل رمز التوثيق المكون من 6 أرقام لتأكيد ملكية رقم الهاتف وتوثيق حسابك في السحابة:'
-                  : 'تم إرسال رابط التفعيل الرسمي عبر Firebase لبريدك الإلكتروني، ويمكنك أيضاً إدخال رمز التوثيق الرقمي التالي مباشرة:'}
-              </p>
-              <div className="pt-1">
-                {pendingVerification.verificationMethod === 'phone' && pendingVerification.phone && !pendingVerification.phoneVerified && (
-                  <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-between">
-                    <span className="text-[11px] text-slate-400">رمز توثيق الهاتف (SMS OTP):</span>
-                    <strong className="font-mono text-base text-amber-300 tracking-widest" dir="ltr">
-                      {pendingVerification.phoneCode}
-                    </strong>
-                  </div>
-                )}
-                {pendingVerification.verificationMethod === 'email' && pendingVerification.email && !pendingVerification.emailVerified && (
-                  <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-between">
-                    <span className="text-[11px] text-slate-400">رمز توثيق البريد (Email OTP):</span>
-                    <strong className="font-mono text-base text-teal-300 tracking-widest" dir="ltr">
-                      {pendingVerification.emailCode}
-                    </strong>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {verifyError && (
-              <div className="p-3 bg-rose-950/50 border border-rose-800 rounded-xl text-rose-300 text-xs flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{verifyError}</span>
-              </div>
-            )}
-
-            {verifySuccess && (
-              <div className="p-3 bg-emerald-950/50 border border-emerald-800 rounded-xl text-emerald-300 text-xs flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 shrink-0" />
-                <span>{verifySuccess}</span>
-              </div>
-            )}
-
-            <form onSubmit={handleVerifyAccountSubmit} className="space-y-4 text-xs">
-              {pendingVerification.verificationMethod === 'phone' && pendingVerification.phone && !pendingVerification.phoneVerified && (
-                <div>
-                  <label className="block text-slate-300 mb-1.5 font-semibold flex items-center gap-1.5">
-                    <Phone className="w-3.5 h-3.5 text-teal-400" />
-                    <span>أدخل رمز توثيق رقم الهاتف ({pendingVerification.phone}):</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    maxLength={6}
-                    value={phoneOtpInput}
-                    onChange={(e) => setPhoneOtpInput(e.target.value.replace(/\D/g, ''))}
-                    placeholder="أدخل الرمز المكون من 6 أرقام"
-                    className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-center text-base tracking-widest focus:outline-none focus:border-teal-500"
-                    dir="ltr"
-                  />
-                </div>
-              )}
-
-              {pendingVerification.verificationMethod === 'email' && pendingVerification.email && !pendingVerification.emailVerified && (
-                <div>
-                  <label className="block text-slate-300 mb-1.5 font-semibold flex items-center gap-1.5">
-                    <Mail className="w-3.5 h-3.5 text-teal-400" />
-                    <span>أدخل رمز توثيق البريد الإلكتروني ({pendingVerification.email}):</span>
-                  </label>
-                  <input
-                    type="text"
-                    maxLength={6}
-                    value={emailOtpInput}
-                    onChange={(e) => setEmailOtpInput(e.target.value.replace(/\D/g, ''))}
-                    placeholder="أدخل رمز البريد (6 أرقام) أو اضغط على الرابط المرسل لبريدك"
-                    className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-center text-base tracking-widest focus:outline-none focus:border-teal-500"
-                    dir="ltr"
-                  />
-                </div>
-              )}
-
-              <div className="flex flex-col sm:flex-row gap-2.5 pt-1">
-                <button
-                  type="submit"
-                  disabled={verifyLoading}
-                  className="flex-1 py-3 px-4 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors shadow-lg shadow-teal-600/20"
-                >
-                  {verifyLoading ? (
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <CheckCircle2 className="w-4 h-4" />
-                  )}
-                  <span>تأكيد توثيق الحساب وتفعيله الآن</span>
-                </button>
-                <button
-                  type="button"
-                  disabled={verifyLoading}
-                  onClick={handleResendVerificationCodes}
-                  className="py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>إعادة إرسال الرمز</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
       ) : (
-        /* AUTHENTICATED WORKSPACE WITH RTL SIDEBAR NAVIGATION */
+        /* OPEN WORKSPACE WITH RTL SIDEBAR NAVIGATION (No Mandatory Registration Gate) */
         <div className="min-h-[100dvh] flex overflow-x-hidden w-full max-w-full">
           
           {/* Mobile Sidebar Backdrop */}
@@ -1804,45 +1203,41 @@ export default function App() {
                     <span>المقررات والبلوكات الدراسية</span>
                   </button>
 
-                  {isStudentApproved && (
-                    <>
-                      <button
-                        onClick={() => setActiveTab('student_library')}
-                        className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
-                          activeTab === 'student_library'
-                            ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
-                            : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
-                        }`}
-                      >
-                        <BookOpen className="w-4 h-4 shrink-0" />
-                        <span>المكتبة الطبية والشرائح</span>
-                      </button>
+                  <button
+                    onClick={() => setActiveTab('student_library')}
+                    className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                      activeTab === 'student_library'
+                        ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
+                        : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                    }`}
+                  >
+                    <BookOpen className="w-4 h-4 shrink-0" />
+                    <span>المكتبة الطبية والشرائح</span>
+                  </button>
 
-                      <button
-                        onClick={() => setActiveTab('student_assessments')}
-                        className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
-                          activeTab === 'student_assessments'
-                            ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
-                            : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
-                        }`}
-                      >
-                        <Trophy className="w-4 h-4 shrink-0" />
-                        <span>الاختبارات والمسابقات</span>
-                      </button>
+                  <button
+                    onClick={() => setActiveTab('student_assessments')}
+                    className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                      activeTab === 'student_assessments'
+                        ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
+                        : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                    }`}
+                  >
+                    <Trophy className="w-4 h-4 shrink-0" />
+                    <span>الاختبارات والمسابقات</span>
+                  </button>
 
-                      <button
-                        onClick={() => setActiveTab('student_profile')}
-                        className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
-                          activeTab === 'student_profile'
-                            ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
-                            : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
-                        }`}
-                      >
-                        <UserCheck className="w-4 h-4 shrink-0" />
-                        <span>الملف الأكاديمي والتقدم</span>
-                      </button>
-                    </>
-                  )}
+                  <button
+                    onClick={() => setActiveTab('student_profile')}
+                    className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                      activeTab === 'student_profile'
+                        ? 'bg-teal-600 text-white font-bold shadow-md shadow-teal-600/20'
+                        : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                    }`}
+                  >
+                    <UserCheck className="w-4 h-4 shrink-0" />
+                    <span>الملف الأكاديمي والتقدم</span>
+                  </button>
                 </div>
               )}
 
@@ -1988,7 +1383,7 @@ export default function App() {
                   }`}
                 >
                   <Settings className="w-4 h-4 shrink-0" />
-                  <span>الإعدادات والحساب</span>
+                  <span>{user ? 'الإعدادات والحساب (@username)' : 'إنشاء حساب فوري / تسجيل الدخول'}</span>
                 </button>
                 <button
                   onClick={() => {
@@ -2033,41 +1428,70 @@ export default function App() {
               <PWASidebarInstallCard />
             </div>
 
-            {/* Sidebar User Card Footer (Stacked vertically so long names and phone numbers never clip) */}
+            {/* Sidebar User Card Footer */}
             <div className="p-3.5 border-t border-slate-800 bg-slate-950/60 space-y-2.5">
-              <div className="flex flex-col items-start gap-1.5">
-                <div className="text-xs font-bold text-white leading-snug break-words w-full">
-                  {userProfile?.displayNameArabic || user.displayName || 'مستخدم UMED'}
+              {user ? (
+                <>
+                  <div className="flex flex-col items-start gap-1.5">
+                    <div className="text-xs font-bold text-white leading-snug break-words w-full">
+                      {userProfile?.displayNameArabic || user.displayName || 'مستخدم UMED'}
+                    </div>
+                    <div className="text-[11px] text-teal-300 font-mono break-all" dir="ltr">
+                      {formatUserIdentifier(user.email, userProfile?.phone, userProfile?.username)}
+                    </div>
+                    <span
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-bold leading-snug ${
+                        isOwnerMode
+                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                          : isAdminMode
+                          ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
+                          : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                      }`}
+                    >
+                      {renderBiDiRoleLabel(activeRole)}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      onClick={() => setActiveTab('auth')}
+                      className="py-2 px-2 rounded-xl bg-teal-500/15 hover:bg-teal-500/25 text-teal-300 border border-teal-500/30 text-[11px] font-bold flex items-center justify-center gap-1 transition-colors"
+                    >
+                      <AtSign className="w-3.5 h-3.5" />
+                      <span>تعديل الاسم</span>
+                    </button>
+                    <button
+                      onClick={logout}
+                      className="py-2 px-2 rounded-xl bg-rose-950/40 hover:bg-rose-900/50 text-rose-300 border border-rose-800/50 text-[11px] font-bold flex items-center justify-center gap-1 transition-colors"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      <span>خروج</span>
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="space-y-2">
+                  <div className="text-[11px] text-slate-300 font-semibold">
+                    أنت تتصفح المنصة بحرية بدون تسجيل إجباري
+                  </div>
+                  <button
+                    onClick={() => {
+                      setAuthTab('register');
+                      setActiveTab('auth');
+                    }}
+                    className="w-full py-2.5 px-3 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-md transition-colors"
+                  >
+                    <AtSign className="w-3.5 h-3.5" />
+                    <span>إنشاء حساب فوري / دخول</span>
+                  </button>
                 </div>
-                <div className="text-[11px] text-slate-400 font-mono break-all" dir="ltr">
-                  {formatUserIdentifier(user.email, userProfile?.phone)}
-                </div>
-                <span
-                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold leading-snug ${
-                    isOwnerMode
-                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                      : isAdminMode
-                      ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
-                      : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
-                  }`}
-                >
-                  {renderBiDiRoleLabel(activeRole)}
-                </span>
-              </div>
-              <button
-                onClick={logout}
-                className="w-full py-2 px-2.5 rounded-xl bg-rose-950/40 hover:bg-rose-900/50 text-rose-300 border border-rose-800/50 text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors"
-              >
-                <LogOut className="w-3.5 h-3.5" />
-                <span>تسجيل الخروج من الحساب</span>
-              </button>
+              )}
             </div>
           </aside>
 
           {/* MAIN WORKSPACE CONTENT AREA */}
           <div className="flex-1 flex flex-col min-w-0 max-w-full overflow-x-hidden">
             
-            {/* Clean Contextual Top Bar (Zero Telemetry Clutter) */}
+            {/* Clean Contextual Top Bar */}
             <header className="sticky top-0 z-30 bg-slate-900/90 backdrop-blur border-b border-slate-800 px-3.5 py-2.5 sm:px-6 sm:py-3">
               <div className="max-w-6xl mx-auto flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2.5 min-w-0">
@@ -2085,6 +1509,28 @@ export default function App() {
                 </div>
 
                 <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                  {!user ? (
+                    <button
+                      onClick={() => {
+                        setAuthTab('register');
+                        setActiveTab('auth');
+                      }}
+                      className="px-2.5 sm:px-3.5 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm transition-colors"
+                    >
+                      <AtSign className="w-3.5 h-3.5 shrink-0" />
+                      <span>حساب فوري / دخول</span>
+                    </button>
+                  ) : userProfile?.username ? (
+                    <button
+                      onClick={() => setActiveTab('auth')}
+                      className="hidden sm:flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-teal-500/15 hover:bg-teal-500/25 border border-teal-500/30 text-teal-300 text-xs font-mono font-bold transition-colors"
+                      dir="ltr"
+                      title="تعديل اسم المستخدم الفريد الخاص بك"
+                    >
+                      <span>@{userProfile.username}</span>
+                    </button>
+                  ) : null}
+
                   {isAuthorizedAdmin && (
                     <button
                       onClick={() => {
@@ -2202,13 +1648,13 @@ export default function App() {
             {/* Page Content Viewport */}
             <main className="flex-1 max-w-6xl w-full mx-auto px-3.5 py-4 pb-28 sm:px-6 sm:py-6 sm:pb-8 space-y-4">
               
-              {/* Claimed Guest Trial Exam Result Celebration Banner (shown right after mandatory account creation) */}
+              {/* Claimed Guest Trial Exam Result Celebration Banner */}
               {claimedGuestOutcome && (
                 <div className="bg-gradient-to-l from-teal-950/90 via-slate-900 to-indigo-950/90 border border-teal-500/50 rounded-2xl p-5 shadow-2xl flex flex-wrap items-center justify-between gap-4">
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
                       <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold">
-                        تم تصحيح اختبارك التجريبي ورصد ترتيبك تلقائياً ✓
+                        تم تصحيح اختبارك ورصد نتيجتك ✓
                       </span>
                     </div>
                     <h3 className="text-base font-extrabold text-white">
@@ -2250,12 +1696,12 @@ export default function App() {
                 </div>
               )}
 
-              {/* STUDENT WORKSPACE VIEWS */}
+              {/* STUDENT WORKSPACE VIEWS (Works seamlessly with or without login) */}
               {!isAdminMode && (activeTab === 'student_dashboard' || activeTab === 'student_library' || activeTab === 'student_assessments') && (
                 <StudentDashboard
-                  uid={user.uid}
-                  userEmail={user.email || ''}
-                  displayNameArabic={userProfile?.displayNameArabic || user.displayName || 'طالب كلية الطب البشري'}
+                  uid={user?.uid || 'visitor'}
+                  userEmail={user?.email || ''}
+                  displayNameArabic={userProfile?.displayNameArabic || user?.displayName || 'طالب كلية الطب البشري'}
                   activeSection={
                     activeTab === 'student_library'
                       ? 'library'
@@ -2279,9 +1725,9 @@ export default function App() {
 
               {!isAdminMode && activeTab === 'student_profile' && (
                 <StudentProfile
-                  uid={user.uid}
-                  userEmail={user.email || ''}
-                  displayNameArabic={userProfile?.displayNameArabic || user.displayName || 'طالب كلية الطب البشري'}
+                  uid={user?.uid || 'visitor'}
+                  userEmail={user?.email || ''}
+                  displayNameArabic={userProfile?.displayNameArabic || user?.displayName || 'طالب كلية الطب البشري'}
                   initialEnrollment={studentEnrollment}
                   onNavigateTab={(tab) => {
                     if (tab === 'library') setActiveTab('student_library');
@@ -2292,78 +1738,80 @@ export default function App() {
               )}
 
               {/* ADMIN, UNIVERSITY OWNER, BATCH REP & DEPT HEAD WORKSPACE VIEWS */}
-              <React.Suspense
-                fallback={
-                  <div className="flex flex-col items-center justify-center p-12 text-slate-400 space-y-3">
-                    <RefreshCw className="w-8 h-8 animate-spin text-teal-400" />
-                    <span className="text-xs font-semibold">جارٍ تحميل الوحدة الإدارية...</span>
-                  </div>
-                }
-              >
-                {isOwnerMode && activeTab === 'users_manager' && (
-                  <PlatformUsersManager
-                    callerUid={user.uid}
-                    callerEmail={user.email || ''}
-                    callerRole={activeRole}
-                  />
-                )}
+              {user && (
+                <React.Suspense
+                  fallback={
+                    <div className="flex flex-col items-center justify-center p-12 text-slate-400 space-y-3">
+                      <RefreshCw className="w-8 h-8 animate-spin text-teal-400" />
+                      <span className="text-xs font-semibold">جارٍ تحميل الوحدة الإدارية...</span>
+                    </div>
+                  }
+                >
+                  {isOwnerMode && activeTab === 'users_manager' && (
+                    <PlatformUsersManager
+                      callerUid={user.uid}
+                      callerEmail={user.email || ''}
+                      callerRole={activeRole}
+                    />
+                  )}
 
-                {isAdminMode && activeTab === 'roles' && (
-                  <HierarchyGovernanceConsole
-                    callerUid={user.uid}
-                    callerEmail={user.email || ''}
-                    callerNameArabic={userProfile?.displayNameArabic || user.displayName || 'مسؤول المنصة'}
-                    callerRole={activeRole}
-                    callerUniversityId={roleDoc?.assignedUniversityId}
-                    callerStudyLevelId={roleDoc?.assignedStudyLevelId}
-                    onRolesUpdated={refreshAdminData}
-                  />
-                )}
+                  {isAdminMode && activeTab === 'roles' && (
+                    <HierarchyGovernanceConsole
+                      callerUid={user.uid}
+                      callerEmail={user.email || ''}
+                      callerNameArabic={userProfile?.displayNameArabic || user.displayName || 'مسؤول المنصة'}
+                      callerRole={activeRole}
+                      callerUniversityId={roleDoc?.assignedUniversityId}
+                      callerStudyLevelId={roleDoc?.assignedStudyLevelId}
+                      onRolesUpdated={refreshAdminData}
+                    />
+                  )}
 
-                {isAdminMode && activeTab === 'academic' && (
-                  <AcademicStructureManager
-                    userRole={activeRole}
-                    assignedUniversityId={roleDoc?.assignedUniversityId}
-                    assignedStudyLevelId={roleDoc?.assignedStudyLevelId}
-                  />
-                )}
+                  {isAdminMode && activeTab === 'academic' && (
+                    <AcademicStructureManager
+                      userRole={activeRole}
+                      assignedUniversityId={roleDoc?.assignedUniversityId}
+                      assignedStudyLevelId={roleDoc?.assignedStudyLevelId}
+                    />
+                  )}
 
-                {isAdminMode && activeTab === 'content_manager' && (
-                  <EducationalContentManager
-                    adminUid={user.uid}
-                    userRole={activeRole}
-                    assignedUniversityId={roleDoc?.assignedUniversityId || 'univ-dar-al-salam'}
-                    assignedStudyLevelId={roleDoc?.assignedStudyLevelId}
-                    assignedCourseId={roleDoc?.assignedCourseId}
-                  />
-                )}
+                  {isAdminMode && activeTab === 'content_manager' && (
+                    <EducationalContentManager
+                      adminUid={user.uid}
+                      userRole={activeRole}
+                      assignedUniversityId={roleDoc?.assignedUniversityId || 'univ-dar-al-salam'}
+                      assignedStudyLevelId={roleDoc?.assignedStudyLevelId}
+                      assignedCourseId={roleDoc?.assignedCourseId}
+                    />
+                  )}
 
-                {isAdminMode && activeTab === 'assessments_manager' && (
-                  <AssessmentManager
-                    universityId={roleDoc?.assignedUniversityId || 'univ-dar-al-salam'}
-                    userRole={activeRole}
-                    assignedStudyLevelId={roleDoc?.assignedStudyLevelId}
-                    assignedCourseId={roleDoc?.assignedCourseId}
-                  />
-                )}
+                  {isAdminMode && activeTab === 'assessments_manager' && (
+                    <AssessmentManager
+                      universityId={roleDoc?.assignedUniversityId || 'univ-dar-al-salam'}
+                      userRole={activeRole}
+                      assignedStudyLevelId={roleDoc?.assignedStudyLevelId}
+                      assignedCourseId={roleDoc?.assignedCourseId}
+                    />
+                  )}
 
-                {isUniversityAdminOrOwner && activeTab === 'enrollment_queue' && (
-                  <EnrollmentApprovalManager
-                    adminUid={user.uid}
-                    assignedUniversityId={isOwnerMode ? undefined : roleDoc?.assignedUniversityId}
-                  />
-                )}
+                  {isUniversityAdminOrOwner && activeTab === 'enrollment_queue' && (
+                    <EnrollmentApprovalManager
+                      adminUid={user.uid}
+                      assignedUniversityId={isOwnerMode ? undefined : roleDoc?.assignedUniversityId}
+                    />
+                  )}
 
-                {isOwnerMode && activeTab === 'backup_restore' && (
-                  <BackupRestoreConsole
-                    adminEmail={user.email || ''}
-                    assignedUniversityId={roleDoc?.assignedUniversityId || 'univ-dar-al-salam'}
-                  />
-                )}
-              </React.Suspense>
+                  {isOwnerMode && activeTab === 'backup_restore' && (
+                    <BackupRestoreConsole
+                      adminEmail={user.email || ''}
+                      assignedUniversityId={roleDoc?.assignedUniversityId || 'univ-dar-al-salam'}
+                    />
+                  )}
+                </React.Suspense>
+              )}
 
               {/* ADMIN TAB: AUDIT LOGS */}
-              {isAdminMode && activeTab === 'audit' && (
+              {user && isAdminMode && activeTab === 'audit' && (
                 <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
                   <div className="flex items-center justify-between pb-3 border-b border-slate-800">
                     <div>
@@ -2415,12 +1863,279 @@ export default function App() {
                 </div>
               )}
 
-              {/* TAB: SETTINGS, APPEARANCE, SYSTEM STATUS & ACCOUNT (الإعدادات والحساب) */}
+              {/* TAB: SETTINGS, APPEARANCE & CLOUD ACCOUNT (الإعدادات والحساب) */}
               {activeTab === 'auth' && (
                 <div className="max-w-3xl mx-auto space-y-6">
 
+                  {/* IF NOT LOGGED IN: FRICTIONLESS ACCOUNT CREATION & LOGIN CARD */}
+                  {!user && (
+                    <div className="bg-slate-900/90 border border-teal-500/40 rounded-2xl p-5 sm:p-7 shadow-2xl space-y-5">
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-11 h-11 rounded-2xl bg-teal-500/20 border border-teal-500/40 flex items-center justify-center text-teal-400 shrink-0">
+                            <AtSign className="w-6 h-6" />
+                          </div>
+                          <div>
+                            <h2 className="text-base sm:text-lg font-extrabold text-white">
+                              إنشاء حساب سحابي فوري أو تسجيل الدخول
+                            </h2>
+                            <p className="text-xs text-slate-400">
+                              أنشئ حسابك فوراً باسم مستخدم فريد (@username) وكلمة مرور فقط بدون توثيق إيميل أو رقم أكاديمي أو أي تعقيدات
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
+                        <button
+                          type="button"
+                          onClick={() => { setAuthTab('register'); setAuthError(null); }}
+                          className={`flex-1 py-2.5 rounded-lg font-bold transition-colors ${authTab === 'register' ? 'bg-teal-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                        >
+                          إنشاء حساب فوري (بدون تعقيدات)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setAuthTab('login'); setAuthError(null); }}
+                          className={`flex-1 py-2.5 rounded-lg font-bold transition-colors ${authTab === 'login' ? 'bg-teal-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                        >
+                          تسجيل الدخول لحسابك
+                        </button>
+                      </div>
+
+                      {/* Method Toggle */}
+                      <div className="grid grid-cols-3 gap-2 bg-slate-950/70 p-1 rounded-xl border border-slate-800/80 text-xs">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAuthMethod('username');
+                            setAuthError(null);
+                            setUniquenessStatus({ checking: false, available: null });
+                          }}
+                          className={`py-2 px-2 rounded-lg font-bold transition-all flex items-center justify-center gap-1.5 ${
+                            authMethod === 'username'
+                              ? 'bg-slate-800 text-teal-300 border border-teal-500/40 shadow-xs'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          <AtSign className="w-3.5 h-3.5" />
+                          <span>باسم المستخدم الفريد</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAuthMethod('phone');
+                            setAuthError(null);
+                            setUniquenessStatus({ checking: false, available: null });
+                          }}
+                          className={`py-2 px-2 rounded-lg font-bold transition-all flex items-center justify-center gap-1.5 ${
+                            authMethod === 'phone'
+                              ? 'bg-slate-800 text-teal-300 border border-teal-500/40 shadow-xs'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          <Phone className="w-3.5 h-3.5" />
+                          <span>برقم الهاتف</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAuthMethod('email');
+                            setAuthError(null);
+                            setUniquenessStatus({ checking: false, available: null });
+                          }}
+                          className={`py-2 px-2 rounded-lg font-bold transition-all flex items-center justify-center gap-1.5 ${
+                            authMethod === 'email'
+                              ? 'bg-slate-800 text-teal-300 border border-teal-500/40 shadow-xs'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          <Mail className="w-3.5 h-3.5" />
+                          <span>بالبريد الإلكتروني</span>
+                        </button>
+                      </div>
+
+                      {authError && (
+                        <div className="p-3 bg-rose-950/50 border border-rose-800/80 rounded-xl text-rose-300 text-xs flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                          <span>{authError}</span>
+                        </div>
+                      )}
+
+                      {authSuccess && (
+                        <div className="p-3 bg-emerald-950/50 border border-emerald-800/80 rounded-xl text-emerald-300 text-xs flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+                          <span>{authSuccess}</span>
+                        </div>
+                      )}
+
+                      <form onSubmit={handleAuthSubmit} className="space-y-3.5 text-xs">
+                        {authMethod === 'username' ? (
+                          authTab === 'register' ? (
+                            <div>
+                              <label className="block text-slate-300 mb-1 font-semibold flex items-center justify-between">
+                                <span>اسم المستخدم الفريد الخاص بك (@username):</span>
+                                <span className="text-[10px] text-teal-400 font-normal">يُحفظ سحابياً باسمك ويمكنك تعديله لاحقاً</span>
+                              </label>
+                              <div className="relative" dir="ltr">
+                                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-teal-400 font-mono font-bold text-sm">@</span>
+                                <input
+                                  type="text"
+                                  required
+                                  value={usernameInput}
+                                  onChange={(e) => setUsernameInput(e.target.value.replace(/[^a-zA-Z0-9_.-]/g, '').toLowerCase())}
+                                  placeholder="dr_ahmed"
+                                  className="w-full pl-8 pr-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono focus:outline-none focus:border-teal-500"
+                                />
+                              </div>
+                              <p className="text-[10px] text-slate-500 mt-1">
+                                حروف إنجليزية أو أرقام أو شرطة سفلية (_) من 3 إلى 30 حرفاً — بدون إيميل أو رقم أكاديمي.
+                              </p>
+                            </div>
+                          ) : (
+                            <div>
+                              <label className="block text-slate-300 mb-1 font-semibold">
+                                اسم المستخدم (@username) أو البريد الإلكتروني أو رقم الهاتف:
+                              </label>
+                              <input
+                                type="text"
+                                required
+                                value={loginIdentifierInput}
+                                onChange={(e) => setLoginIdentifierInput(e.target.value)}
+                                placeholder="@dr_ahmed أو email@example.com أو 771234567"
+                                className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono focus:outline-none focus:border-teal-500"
+                                dir="ltr"
+                              />
+                            </div>
+                          )
+                        ) : authMethod === 'phone' ? (
+                          <div>
+                            <label className="block text-slate-300 mb-1 font-semibold">رقم الهاتف المحمول:</label>
+                            <div className="flex items-center gap-2" dir="ltr">
+                              <span className="px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-teal-400 font-mono font-bold select-none shrink-0">
+                                +967
+                              </span>
+                              <input
+                                type="tel"
+                                required
+                                value={phoneInput}
+                                onChange={(e) => setPhoneInput(e.target.value)}
+                                placeholder="771234567"
+                                className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono focus:outline-none focus:border-teal-500"
+                                dir="ltr"
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <div>
+                            <label className="block text-slate-300 mb-1 font-semibold">البريد الإلكتروني:</label>
+                            <input
+                              type="email"
+                              required
+                              value={emailInput}
+                              onChange={(e) => setEmailInput(e.target.value)}
+                              placeholder="name@example.com"
+                              className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono focus:outline-none focus:border-teal-500"
+                              dir="ltr"
+                            />
+                          </div>
+                        )}
+
+                        {authTab === 'register' && (
+                          <div>
+                            <label className="block text-slate-300 mb-1 font-semibold">
+                              الاسم المعروض في المنصة (اختياري):
+                            </label>
+                            <input
+                              type="text"
+                              value={displayNameInput}
+                              onChange={(e) => setDisplayNameInput(e.target.value)}
+                              placeholder="مثال: د. أحمد محمد (اختياري)"
+                              className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-teal-500"
+                            />
+                          </div>
+                        )}
+
+                        {/* Live Uniqueness Check Indicator during Registration */}
+                        {authTab === 'register' && (uniquenessStatus.checking || uniquenessStatus.available !== null) && (
+                          <div
+                            className={`p-2.5 rounded-xl border text-[11px] flex items-center gap-2 ${
+                              uniquenessStatus.checking
+                                ? 'bg-slate-950 border-slate-800 text-slate-400'
+                                : uniquenessStatus.available
+                                ? 'bg-emerald-950/30 border-emerald-800/60 text-emerald-300'
+                                : 'bg-rose-950/50 border-rose-800/80 text-rose-300'
+                            }`}
+                          >
+                            {uniquenessStatus.checking ? (
+                              <>
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin text-teal-400 shrink-0" />
+                                <span>جارٍ التحقق من تفرد المعرّف في السحابة...</span>
+                              </>
+                            ) : uniquenessStatus.available ? (
+                              <>
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                <span>اسم المستخدم متاح وفريد في السحابة ✓</span>
+                              </>
+                            ) : (
+                              <>
+                                <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                                <span>{uniquenessStatus.reason}</span>
+                              </>
+                            )}
+                          </div>
+                        )}
+
+                        <div>
+                          <label className="block text-slate-300 mb-1 font-semibold">كلمة المرور (6 أحرف أو أرقام على الأقل):</label>
+                          <input
+                            type="password"
+                            required
+                            value={passwordInput}
+                            onChange={(e) => setPasswordInput(e.target.value)}
+                            placeholder="••••••••"
+                            className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono focus:outline-none focus:border-teal-500"
+                            dir="ltr"
+                          />
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={loading || (authTab === 'register' && uniquenessStatus.available === false)}
+                          className="w-full py-3 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors shadow-lg shadow-teal-600/20"
+                        >
+                          <LogIn className="w-4 h-4" />
+                          <span>
+                            {authTab === 'login'
+                              ? 'تسجيل الدخول ومزامنة الحساب السحابي'
+                              : 'إنشاء الحساب السحابي فوراً (بدون تعقيدات)'}
+                          </span>
+                        </button>
+                      </form>
+
+                      <div className="relative py-1">
+                        <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-slate-800"></div></div>
+                        <div className="relative flex justify-center text-[10px]"><span className="bg-slate-900 px-3 text-slate-500">أو المتابعة السريعة عبر</span></div>
+                      </div>
+
+                      <button
+                        onClick={handleGoogleAuth}
+                        disabled={loading}
+                        className="w-full py-2.5 px-4 rounded-xl bg-white hover:bg-slate-100 text-slate-900 font-bold text-xs flex items-center justify-center gap-2 transition-colors shadow border border-slate-300"
+                      >
+                        <svg className="w-4 h-4" viewBox="0 0 24 24">
+                          <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.66v3.05h3.87c2.26-2.09 3.67-5.17 3.67-9.15z"/>
+                          <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.87-3.05c-1.08.72-2.45 1.16-4.06 1.16-3.13 0-5.78-2.11-6.73-4.96H1.26v3.15C3.29 21.36 7.35 24 12 24z"/>
+                          <path fill="#FBBC05" d="M5.27 14.24c-.25-.72-.38-1.49-.38-2.24s.13-1.52.38-2.24V6.61H1.26C.46 8.2.01 9.99.01 12c0 2.01.45 3.8 1.25 5.39l4.01-3.15z"/>
+                          <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.35 0 3.29 2.64 1.26 6.61l4.01 3.15c.95-2.85 3.6-4.96 6.73-4.96z"/>
+                        </svg>
+                        <span>الدخول بحساب Google</span>
+                      </button>
+                    </div>
+                  )}
+
                   {/* EXCLUSIVE PLATFORM OWNER BRANDING, TERMS/PRIVACY & CONTACT CHANNELS CONSOLE */}
-                  {isStrictPlatformOwner && (
+                  {user && isStrictPlatformOwner && (
                     <PlatformOwnerSettingsCard
                       ownerEmail={user.email || user.uid}
                       settings={platformSettings}
@@ -2513,7 +2228,7 @@ export default function App() {
                   </div>
 
                   {/* 2. Workspace Mode Switcher (Strictly for Authorized Leaders Only) */}
-                  {isAuthorizedAdmin && (
+                  {user && isAuthorizedAdmin && (
                     <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
                       <div className="pb-3 border-b border-slate-800">
                         <h2 className="text-base font-bold text-white flex items-center gap-2">
@@ -2612,125 +2327,142 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* 3. Account Information, Verification & Logout */}
-                  <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
-                    <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-                      <h2 className="text-base font-bold text-white flex items-center gap-2">
-                        <UserCheck className="w-5 h-5 text-teal-400" />
-                        <span>بيانات الحساب وتأكيد التوثيق</span>
-                      </h2>
-                      <span
-                        className={`text-xs px-2.5 py-1 rounded border font-semibold ${
-                          userProfile?.isVerified
-                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
-                            : 'bg-amber-500/20 text-amber-300 border-amber-500/30'
-                        }`}
-                      >
-                        {userProfile?.isVerified ? 'حساب موثق ✓' : 'بانتظار تأكيد التوثيق'}
-                      </span>
-                    </div>
+                  {/* 3. Cloud Unique Username (@username) & Account Information (When Logged In) */}
+                  {user && (
+                    <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
+                      <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-800">
+                        <h2 className="text-base font-bold text-white flex items-center gap-2">
+                          <AtSign className="w-5 h-5 text-teal-400" />
+                          <span>اسم المستخدم الفريد (@username) والبيانات السحابية</span>
+                        </h2>
+                        <span className="text-xs px-2.5 py-1 rounded border font-semibold bg-emerald-500/20 text-emerald-300 border-emerald-500/30">
+                          مُزامن سحابياً ✓
+                        </span>
+                      </div>
 
-                    <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-2.5 text-xs">
-                      <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-slate-800/80">
-                        <span className="text-slate-400">الاسم الكامل:</span>
-                        <strong className="text-white">{userProfile?.displayNameArabic || user.displayName || 'مستخدم مسجل'}</strong>
-                      </div>
-                      <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-slate-800/80">
-                        <span className="text-slate-400">طريقة التسجيل المعتمدة:</span>
-                        <span className="font-semibold text-teal-300">
-                          {userProfile?.registrationMethod === 'phone' || user.email?.startsWith('phone_')
-                            ? 'تسجيل مستقل برقم الهاتف (+967)'
-                            : userProfile?.registrationMethod === 'google'
-                            ? 'حساب Google الرسمي'
-                            : 'تسجيل مستقل بالبريد الإلكتروني'}
-                        </span>
-                      </div>
-                      <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-slate-800/80">
-                        <span className="text-slate-400">معرف الدخول الأساسي:</span>
-                        <span className="font-mono text-teal-300 break-all" dir="ltr">
-                          {formatUserIdentifier(user.email, userProfile?.phone)}
-                        </span>
-                      </div>
-                      {userProfile?.phone && !user.email?.startsWith('phone_') && (
-                        <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-slate-800/80">
-                          <span className="text-slate-400">رقم الهاتف المرتبط:</span>
-                          <span className="font-mono text-emerald-300" dir="ltr">{userProfile.phone}</span>
+                      {/* Editable Cloud Unique Username Form */}
+                      <form onSubmit={handleUpdateCloudUsername} className="p-4 rounded-xl bg-slate-950 border border-teal-500/30 space-y-3 text-xs">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-bold text-teal-300 flex items-center gap-1.5">
+                            <Edit3 className="w-3.5 h-3.5" />
+                            <span>تعديل أو تخصيص اسم المستخدم الفريد الخاص بك في السحابة:</span>
+                          </span>
+                          {userProfile?.username && (
+                            <span className="font-mono text-teal-400 bg-teal-500/10 px-2.5 py-0.5 rounded border border-teal-500/20" dir="ltr">
+                              @{userProfile.username}
+                            </span>
+                          )}
                         </div>
-                      )}
-                      {(userProfile?.academicStudentNumber || studentEnrollment?.academicStudentNumber) && (
+
+                        {profileUpdateMessage && (
+                          <div className={`p-2.5 rounded-xl font-bold border ${
+                            profileUpdateMessage.type === 'success'
+                              ? 'bg-emerald-950/50 border-emerald-500/40 text-emerald-300'
+                              : 'bg-rose-950/50 border-rose-500/40 text-rose-300'
+                          }`}>
+                            {profileUpdateMessage.text}
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-slate-400 mb-1">اسم المستخدم الفريد (@username):</label>
+                            <div className="relative" dir="ltr">
+                              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-teal-400 font-mono font-bold">@</span>
+                              <input
+                                type="text"
+                                required
+                                value={profileUsernameEdit}
+                                onChange={(e) => setProfileUsernameEdit(e.target.value.replace(/[^a-zA-Z0-9_.-]/g, '').toLowerCase())}
+                                placeholder="dr_ahmed"
+                                className="w-full pl-7 pr-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-white font-mono focus:outline-none focus:border-teal-500"
+                              />
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-slate-400 mb-1">الاسم المعروض في المنصة:</label>
+                            <input
+                              type="text"
+                              value={profileDisplayNameEdit}
+                              onChange={(e) => setProfileDisplayNameEdit(e.target.value)}
+                              placeholder="د. أحمد محمد"
+                              className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-white focus:outline-none focus:border-teal-500"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                          <span className="text-[11px] text-slate-400">
+                            عند تغيير اسم المستخدم يتم حذف الاسم القديم من السحابة فوراً وحجز الاسم الجديد بدون تكرار.
+                          </span>
+                          <button
+                            type="submit"
+                            disabled={profileUpdateLoading}
+                            className="px-4 py-2 rounded-xl bg-teal-500 hover:bg-teal-400 disabled:opacity-50 text-slate-950 font-bold text-xs transition-colors"
+                          >
+                            {profileUpdateLoading ? 'جارٍ الحفظ في السحابة...' : 'حفظ وتحديث في السحابة'}
+                          </button>
+                        </div>
+                      </form>
+
+                      <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-2.5 text-xs">
                         <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-slate-800/80">
-                          <span className="text-slate-400">رقم القيد الأكاديمي المحجوز:</span>
+                          <span className="text-slate-400">الاسم المعروض:</span>
+                          <strong className="text-white">{userProfile?.displayNameArabic || user.displayName || 'مستخدم مسجل'}</strong>
+                        </div>
+                        <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-slate-800/80">
+                          <span className="text-slate-400">اسم المستخدم الفريد (@username):</span>
                           <span className="font-mono text-teal-300 font-bold" dir="ltr">
-                            {userProfile?.academicStudentNumber || studentEnrollment?.academicStudentNumber}
+                            {userProfile?.username ? `@${userProfile.username}` : 'غير محدد بعد'}
                           </span>
                         </div>
-                      )}
-                      <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-slate-800/80">
-                        <span className="text-slate-400">حالة توثيق الحساب:</span>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          {(userProfile?.registrationMethod === 'phone' || user.email?.startsWith('phone_') || userProfile?.phone) && (
-                            <span className={`text-[11px] px-2 py-0.5 rounded border ${userProfile?.phoneVerified ? 'bg-emerald-950/60 border-emerald-700 text-emerald-300' : 'bg-amber-950/50 border-amber-700 text-amber-300'}`}>
-                              توثيق الهاتف: {userProfile?.phoneVerified ? 'موثق ✓' : 'غير موثق'}
-                            </span>
-                          )}
-                          {(!user.email?.startsWith('phone_') && userProfile?.registrationMethod !== 'phone') && (
-                            <span className={`text-[11px] px-2 py-0.5 rounded border ${userProfile?.emailVerified || user.emailVerified ? 'bg-emerald-950/60 border-emerald-700 text-emerald-300' : 'bg-amber-950/50 border-amber-700 text-amber-300'}`}>
-                              توثيق البريد: {userProfile?.emailVerified || user.emailVerified ? 'موثق ✓' : 'غير موثق'}
-                            </span>
-                          )}
-                          {!userProfile?.isVerified && (
-                            <button
-                              type="button"
-                              onClick={() => startAccountVerification()}
-                              className="text-[11px] px-2.5 py-1 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-bold"
-                            >
-                              تأكيد توثيق الحساب الآن
-                            </button>
-                          )}
+                        <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-slate-800/80">
+                          <span className="text-slate-400">معرف الدخول:</span>
+                          <span className="font-mono text-teal-300 break-all" dir="ltr">
+                            {formatUserIdentifier(user.email, userProfile?.phone, userProfile?.username)}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-slate-800/80">
+                          <span className="text-slate-400">معرف المستخدم السحابي (UID):</span>
+                          <span className="font-mono text-slate-400 text-[11px] break-all" dir="ltr">{user.uid}</span>
+                        </div>
+                        <div className="flex flex-wrap justify-between items-center gap-2">
+                          <span className="text-slate-400">الوضع والصلاحية النشطة:</span>
+                          <span className="font-bold text-amber-400">
+                            {renderBiDiRoleLabel(activeRole)}
+                          </span>
                         </div>
                       </div>
-                      <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-slate-800/80">
-                        <span className="text-slate-400">معرف المستخدم (UID):</span>
-                        <span className="font-mono text-slate-400 text-[11px] break-all" dir="ltr">{user.uid}</span>
-                      </div>
-                      <div className="flex flex-wrap justify-between items-center gap-2">
-                        <span className="text-slate-400">الوضع والصلاحية النشطة:</span>
-                        <span className="font-bold text-amber-400">
-                          {renderBiDiRoleLabel(activeRole)}
-                          {roleDoc?.assignedUniversityId && activeRole !== 'platform_owner' ? ` • (${roleDoc.assignedUniversityId})` : ''}
-                          {roleDoc?.assignedStudyLevelId ? ` • (${roleDoc.assignedStudyLevelId})` : ''}
-                        </span>
-                      </div>
-                    </div>
 
-                    <div className="flex flex-col sm:flex-row gap-3">
-                      <button
-                        onClick={logout}
-                        className="flex-1 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
-                      >
-                        <LogOut className="w-4 h-4" />
-                        <span>تسجيل الخروج من المنصة</span>
-                      </button>
-
-                      {!isPrimaryOwnerEmail(user.email) && !userProfile?.isPrimaryOwner && (
+                      <div className="flex flex-col sm:flex-row gap-3">
                         <button
-                          type="button"
-                          onClick={() => {
-                            setDeleteConfirmText('');
-                            setDeleteAccountError(null);
-                            setShowDeleteAccountModal(true);
-                          }}
-                          className="py-2.5 px-4 rounded-xl bg-rose-950/50 hover:bg-rose-900/70 text-rose-300 border border-rose-800/60 text-xs font-bold flex items-center justify-center gap-2 transition-colors"
+                          onClick={logout}
+                          className="flex-1 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
                         >
-                          <Trash2 className="w-4 h-4" />
-                          <span>حذف الحساب نهائياً من السحابة</span>
+                          <LogOut className="w-4 h-4" />
+                          <span>تسجيل الخروج من الحساب</span>
                         </button>
-                      )}
+
+                        {!isPrimaryOwnerEmail(user.email) && !userProfile?.isPrimaryOwner && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDeleteConfirmText('');
+                              setDeleteAccountError(null);
+                              setShowDeleteAccountModal(true);
+                            }}
+                            className="py-2.5 px-4 rounded-xl bg-rose-950/50 hover:bg-rose-900/70 text-rose-300 border border-rose-800/60 text-xs font-bold flex items-center justify-center gap-2 transition-colors"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                            <span>حذف الحساب نهائياً من السحابة</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   {/* Self-Account Cloud Deletion Confirmation Modal */}
-                  {showDeleteAccountModal && (
+                  {user && showDeleteAccountModal && (
                     <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto overscroll-contain">
                       <div className="max-w-md w-full my-auto bg-slate-900 border border-rose-500/50 rounded-2xl p-6 shadow-2xl space-y-4">
                         <div className="flex items-center justify-between pb-3 border-b border-slate-800">
@@ -2747,9 +2479,9 @@ export default function App() {
                         </div>
 
                         <div className="p-3.5 rounded-xl bg-rose-950/30 border border-rose-800/60 text-xs text-rose-200 space-y-1.5 leading-relaxed">
-                          <div className="font-bold">تحذير هام — هذا الإجراء نهائي ولا يمكن التراجع عنه:</div>
+                          <div className="font-bold">تحذير هام — هذا الإجراء يحذف بياناتك فوراً من السحابة:</div>
                           <p className="text-[11px] text-rose-300">
-                            سيتم حذف حسابك بالكامل من السحابة (ملف المستخدم، صلاحيات الدور، سجل القيد الأكاديمي، نتائج الاختبارات، وتحرير رقم الهاتف والبريد الإلكتروني ورقم القيد) بالإضافة إلى حذف حساب المصادقة.
+                            سيتم حذف حسابك بالكامل من السحابة مباشرةً (ملف المستخدم، اسم المستخدم الفريد @username، صلاحيات الدور، سجل القيد، ونتائج الاختبارات) بحيث لا تبقى أي نسخة منه في السحابة.
                           </p>
                         </div>
 
@@ -2786,7 +2518,7 @@ export default function App() {
                               ) : (
                                 <Trash2 className="w-4 h-4" />
                               )}
-                              <span>تأكيد الحذف النهائي من السحابة</span>
+                              <span>تأكيد الحذف الفوري من السحابة</span>
                             </button>
                             <button
                               type="button"
