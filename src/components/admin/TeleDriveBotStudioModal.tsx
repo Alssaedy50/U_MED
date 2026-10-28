@@ -173,11 +173,17 @@ export default function TeleDriveBotStudioModal({
     const resolvedAdmin =
       !savedAdmin || savedAdmin === '7162503651' ? '1905553456' : savedAdmin;
 
+    const savedTok = (initialSaved.config?.botToken || '').trim();
+    const resolvedBotToken =
+      !savedTok || savedTok === '8787910034:AAF_TcpLPwj1m74jtY9XFaeeNv7bADOaiD8'
+        ? '8787910034:AAF_TcpLPwj1m74jtY9XFaeeNv7bAD0aiD8'
+        : savedTok;
+
     return {
       apiId: initialSaved.config?.apiId || '2040',
       apiHash: initialSaved.config?.apiHash || 'b18441a1ff607e10a989891a5462e627',
       sessionString: initialSaved.config?.sessionString ?? '',
-      botToken: initialSaved.config?.botToken || '8787910034:AAF_TcpLPwj1m74jtY9XFaeeNv7bADOaiD8',
+      botToken: resolvedBotToken,
       targetGroupId: resolvedGroup,
       adminTelegramId: resolvedAdmin,
       defaultUniversityId: initialSaved.config?.defaultUniversityId || defaultUniversityId,
@@ -361,13 +367,13 @@ export default function TeleDriveBotStudioModal({
       if (Array.isArray(data.logs)) setLiveLogs(data.logs);
       if (Array.isArray(data.resources) && data.resources.length > 0) {
         for (const r of data.resources) {
-          await saveEducationalResource(r);
+          await saveEducationalResource({ ...r, status: 'draft' });
         }
         onDraftSimulated?.();
       }
       if (data.success) {
         setLiveTestBanner(
-          `✅ تم سحب (${data.ingestedCount || data.resources?.length || 1}) منشور/ملف من قناة (${data.channelUsername || target}) وأرشفتها في Google Drive وبثها في القناة ومنصة U_MED!`
+          `✅ تم سحب (${data.ingestedCount || data.resources?.length || 1}) منشور/ملف من قناة (${data.channelUsername || target}) ورفعها إلى Google Drive (UMED STORAGE) وحفظها في قسم المسودات بانتظار موافقتك قبل النشر للطلاب!`
         );
       } else {
         setLiveTestBanner(`⚠️ تعذر السحب من القناة: ${data.error || 'تأكد أن القناة عامة أو أن البوت مشرف فيها'}`);
@@ -421,7 +427,7 @@ export default function TeleDriveBotStudioModal({
               adminTelegramId: config.adminTelegramId,
               gdriveFolderId: config.defaultFolderId,
               defaultUniversityId: config.defaultUniversityId,
-              autoPublish: true
+              autoPublish: false
             })
           });
           if (startRes.ok && !cancelled) {
@@ -471,7 +477,7 @@ export default function TeleDriveBotStudioModal({
           gdriveFolderId: config.defaultFolderId,
           defaultUniversityId: config.defaultUniversityId,
           serviceAccountJson: rawServiceJson,
-          autoPublish: true
+          autoPublish: false
         })
       });
       const data = await res.json();
@@ -482,7 +488,7 @@ export default function TeleDriveBotStudioModal({
       if (Array.isArray(data.logs)) setLiveLogs(data.logs);
       setLiveTestBanner(
         data.success
-          ? `✅ تم تشغيل البوت الحي (@${data.botIdentity?.username || 'UMED_Bot'}) بنجاح! يستقبل الآن من القنوات والقروبات والخاص بأي صيغة ويرفع لـ Drive ويبث في U_MED فوراً.`
+          ? `✅ تم تشغيل البوت الحي (@${data.botIdentity?.username || 'UMED_Bot'}) بنجاح! يسحب المنشورات ويرفعها لـ Google Drive ويحفظها كمسودات بانتظار موافقتك قبل النشر.`
           : `⚠️ تنبيه تليجرام: التوكن غير مفعل أو غير صحيح (${data.error || 'Unauthorized'}). تأكد من لصق توكن البوت الصحيح من @BotFather في الحقل الأول بالأسفل.`
       );
     } catch (err: any) {
@@ -506,7 +512,7 @@ export default function TeleDriveBotStudioModal({
           adminTelegramId: config.adminTelegramId,
           gdriveFolderId: config.defaultFolderId,
           defaultUniversityId: config.defaultUniversityId,
-          autoPublish: true
+          autoPublish: false
         })
       });
       const data = await res.json();
@@ -618,7 +624,7 @@ export default function TeleDriveBotStudioModal({
       apiId: '2040',
       apiHash: 'b18441a1ff607e10a989891a5462e627',
       sessionString: '',
-      botToken: '8787910034:AAF_TcpLPwj1m74jtY9XFaeeNv7bADOaiD8',
+      botToken: '8787910034:AAF_TcpLPwj1m74jtY9XFaeeNv7bAD0aiD8',
       targetGroupId: '-1003664858401',
       adminTelegramId: '1905553456',
       defaultUniversityId,

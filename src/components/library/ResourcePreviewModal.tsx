@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  * 
  * UMED Low-Bandwidth Medical Resource Preview Modal
- * Protects 3G/metered bandwidth by requiring explicit user confirmation before loading heavy files
+ * Universal In-App Viewer for PDFs (Multi-Page Canvas via PDF.js), Videos, Audio, Images & External Drive Links
  */
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -27,6 +27,275 @@ import { resolveResourceFileUrl } from '../../services/resourceService.ts';
 interface ResourcePreviewModalProps {
   resource: EducationalResource;
   onClose: () => void;
+}
+
+const PDFJS_CDN_SCRIPT = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+const PDFJS_CDN_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+let pdfJsLoadPromise: Promise<any> | null = null;
+
+function ensurePdfJsLoaded(): Promise<any> {
+  if (typeof window !== 'undefined' && (window as any).pdfjsLib) {
+    (window as any).pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_CDN_WORKER;
+    return Promise.resolve((window as any).pdfjsLib);
+  }
+  if (pdfJsLoadPromise) return pdfJsLoadPromise;
+
+  pdfJsLoadPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[src="${PDFJS_CDN_SCRIPT}"]`);
+    if (existing && (window as any).pdfjsLib) {
+      (window as any).pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_CDN_WORKER;
+      resolve((window as any).pdfjsLib);
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = PDFJS_CDN_SCRIPT;
+    script.async = true;
+    script.onload = () => {
+      const lib = (window as any).pdfjsLib;
+      if (lib) {
+        lib.GlobalWorkerOptions.workerSrc = PDFJS_CDN_WORKER;
+        resolve(lib);
+      } else {
+        pdfJsLoadPromise = null;
+        reject(new Error('PDF.js failed to initialize'));
+      }
+    };
+    script.onerror = () => {
+      pdfJsLoadPromise = null;
+      reject(new Error('Failed to load PDF.js from CDN'));
+    };
+    document.head.appendChild(script);
+  });
+
+  return pdfJsLoadPromise;
+}
+
+interface PdfCanvasViewerProps {
+  fileUrl: string;
+  downloadUrl: string;
+  title: string;
+  fileName?: string;
+}
+
+function PdfCanvasViewer({ fileUrl, downloadUrl, title, fileName }: PdfCanvasViewerProps) {
+  const [numPages, setNumPages] = useState<number>(0);
+  const [scale, setScale] = useState<number>(1.25);
+  const [rendering, setRendering] = useState<boolean>(true);
+  const [htmlContent, setHtmlContent] = useState<string | null>(null);
+  const [useFallbackIframe, setUseFallbackIframe] = useState<boolean>(false);
+  const pdfDocRef = useRef<any>(null);
+  const canvasContainerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRendering(true);
+    setHtmlContent(null);
+    setUseFallbackIframe(false);
+
+    async function loadPdfDocument() {
+      try {
+        // Fetch bytes from the blob: or stream URL
+        const res = await fetch(fileUrl);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const arrayBuf = await res.arrayBuffer();
+        if (cancelled) return;
+
+        // Check if the file is actually an HTML note rather than a binary PDF
+        const headerBytes = new Uint8Array(arrayBuf.slice(0, 64));
+        const headerStr = new TextDecoder().decode(headerBytes).trim();
+        if (
+          headerStr.startsWith('<!DOCTYPE') ||
+          headerStr.startsWith('<html') ||
+          headerStr.startsWith('<div')
+        ) {
+          const fullHtml = new TextDecoder().decode(new Uint8Array(arrayBuf));
+          if (!cancelled) {
+            setHtmlContent(fullHtml);
+            setRendering(false);
+          }
+          return;
+        }
+
+        const pdfjsLib = await ensurePdfJsLoaded();
+        if (cancelled) return;
+
+        const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(arrayBuf) });
+        const pdfDoc = await loadingTask.promise;
+        if (cancelled) return;
+
+        pdfDocRef.current = pdfDoc;
+        setNumPages(pdfDoc.numPages);
+        setRendering(false);
+      } catch {
+        if (!cancelled) {
+          setUseFallbackIframe(true);
+          setRendering(false);
+        }
+      }
+    }
+
+    loadPdfDocument();
+    return () => {
+      cancelled = true;
+    };
+  }, [fileUrl]);
+
+  useEffect(() => {
+    const pdfDoc = pdfDocRef.current;
+    const container = canvasContainerRef.current;
+    if (!pdfDoc || !container || numPages === 0 || htmlContent || useFallbackIframe) return;
+
+    let cancelled = false;
+    container.innerHTML = '';
+
+    async function renderAllPages() {
+      const maxPagesToRender = Math.min(numPages, 60);
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+      for (let pageNum = 1; pageNum <= maxPagesToRender; pageNum++) {
+        if (cancelled) break;
+        try {
+          const page = await pdfDoc.getPage(pageNum);
+          if (cancelled) break;
+
+          const baseViewport = page.getViewport({ scale: 1 });
+          const containerWidth = Math.max(300, Math.min(container?.clientWidth || 720, 860) - 24);
+          const fitScale = (containerWidth / baseViewport.width) * scale;
+          const viewport = page.getViewport({ scale: fitScale });
+
+          const pageWrapper = document.createElement('div');
+          pageWrapper.className =
+            'relative bg-white rounded-xl shadow-lg overflow-hidden mx-auto mb-4 border border-slate-700';
+          pageWrapper.style.width = `${Math.floor(viewport.width)}px`;
+
+          const pageBadge = document.createElement('div');
+          pageBadge.className =
+            'px-2.5 py-1 bg-slate-900/85 text-slate-200 text-[10px] font-mono flex items-center justify-between border-b border-slate-800';
+          pageBadge.innerHTML = `<span>صفحة ${pageNum} من ${numPages}</span><span>U_MED PDF Reader</span>`;
+
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.floor(viewport.width * dpr);
+          canvas.height = Math.floor(viewport.height * dpr);
+          canvas.style.width = `${Math.floor(viewport.width)}px`;
+          canvas.style.height = `${Math.floor(viewport.height)}px`;
+          canvas.className = 'block bg-white';
+
+          pageWrapper.appendChild(pageBadge);
+          pageWrapper.appendChild(canvas);
+          container?.appendChild(pageWrapper);
+
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.scale(dpr, dpr);
+            await page.render({ canvasContext: ctx, viewport }).promise;
+          }
+        } catch {}
+      }
+    }
+
+    renderAllPages();
+    return () => {
+      cancelled = true;
+    };
+  }, [numPages, scale, htmlContent, useFallbackIframe]);
+
+  if (htmlContent) {
+    return (
+      <div className="w-full h-[70vh] rounded-xl overflow-hidden border border-slate-800 bg-slate-900">
+        <iframe
+          srcDoc={htmlContent}
+          title={title}
+          className="w-full h-full border-0"
+        />
+      </div>
+    );
+  }
+
+  if (useFallbackIframe) {
+    return (
+      <div className="w-full h-[70vh] flex flex-col rounded-xl overflow-hidden border border-slate-800 bg-slate-900">
+        <iframe
+          src={fileUrl}
+          title={title}
+          className="w-full flex-1 border-0 bg-white"
+        />
+        <div className="p-2.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-2">
+          <span className="text-[11px] text-slate-300">
+            إذا لم يظهر المستند داخل متصفح هاتفك، يمكنك فتحه أو تنزيله مباشرة:
+          </span>
+          <a
+            href={downloadUrl || fileUrl}
+            download={fileName || `${title}.pdf`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 shrink-0"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>فتح / تنزيل PDF</span>
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full h-[72vh] flex flex-col rounded-xl overflow-hidden border border-slate-800 bg-slate-900">
+      {/* Top Reader Controls */}
+      <div className="px-3 py-2 bg-slate-950 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 shrink-0">
+        <div className="flex items-center gap-2 text-xs text-slate-300">
+          <span className="px-2 py-0.5 rounded bg-teal-500/15 text-teal-300 font-bold border border-teal-500/30">
+            قارئ U_MED الذكي
+          </span>
+          {numPages > 0 && (
+            <span className="font-mono text-[11px] text-slate-400">
+              عدد الصفحات: <strong className="text-white">{numPages}</strong>
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setScale((s) => Math.max(0.75, Number((s - 0.25).toFixed(2))))}
+            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
+            title="تصغير"
+          >
+            <ZoomOut className="w-3.5 h-3.5" />
+          </button>
+          <span className="font-mono text-[11px] text-slate-300 min-w-[42px] text-center">
+            {Math.round((scale / 1.25) * 100)}%
+          </span>
+          <button
+            type="button"
+            onClick={() => setScale((s) => Math.min(2.5, Number((s + 0.25).toFixed(2))))}
+            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
+            title="تكبير"
+          >
+            <ZoomIn className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setScale(1.25)}
+            className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[10px] text-teal-300 font-bold cursor-pointer"
+          >
+            ضبط تلقائي
+          </button>
+        </div>
+      </div>
+
+      {/* Scrollable Multi-Page Canvas Area */}
+      <div className="flex-1 overflow-y-auto p-3 sm:p-4 bg-slate-950/80">
+        {rendering && (
+          <div className="h-full flex flex-col items-center justify-center space-y-2 py-12 text-slate-300">
+            <RefreshCw className="w-6 h-6 animate-spin text-teal-400" />
+            <span className="text-xs font-bold">جارٍ تجهيز صفحات ملف الـ PDF للمعاينة...</span>
+          </div>
+        )}
+        <div ref={canvasContainerRef} className="w-full flex flex-col items-center" />
+      </div>
+    </div>
+  );
 }
 
 export default function ResourcePreviewModal({ 
@@ -152,7 +421,7 @@ export default function ResourcePreviewModal({
               </h3>
               <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-400 mt-0.5">
                 <span className="uppercase px-1.5 py-0.2 rounded bg-slate-800 font-mono text-teal-300">
-                  {isAudio ? 'AUDIO' : resource.resourceType}
+                  {isAudio ? 'AUDIO' : isVideo ? 'VIDEO' : resource.resourceType}
                 </span>
                 <span>الحجم: <strong className="text-amber-300 font-mono">{resource.fileSizeLabel || 'غير محدد'}</strong></span>
                 <span>•</span>
@@ -165,7 +434,7 @@ export default function ResourcePreviewModal({
             {resolvedDownloadUrl && (
               <a
                 href={resolvedDownloadUrl}
-                download={resource.fileName || `${resource.title}.${isPdf ? 'pdf' : isAudio ? 'webm' : 'jpg'}`}
+                download={resource.fileName || `${resource.title}.${isPdf ? 'pdf' : isAudio ? 'mp3' : isVideo ? 'mp4' : 'jpg'}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="px-2.5 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors"
@@ -238,7 +507,7 @@ export default function ResourcePreviewModal({
                     setIsLoading(true);
                     setHasConfirmedLoad(true);
                   }}
-                  className="flex-1 py-2.5 px-4 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-lg shadow-teal-600/20"
+                  className="flex-1 py-2.5 px-4 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-lg shadow-teal-600/20 cursor-pointer"
                 >
                   <Eye className="w-4 h-4" />
                   <span>
@@ -252,7 +521,8 @@ export default function ResourcePreviewModal({
 
                 {resource.url &&
                   !resource.url.startsWith('umed-cloud://') &&
-                  !resource.url.startsWith('/api/teledrive/stream/') && (
+                  !resource.url.startsWith('/api/teledrive/stream/') &&
+                  !resource.url.includes('1sample_') && (
                     <a
                       href={resource.url}
                       target="_blank"
@@ -369,45 +639,55 @@ export default function ResourcePreviewModal({
                   <video
                     controls
                     autoPlay
+                    playsInline
                     src={resolvedViewUrl || undefined}
                     className="w-full max-h-[68vh] rounded-xl border border-slate-800 bg-black shadow-2xl"
                   />
                 </div>
               )}
 
-              {/* 3. PDF & EXTERNAL VIEWER IFRAME */}
+              {/* 3. PDF & DOCUMENT VIEWER (Multi-Page Canvas for Blob/Stream PDFs, Iframe for External Drive Links) */}
               {!isImage && !isAudio && !isVideo && (
-                <div className="w-full h-[70vh] relative rounded-xl overflow-hidden border border-slate-800 bg-slate-900">
-                  {iframeError || !resolvedViewUrl ? (
-                    <div className="h-full flex flex-col items-center justify-center p-6 text-center space-y-3">
-                      <AlertTriangle className="w-8 h-8 text-amber-400" />
-                      <h4 className="font-bold text-white text-sm">المستند جاهز للفتح أو التنزيل المباشر</h4>
-                      <p className="text-xs text-slate-400 max-w-md">
-                        اضغط الزر أدناه لفتح أو تنزيل الملف مباشرة على جهازك.
-                      </p>
-                      {(resolvedDownloadUrl || resolvedViewUrl) && (
-                        <a
-                          href={resolvedDownloadUrl || resolvedViewUrl}
-                          download={resource.fileName || `${resource.title}.pdf`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="py-2.5 px-5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center gap-2"
-                        >
-                          <Download className="w-4 h-4" />
-                          <span>تنزيل / فتح الملف الآن</span>
-                        </a>
-                      )}
-                    </div>
-                  ) : (
-                    <iframe
-                      src={resolvedViewUrl || undefined}
-                      title={resource.title}
-                      className="w-full h-full border-0"
-                      allow="autoplay"
-                      onError={() => setIframeError(true)}
-                    />
-                  )}
-                </div>
+                resolvedViewUrl.startsWith('blob:') || resolvedViewUrl.startsWith('/api/teledrive/stream/') ? (
+                  <PdfCanvasViewer
+                    fileUrl={resolvedViewUrl}
+                    downloadUrl={resolvedDownloadUrl || resolvedViewUrl}
+                    title={resource.title}
+                    fileName={resource.fileName}
+                  />
+                ) : (
+                  <div className="w-full h-[70vh] relative rounded-xl overflow-hidden border border-slate-800 bg-slate-900">
+                    {iframeError || !resolvedViewUrl ? (
+                      <div className="h-full flex flex-col items-center justify-center p-6 text-center space-y-3">
+                        <AlertTriangle className="w-8 h-8 text-amber-400" />
+                        <h4 className="font-bold text-white text-sm">المستند جاهز للفتح أو التنزيل المباشر</h4>
+                        <p className="text-xs text-slate-400 max-w-md">
+                          اضغط الزر أدناه لفتح أو تنزيل الملف مباشرة على جهازك.
+                        </p>
+                        {(resolvedDownloadUrl || resolvedViewUrl) && (
+                          <a
+                            href={resolvedDownloadUrl || resolvedViewUrl}
+                            download={resource.fileName || `${resource.title}.pdf`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="py-2.5 px-5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center gap-2"
+                          >
+                            <Download className="w-4 h-4" />
+                            <span>تنزيل / فتح الملف الآن</span>
+                          </a>
+                        )}
+                      </div>
+                    ) : (
+                      <iframe
+                        src={resolvedViewUrl || undefined}
+                        title={resource.title}
+                        className="w-full h-full border-0"
+                        allow="autoplay"
+                        onError={() => setIframeError(true)}
+                      />
+                    )}
+                  </div>
+                )
               )}
 
             </div>
@@ -429,3 +709,4 @@ export default function ResourcePreviewModal({
     </div>
   );
 }
+

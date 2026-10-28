@@ -320,12 +320,50 @@ export async function resolveResourceFileUrl(
       : 'application/pdf';
 
     // Strip any legacy `.html` or `mime=text/html` from video/audio/pdf stream URLs
-    const cleanStreamUrl = rawUrl
+    let cleanStreamUrl = rawUrl
       .replace(/\.html(&|$)/gi, '$1')
-      .replace(/mime=text%2Fhtml/gi, `mime=${encodeURIComponent(trueMime)}`);
+      .replace(/mime=text%2Fhtml/gi, `mime=${encodeURIComponent(trueMime)}`)
+      .replace(/8787910034:AAF_TcpLPwj1m74jtY9XFaeeNv7bADOaiD8/g, '8787910034:AAF_TcpLPwj1m74jtY9XFaeeNv7bAD0aiD8');
 
+    if (!cleanStreamUrl.includes('token=')) {
+      const joiner = cleanStreamUrl.includes('?') ? '&' : '?';
+      cleanStreamUrl = `${cleanStreamUrl}${joiner}token=${encodeURIComponent(
+        '8787910034:AAF_TcpLPwj1m74jtY9XFaeeNv7bAD0aiD8'
+      )}`;
+    }
+
+    // 3a. For Video & Audio files: Stream directly via HTTP Range requests (206 Partial Content) without waiting to download 160 chunks into RAM!
+    if (isVideoFile || isAudioFile) {
+      onProgress?.(35);
+      try {
+        const sep = cleanStreamUrl.includes('?') ? '&' : '?';
+        const ctrl = new AbortController();
+        const timer = window.setTimeout(() => ctrl.abort(), 2500);
+        const metaRes = await fetch(`${cleanStreamUrl}${sep}meta=1`, { signal: ctrl.signal });
+        window.clearTimeout(timer);
+        if (metaRes.ok) {
+          const meta = await metaRes.json();
+          if (meta.directCdnUrl) {
+            onProgress?.(100);
+            return {
+              viewUrl: meta.directCdnUrl,
+              downloadUrl: meta.directCdnUrl,
+              isCloudFile: false
+            };
+          }
+        }
+      } catch {}
+      onProgress?.(100);
+      return {
+        viewUrl: cleanStreamUrl,
+        downloadUrl: cleanStreamUrl,
+        isCloudFile: false
+      };
+    }
+
+    // 3b. For PDFs & Images: Check local IndexedDB first
     const cacheKey = `tgstream_${resource.id}`;
-    const cachedBlobDataUrl = await getFileFromIDB(cacheKey);
+    const cachedBlobDataUrl = (await getFileFromIDB(cacheKey)) || (await getFileFromIDB(resource.id));
     if (cachedBlobDataUrl) {
       onProgress?.(100);
       const blob = dataUrlToBlob(cachedBlobDataUrl);
@@ -333,23 +371,48 @@ export async function resolveResourceFileUrl(
       return { viewUrl: blobUrl, downloadUrl: blobUrl, isCloudFile: true };
     }
 
-    onProgress?.(8);
+    onProgress?.(12);
+
+    // 3c. Check Cloud Firestore `uploadedFileChunks/{resource.id}_chunk_0` (Fast 0.2s serverless-safe cloud backup!)
     try {
-      const sep = cleanStreamUrl.includes('?') ? '&' : '?';
-      const metaRes = await fetch(`${cleanStreamUrl}${sep}meta=1`);
-      if (metaRes.ok) {
-        const meta = await metaRes.json();
-        if (meta.directCdnUrl) {
+      const firstSnap = await getDoc(doc(db, 'uploadedFileChunks', `${resource.id}_chunk_0`));
+      if (firstSnap.exists()) {
+        const firstData = firstSnap.data();
+        const totalChunks = Math.max(1, Number(firstData.totalChunks) || 1);
+        const parts: string[] = new Array(totalChunks).fill('');
+        parts[0] = firstData.data || '';
+        let downloadedCount = 1;
+        onProgress?.(20 + Math.round((downloadedCount / totalChunks) * 75));
+
+        if (totalChunks > 1) {
+          const remainingIndices: number[] = [];
+          for (let idx = 1; idx < totalChunks; idx++) remainingIndices.push(idx);
+          await Promise.all(
+            remainingIndices.map(async (idx) => {
+              const snap = await getDoc(doc(db, 'uploadedFileChunks', `${resource.id}_chunk_${idx}`));
+              if (snap.exists()) {
+                parts[idx] = snap.data().data || '';
+              }
+              downloadedCount++;
+              onProgress?.(20 + Math.round((downloadedCount / totalChunks) * 75));
+            })
+          );
+        }
+
+        const fullDataUrl = parts.join('');
+        if (fullDataUrl.startsWith('data:')) {
+          await saveFileToIDB(cacheKey, fullDataUrl);
           onProgress?.(100);
-          return {
-            viewUrl: meta.directCdnUrl,
-            downloadUrl: meta.directCdnUrl,
-            isCloudFile: false
-          };
+          const blob = dataUrlToBlob(fullDataUrl);
+          const blobUrl = URL.createObjectURL(blob);
+          return { viewUrl: blobUrl, downloadUrl: blobUrl, isCloudFile: true };
         }
       }
+    } catch {}
 
-      // Download in Vercel-safe 1.5 MB chunks with real-time progress bar (works for 10MB, 20.4MB, 55.9MB+)
+    // 3d. Fetch from `/api/teledrive/stream/...` via chunked loader
+    try {
+      const sep = cleanStreamUrl.includes('?') ? '&' : '?';
       const CHUNK_SIZE = 1572864; // 1.5 MB
       const byteChunks: Uint8Array[] = [];
       let chunkIdx = 0;
@@ -362,10 +425,7 @@ export async function resolveResourceFileUrl(
         if (!chunkRes.ok) {
           const errJson = await chunkRes.json().catch(() => ({}));
           if (chunkIdx === 0) {
-            throw new Error(
-              errJson.error ||
-                'تعذر جلب الملف من خوادم تليجرام. تأكد من إدخال توكن البوت الفعال (BOT_TOKEN) في استوديو البوت والضغط على حفظ وتشغيل.'
-            );
+            throw new Error(errJson.error || 'تعذر جلب الملف من خوادم تليجرام.');
           }
           break;
         }
@@ -387,7 +447,7 @@ export async function resolveResourceFileUrl(
         chunkIdx++;
         if (totalExpected > 0) {
           const loadedBytes = byteChunks.reduce((acc, b) => acc + b.byteLength, 0);
-          const pct = Math.min(98, Math.max(12, Math.round((loadedBytes / totalExpected) * 95)));
+          const pct = Math.min(98, Math.max(15, Math.round((loadedBytes / totalExpected) * 95)));
           onProgress?.(pct);
         } else {
           onProgress?.(Math.min(95, 15 + chunkIdx * 10));
@@ -397,7 +457,7 @@ export async function resolveResourceFileUrl(
 
       if (byteChunks.length > 0) {
         const finalBlob = new Blob(byteChunks, { type: trueMime });
-        if (finalBlob.size <= 35 * 1024 * 1024) {
+        if (finalBlob.size <= 15 * 1024 * 1024) {
           readBlobAsDataUrl(finalBlob)
             .then((dUrl) => saveFileToIDB(cacheKey, dUrl))
             .catch(() => {});
@@ -409,20 +469,94 @@ export async function resolveResourceFileUrl(
     } catch (streamErr: any) {
       throw new Error(
         streamErr?.message ||
-          'تعذر تشغيل الملف الكبير: تأكد من تفعيل توكن البوت الصحيح (BOT_TOKEN) في استوديو البوت.'
+          'تعذر تحميل الملف: تأكد من اتصال الإنترنت وتفعيل البوت.'
       );
     }
 
     return { viewUrl: cleanStreamUrl, downloadUrl: cleanStreamUrl, isCloudFile: false };
   }
 
-  // Case 4: External URL (e.g. Google Drive link — auto-normalize /view to /preview for iframe embedding)
+  // Case 4: Sample Medical Lecture Placeholders -> Generate valid, viewable PDF binary on the fly!
+  if (rawUrl.includes('1sample_') || rawUrl.includes('1x9K_umed_drive_sample')) {
+    onProgress?.(100);
+    const samplePdfBytes = buildSampleMedicalPdfBytes(resource);
+    const sampleBlob = new Blob([samplePdfBytes], { type: 'application/pdf' });
+    const sampleBlobUrl = URL.createObjectURL(sampleBlob);
+    return { viewUrl: sampleBlobUrl, downloadUrl: sampleBlobUrl, isCloudFile: true };
+  }
+
+  // Case 5: External URL (e.g. Google Drive link — auto-normalize /view to /preview for iframe embedding)
   let viewUrl = rawUrl;
   const gdriveMatch = rawUrl.match(/drive\.google\.com\/file\/d\/([^/]+)/);
   if (gdriveMatch && gdriveMatch[1]) {
     viewUrl = `https://drive.google.com/file/d/${gdriveMatch[1]}/preview`;
   }
   return { viewUrl, downloadUrl: rawUrl, isCloudFile: false };
+}
+
+function buildSampleMedicalPdfBytes(resource: EducationalResource): Uint8Array {
+  const safeAsciiTitle =
+    resource.id === 'res-cvs-anat-01'
+      ? 'UMED Lecture 1: Gross Anatomy of the Heart & Coronary Vessels'
+      : resource.id === 'res-cvs-physio-03'
+      ? 'UMED Clinical Guide: 12-Lead ECG Interpretation & Cardiac Axis'
+      : resource.id === 'res-resp-04'
+      ? 'UMED Lecture: Alveolar-Capillary Gas Exchange & O2 Dissociation'
+      : 'UMED Medical Curriculum Summary Document';
+
+  const streamText = [
+    'BT',
+    '/F1 18 Tf',
+    '54 730 Td',
+    `(${safeAsciiTitle}) Tj`,
+    '/F1 12 Tf',
+    '0 -32 Td',
+    '(University Medical Education Digital Platform - U_MED) Tj',
+    '0 -24 Td',
+    '(------------------------------------------------------------------) Tj',
+    '0 -28 Td',
+    '(1. Core Clinical & Anatomical Objectives:) Tj',
+    '0 -20 Td',
+    '(   - Understand the anatomical structure and physiological mechanisms.) Tj',
+    '0 -20 Td',
+    '(   - Correlate clinical findings with diagnostic investigations.) Tj',
+    '0 -20 Td',
+    '(   - Review high-yield examination points for medical students.) Tj',
+    '0 -32 Td',
+    '(2. Key High-Yield Summary Notes:) Tj',
+    '0 -20 Td',
+    '(   - Right Coronary Artery (RCA) supplies SA node (60%) & AV node (90%).) Tj',
+    '0 -20 Td',
+    '(   - Left Anterior Descending (LAD) supplies anterior 2/3 of septum.) Tj',
+    '0 -20 Td',
+    '(   - Normal PR interval: 0.12 - 0.20 sec (3 - 5 small squares).) Tj',
+    '0 -20 Td',
+    '(   - Bohr effect shifts Oxygen-Hemoglobin dissociation curve to right.) Tj',
+    'ET'
+  ].join('\n');
+
+  const pdfContent = `%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >> endobj
+4 0 obj << /Length ${streamText.length} >> stream
+${streamText}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000229 00000 n 
+0000000${String(282 + streamText.length).padStart(3, '0')} 00000 n 
+trailer << /Size 6 /Root 1 0 R >>
+startxref
+${352 + streamText.length}
+%%EOF`;
+
+  return new TextEncoder().encode(pdfContent);
 }
 
 // Initial verified sample resources for Dar Al Salam University (Level 4 - CVS & RESP Blocks)
@@ -530,6 +664,22 @@ function unmarkResourceDeleted(id: string): void {
   } catch (e) {}
 }
 
+function isInternalBackupResource(item?: Partial<EducationalResource> | null): boolean {
+  if (!item) return true;
+  const fName = (item.fileName || '').toLowerCase();
+  const title = item.title || '';
+  if (
+    fName.includes('medbot-cloud-backup') ||
+    fName.endsWith('.json') ||
+    title.includes('MEDBOT Cloud Backup') ||
+    title.includes('بطاقة فهرسة قسم دراسي — MEDBOT') ||
+    title === 'السلام عليكم'
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function mergeResourcesWithDefaults(cloudOrLocal: EducationalResource[]): EducationalResource[] {
   const deleted = getDeletedResourceIds();
   const map = new Map<string, EducationalResource>();
@@ -539,7 +689,7 @@ function mergeResourcesWithDefaults(cloudOrLocal: EducationalResource[]): Educat
     }
   }
   for (const item of cloudOrLocal) {
-    if (item && item.id && !deleted.has(item.id)) {
+    if (item && item.id && !deleted.has(item.id) && !isInternalBackupResource(item)) {
       map.set(item.id, item);
     }
   }
@@ -756,13 +906,16 @@ export async function deleteCloudFileChunks(cloudUrl?: string, chunkCount?: numb
 }
 
 export async function saveEducationalResource(resource: EducationalResource): Promise<void> {
+  if (isInternalBackupResource(resource)) return;
   unmarkResourceDeleted(resource.id);
   const current = readLocalResources();
+  const defaultStatus =
+    resource.createdBy === 'AUTOMATED_TELEGRAM_INGESTION' ? 'draft' : 'published';
   const updatedResource: EducationalResource = cleanFirestoreData({
     ...resource,
     universityId: resource.universityId || 'univ-dar-al-salam',
     studyLevelId: resource.studyLevelId || 'lvl-4',
-    status: resource.status || 'published',
+    status: resource.status || defaultStatus,
     updatedAt: new Date().toISOString()
   });
 
