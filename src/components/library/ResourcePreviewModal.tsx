@@ -46,10 +46,33 @@ export default function ResourcePreviewModal({
   const [playbackRate, setPlaybackRate] = useState<number>(1);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const isImage = resource.resourceType === 'image';
-  const isPdf = resource.resourceType === 'pdf';
-  const isAudio = resource.resourceType === 'audio';
-  const isVideo = resource.resourceType === 'video';
+  const lowerFile = (resource.fileName || resource.title || '').toLowerCase().replace(/\.html$/i, '');
+  const lowerMime = (resource.mimeType || '').toLowerCase();
+  const isVideo =
+    resource.resourceType === 'video' ||
+    lowerFile.endsWith('.mp4') ||
+    lowerFile.endsWith('.mkv') ||
+    lowerFile.endsWith('.mov') ||
+    lowerFile.endsWith('.webm') ||
+    lowerMime.includes('video');
+  const isAudio =
+    !isVideo &&
+    (resource.resourceType === 'audio' ||
+      lowerFile.endsWith('.mp3') ||
+      lowerFile.endsWith('.m4a') ||
+      lowerFile.endsWith('.ogg') ||
+      lowerFile.endsWith('.wav') ||
+      lowerMime.includes('audio'));
+  const isImage =
+    !isVideo &&
+    !isAudio &&
+    (resource.resourceType === 'image' ||
+      lowerFile.endsWith('.jpg') ||
+      lowerFile.endsWith('.jpeg') ||
+      lowerFile.endsWith('.png') ||
+      lowerFile.endsWith('.webp') ||
+      lowerMime.includes('image'));
+  const isPdf = !isVideo && !isAudio && !isImage;
 
   useEffect(() => {
     if (!hasConfirmedLoad) return;
@@ -192,7 +215,13 @@ export default function ResourcePreviewModal({
                 <div className="flex justify-between">
                   <span className="text-slate-400">نوع المستند:</span>
                   <span className="text-slate-200">
-                    {isPdf ? 'ملف محاضرة PDF' : isImage ? 'شريحة هستولوجي / صورة طبية' : isAudio ? 'تسجيل صوتي لمحاضرة' : 'مورد تعليمي'}
+                    {isVideo
+                      ? 'محاضرة / مقطع فيديو طبي'
+                      : isAudio
+                      ? 'تسجيل صوتي لمحاضرة'
+                      : isImage
+                      ? 'شريحة هستولوجي / صورة طبية'
+                      : 'ملف محاضرة PDF'}
                   </span>
                 </div>
               </div>
@@ -212,20 +241,28 @@ export default function ResourcePreviewModal({
                   className="flex-1 py-2.5 px-4 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-lg shadow-teal-600/20"
                 >
                   <Eye className="w-4 h-4" />
-                  <span>{isAudio ? 'تشغيل التسجيل الصوتي الآن' : 'تحميل ومعاينة الملف الآن'}</span>
+                  <span>
+                    {isVideo
+                      ? 'تشغيل الفيديو داخل المنصة الآن'
+                      : isAudio
+                      ? 'تشغيل التسجيل الصوتي الآن'
+                      : 'تحميل ومعاينة الملف الآن'}
+                  </span>
                 </button>
 
-                {resource.url && !resource.url.startsWith('umed-cloud://') && (
-                  <a
-                    href={resource.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs transition-colors flex items-center justify-center gap-1.5 border border-slate-700"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    <span>فتح في تبويب خارجي</span>
-                  </a>
-                )}
+                {resource.url &&
+                  !resource.url.startsWith('umed-cloud://') &&
+                  !resource.url.startsWith('/api/teledrive/stream/') && (
+                    <a
+                      href={resource.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs transition-colors flex items-center justify-center gap-1.5 border border-slate-700"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>فتح في تبويب خارجي</span>
+                    </a>
+                  )}
               </div>
             </div>
           ) : isLoading || (!resolvedViewUrl && !loadError) ? (

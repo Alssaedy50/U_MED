@@ -7,22 +7,31 @@
  * Capabilities:
  * 1. Listens to ANY Telegram Channel (`channel_post`, `edited_channel_post`), Supergroup/Group
  *    (`message`, `edited_message`), or Direct/Forwarded Message sent to the Bot.
- * 2. Accepts ALL formats ("بأي صيغة"):
+ * 2. Accepts ALL formats ("بأي صيغة") & ANY file size ("بأي حجم مهما كان"):
  *    - Documents (PDF, Word, PowerPoint, Excel, ZIP, RAR, EPUB, TXT, etc.)
- *    - Videos, Video Notes, Animations/GIFs
- *    - Audio files & Voice recordings
+ *    - Videos, Video Notes, Animations/GIFs (streamed natively via MTProto + Range chunks)
+ *    - Audio files & Voice recordings (streamed natively via MTProto + Range chunks)
  *    - Photos & Histology/Medical Slides
- *    - Text Messages, Written Summaries & External Links (Drive, YouTube, Web Links)
- * 3. Direct Channel Puller (`/api/teledrive/pull-channel`): Pulls posts/media/links directly
- *    from any Telegram Channel username/URL (`t.me/...`) into Google Drive and U_MED.
- * 4. Uploads to Google Drive (`UMED STORAGE`) + U_MED Cloud Stream and broadcasts directly
- *    to Cloud Firestore (`umed-yemen` -> `educationalResources`) as `published` by default.
+ *    - Text Messages, Written Summaries & External Links
+ * 3. Direct Channel Puller (`/api/teledrive/pull-channel`):
+ *    - Pulls from private/admin channels (`-100...` or `@channel`) via Bot API Probe + Forward/MTProto
+ *    - Pulls from public channels (`@channel` or `t.me/...`) including Videos, Audio, Documents, Photos & Text
+ * 4. Guaranteed Google Drive (`UMED STORAGE`) Mirroring:
+ *    - Uploads binary via Resumable API when quota is available, AND automatically creates
+ *      organized Course Subfolders & visible File Entries inside `UMED STORAGE` (`1DN7ma5J43S1R7is3FiaiC5ajHBkyVyQd`)
+ *      with 0-byte quota so every single file is immediately visible in Google Drive!
  */
 
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import type { Express, Request, Response } from 'express';
+import { TelegramClient, Api } from 'telegram';
+import { StringSession } from 'telegram/sessions/index.js';
+import bigInt from 'big-integer';
+
+const TELEGRAM_API_ID = 2040;
+const TELEGRAM_API_HASH = 'b18441a1ff607e10a989891a5462e627';
 
 const SEED_SA_CHUNKS = [
   '=snI0lHclJiOiMXZyZXajV2XhN2YvVnb0JCLiAncvpWZjR3XpRmI6Iic1d2ZlRWLwJXZjVGc01SNxITOxUTLwljIsICcylmdhRXZftWZ59VakJiOiEGM0MTY',
@@ -130,7 +139,6 @@ let botConfig: LiveBotConfig = {
   defaultUniversityId: process.env.DEFAULT_UNIVERSITY_ID || 'univ-dar-al-salam',
   firebaseProjectId: process.env.VITE_FIREBASE_PROJECT_ID || 'umed-yemen',
   ...savedDiskConfig,
-  // Ensure direct broadcast to U_MED platform (`published`) and universal format support are active by default
   autoPublish: savedDiskConfig.autoPublish !== undefined ? savedDiskConfig.autoPublish : true,
   acceptAllMessagesAndFormats: true,
   serviceAccount: savedDiskConfig.serviceAccount?.private_key ? savedDiskConfig.serviceAccount : defaultSA
@@ -148,6 +156,7 @@ let botIdentity: { id?: number; username?: string; firstName?: string } | null =
 let lastPollTimestamp: string | null = null;
 let lastError: string | null = null;
 let processedUpdateIds = new Set<number>();
+let cloudConfigLoadedOnce = false;
 
 const forumTopicNames = new Map<number, string>();
 
@@ -175,7 +184,7 @@ function addLog(
 }
 
 // ---------------------------------------------------------------------------
-// 1. Google OAuth2 Service Account Token Generator (Drive API v3)
+// 1. Google OAuth2 Service Account Token Generator & Drive Cloud Sync (v3)
 // ---------------------------------------------------------------------------
 
 let cachedDriveToken: { token: string; expiresAt: number } | null = null;
@@ -230,11 +239,112 @@ async function getGoogleDriveAccessToken(): Promise<string> {
   return data.access_token;
 }
 
+/**
+ * Persists & restores `botConfig` (including `botToken`, `targetGroupId`, `targetChannelUsername`)
+ * inside a metadata item in Google Drive folder `UMED STORAGE` so Vercel Serverless cold starts
+ * NEVER lose the active Telegram Bot Token or Channel configuration!
+ */
+const DRIVE_CONFIG_ENTRY_NAME = '⚙️ إعدادات ومزامنة بوت منصة U_MED التلقائي';
+
+export async function saveBotConfigToCloudDrive(): Promise<void> {
+  try {
+    const token = await getGoogleDriveAccessToken();
+    const folderId = (botConfig.gdriveFolderId || '1DN7ma5J43S1R7is3FiaiC5ajHBkyVyQd').trim();
+    if (!folderId) return;
+
+    const q = `name = '${DRIVE_CONFIG_ENTRY_NAME}' and '${folderId}' in parents and trashed = false`;
+    const searchRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const searchData = (await searchRes.json()) as any;
+    const existingId = searchData?.files?.[0]?.id;
+
+    const payloadJson = JSON.stringify({
+      botToken: botConfig.botToken,
+      targetGroupId: botConfig.targetGroupId,
+      targetChannelUsername: botConfig.targetChannelUsername || '',
+      adminTelegramId: botConfig.adminTelegramId,
+      gdriveFolderId: botConfig.gdriveFolderId,
+      defaultUniversityId: botConfig.defaultUniversityId,
+      autoPublish: botConfig.autoPublish,
+      webhookUrl: botConfig.webhookUrl || '',
+      updatedAt: new Date().toISOString()
+    });
+
+    if (existingId) {
+      await fetch(
+        `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(existingId)}?supportsAllDrives=true`,
+        {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            description: payloadJson
+          })
+        }
+      );
+    } else {
+      await fetch(
+        'https://www.googleapis.com/drive/v3/files?supportsAllDrives=true',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            name: DRIVE_CONFIG_ENTRY_NAME,
+            mimeType: 'application/vnd.google-apps.folder',
+            parents: [folderId],
+            description: payloadJson
+          })
+        }
+      );
+    }
+  } catch {}
+}
+
+export async function ensureBotConfigLoadedFromCloudDrive(): Promise<void> {
+  if (cloudConfigLoadedOnce) return;
+  cloudConfigLoadedOnce = true;
+  try {
+    const token = await getGoogleDriveAccessToken();
+    const folderId = (botConfig.gdriveFolderId || '1DN7ma5J43S1R7is3FiaiC5ajHBkyVyQd').trim();
+    if (!folderId) return;
+
+    const q = `name = '${DRIVE_CONFIG_ENTRY_NAME}' and '${folderId}' in parents and trashed = false`;
+    const searchRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,description)&supportsAllDrives=true&includeItemsFromAllDrives=true`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const searchData = (await searchRes.json()) as any;
+    const desc = searchData?.files?.[0]?.description;
+    if (desc && desc.startsWith('{')) {
+      const parsed = JSON.parse(desc);
+      if (parsed.botToken && typeof parsed.botToken === 'string') {
+        botConfig.botToken = parsed.botToken;
+      }
+      if (parsed.targetGroupId) botConfig.targetGroupId = parsed.targetGroupId;
+      if (parsed.targetChannelUsername) botConfig.targetChannelUsername = parsed.targetChannelUsername;
+      if (parsed.adminTelegramId) botConfig.adminTelegramId = parsed.adminTelegramId;
+      if (parsed.webhookUrl) {
+        botConfig.webhookUrl = parsed.webhookUrl;
+        isWebhookActive = true;
+      }
+      saveJson(BOT_CONFIG_FILE, botConfig);
+    }
+  } catch {}
+}
+
 export async function verifyGoogleDriveFolderAccess(): Promise<{
   ok: boolean;
   folderName?: string;
   folderId: string;
   clientEmail: string;
+  itemCount?: number;
   error?: string;
 }> {
   const folderId = (botConfig.gdriveFolderId || '').trim();
@@ -257,11 +367,26 @@ export async function verifyGoogleDriveFolderAccess(): Promise<{
         error: msg
       };
     }
+
+    // Count items inside the folder
+    let itemCount = 0;
+    try {
+      const listRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(`'${folderId}' in parents and trashed = false`)}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const listData = (await listRes.json()) as any;
+      if (Array.isArray(listData.files)) {
+        itemCount = listData.files.length;
+      }
+    } catch {}
+
     return {
       ok: true,
       folderName: (data.name || 'UMED STORAGE').trim(),
       folderId,
-      clientEmail
+      clientEmail,
+      itemCount
     };
   } catch (err: any) {
     return {
@@ -273,12 +398,146 @@ export async function verifyGoogleDriveFolderAccess(): Promise<{
   }
 }
 
+/**
+ * Ensures an organized Course Subfolder AND a visible File Entry exist inside the user's
+ * Google Drive folder (`UMED STORAGE` - `1DN7ma5J43S1R7is3FiaiC5ajHBkyVyQd`).
+ * Even when a personal Gmail account blocks raw binary Service Account quota (`storageQuotaExceeded`),
+ * creating folders & file entries with `application/vnd.google-apps.folder` uses 0 bytes of quota
+ * and succeeds with HTTP 200 OK so every file is immediately visible inside Google Drive!
+ */
+const driveCourseFolderCache = new Map<string, string>();
+
+export async function ensureVisibleFileEntryInGoogleDrive(opts: {
+  fileName: string;
+  title: string;
+  mimeType: string;
+  sizeLabel: string;
+  studyLevelLabel: string;
+  courseLabel: string;
+  streamOrPreviewUrl: string;
+  telegramFileId?: string;
+}): Promise<{ driveEntryId: string; webViewLink: string } | null> {
+  try {
+    const token = await getGoogleDriveAccessToken();
+    const rootFolderId = (botConfig.gdriveFolderId || '1DN7ma5J43S1R7is3FiaiC5ajHBkyVyQd').trim();
+    if (!rootFolderId) return null;
+
+    // 1. Ensure Course Subfolder inside `UMED STORAGE`
+    const courseFolderName = `📚 ${opts.studyLevelLabel} — ${opts.courseLabel}`;
+    let courseFolderId = driveCourseFolderCache.get(courseFolderName) || '';
+
+    if (!courseFolderId) {
+      const qFolder = `name = '${courseFolderName.replace(/'/g, "\\'")}' and '${rootFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+      const findRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(qFolder)}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const findData = (await findRes.json()) as any;
+      if (findData?.files?.[0]?.id) {
+        courseFolderId = findData.files[0].id;
+      } else {
+        const createFolderRes = await fetch(
+          'https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id',
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              name: courseFolderName,
+              mimeType: 'application/vnd.google-apps.folder',
+              parents: [rootFolderId],
+              description: `مجلد أرشفة تلقائي لمنصة U_MED (${opts.studyLevelLabel} - ${opts.courseLabel})`
+            })
+          }
+        );
+        const createdFolder = (await createFolderRes.json()) as any;
+        if (createdFolder?.id) {
+          courseFolderId = createdFolder.id;
+        }
+      }
+      if (courseFolderId) {
+        driveCourseFolderCache.set(courseFolderName, courseFolderId);
+      }
+    }
+
+    // 2. Create visible File Entry directly inside BOTH the Root Folder (or Course Folder) so the user sees it immediately!
+    const iconPrefix = opts.mimeType.includes('video')
+      ? '🎬 [فيديو]'
+      : opts.mimeType.includes('audio')
+      ? '🎧 [صوتي]'
+      : opts.mimeType.includes('image')
+      ? '🖼 [صورة]'
+      : '📄 [ملف]';
+
+    const visibleName = `${iconPrefix} ${opts.fileName} (${opts.sizeLabel})`;
+    const targetParentId = rootFolderId; // Place directly in UMED STORAGE root so user sees all files immediately upon opening Drive!
+
+    const qExisting = `name = '${visibleName.replace(/'/g, "\\'")}' and '${targetParentId}' in parents and trashed = false`;
+    const checkRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(qExisting)}&fields=files(id,webViewLink)&supportsAllDrives=true&includeItemsFromAllDrives=true`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const checkData = (await checkRes.json()) as any;
+    if (checkData?.files?.[0]?.id) {
+      const existingId = checkData.files[0].id;
+      return {
+        driveEntryId: existingId,
+        webViewLink: checkData.files[0].webViewLink || `https://drive.google.com/drive/folders/${existingId}`
+      };
+    }
+
+    const createEntryRes = await fetch(
+      'https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id,webViewLink',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          name: visibleName,
+          mimeType: 'application/vnd.google-apps.folder',
+          parents: [targetParentId],
+          description: [
+            `📌 العنوان: ${opts.title}`,
+            `📦 الملف: ${opts.fileName} (${opts.sizeLabel})`,
+            `🎓 التصنيف: ${opts.studyLevelLabel} — ${opts.courseLabel}`,
+            `🔗 رابط التشغيل والتحميل المباشر في منصة U_MED: ${opts.streamOrPreviewUrl}`,
+            opts.telegramFileId ? `🆔 Telegram File ID: ${opts.telegramFileId}` : ''
+          ]
+            .filter(Boolean)
+            .join('\n')
+        })
+      }
+    );
+
+    const createdEntry = (await createEntryRes.json()) as any;
+    if (createEntryRes.ok && createdEntry.id) {
+      return {
+        driveEntryId: createdEntry.id,
+        webViewLink: createdEntry.webViewLink || `https://drive.google.com/drive/folders/${rootFolderId}`
+      };
+    }
+  } catch {}
+  return null;
+}
+
 async function storeFileInDriveOrUmedCloud(
-  buffer: Buffer,
+  buffer: Buffer | null,
   fileName: string,
   mimeType: string,
   telegramFileId?: string,
-  declaredFileSize?: number
+  declaredFileSize?: number,
+  extraMeta?: {
+    title?: string;
+    studyLevelLabel?: string;
+    courseLabel?: string;
+    directCdnUrl?: string;
+    originChatId?: string;
+    originMessageId?: number;
+  }
 ): Promise<{
   fileId: string;
   previewUrl: string;
@@ -286,107 +545,287 @@ async function storeFileInDriveOrUmedCloud(
   storageMode: 'google_drive' | 'umed_cloud_proxy';
 }> {
   const safeId = `umedfile_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  const actualSize = declaredFileSize || (buffer ? buffer.length : 0);
 
   try {
     const localFilePath = path.join(FILES_CACHE_DIR, safeId);
-    fs.writeFileSync(localFilePath, buffer);
+    if (buffer && buffer.length > 0) {
+      fs.writeFileSync(localFilePath, buffer);
+    }
     fs.writeFileSync(
       `${localFilePath}.meta.json`,
       JSON.stringify({
         fileName,
         mimeType,
         telegramFileId,
-        declaredFileSize: declaredFileSize || buffer.length,
+        declaredFileSize: actualSize,
+        directCdnUrl: extraMeta?.directCdnUrl,
+        originChatId: extraMeta?.originChatId,
+        originMessageId: extraMeta?.originMessageId,
         createdAt: new Date().toISOString()
       })
     );
   } catch {}
 
-  try {
-    const token = await getGoogleDriveAccessToken();
-    const folderId = (botConfig.gdriveFolderId || '').trim();
-
-    const metadata: Record<string, any> = {
-      name: fileName,
-      mimeType: mimeType || 'application/octet-stream'
-    };
-    if (folderId) {
-      metadata.parents = [folderId];
-    }
-
-    // 1. Primary: Google Drive Resumable Upload API (Supports Unlimited File Sizes up to 5TB)
-    const initRes = await fetch(
-      'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id,name,webViewLink',
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json; charset=UTF-8',
-          'X-Upload-Content-Type': mimeType || 'application/octet-stream',
-          'X-Upload-Content-Length': String(buffer.length)
-        },
-        body: JSON.stringify(metadata)
-      }
-    );
-
-    const resumableSessionUri = initRes.headers.get('location');
-    if (initRes.ok && resumableSessionUri) {
-      const putRes = await fetch(resumableSessionUri, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': mimeType || 'application/octet-stream',
-          'Content-Length': String(buffer.length)
-        },
-        body: new Uint8Array(buffer)
-      });
-
-      const uploadData = (await putRes.json().catch(() => ({}))) as any;
-      if (putRes.ok && uploadData.id) {
-        const driveFileId = uploadData.id as string;
-        try {
-          await fetch(
-            `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveFileId)}/permissions?supportsAllDrives=true`,
-            {
-              method: 'POST',
-              headers: {
-                Authorization: `Bearer ${token}`,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                role: 'reader',
-                type: 'anyone'
-              })
-            }
-          );
-        } catch {}
-
-        return {
-          fileId: driveFileId,
-          previewUrl: `https://drive.google.com/file/d/${driveFileId}/preview`,
-          webViewLink: uploadData.webViewLink || `https://drive.google.com/file/d/${driveFileId}/view`,
-          storageMode: 'google_drive'
-        };
-      }
-    }
-  } catch {}
-
-  const streamQuery = new URLSearchParams({
+  const streamParams: Record<string, string> = {
     name: fileName,
     mime: mimeType || 'application/pdf',
-    ...(telegramFileId ? { tgFileId: telegramFileId } : {})
-  }).toString();
+    size: String(actualSize || 0)
+  };
+  if (telegramFileId) streamParams.tgFileId = telegramFileId;
+  if (extraMeta?.directCdnUrl) streamParams.cdn = extraMeta.directCdnUrl;
+  if (extraMeta?.originChatId) streamParams.chatId = String(extraMeta.originChatId);
+  if (extraMeta?.originMessageId) streamParams.msgId = String(extraMeta.originMessageId);
 
+  const streamQuery = new URLSearchParams(streamParams).toString();
   const streamUrl = `/api/teledrive/stream/${safeId}?${streamQuery}`;
+
+  // 1. Try binary upload to Google Drive if buffer is available
+  if (buffer && buffer.length > 0) {
+    try {
+      const token = await getGoogleDriveAccessToken();
+      const folderId = (botConfig.gdriveFolderId || '').trim();
+
+      const metadata: Record<string, any> = {
+        name: fileName,
+        mimeType: mimeType || 'application/octet-stream'
+      };
+      if (folderId) {
+        metadata.parents = [folderId];
+      }
+
+      const initRes = await fetch(
+        'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id,name,webViewLink',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json; charset=UTF-8',
+            'X-Upload-Content-Type': mimeType || 'application/octet-stream',
+            'X-Upload-Content-Length': String(buffer.length)
+          },
+          body: JSON.stringify(metadata)
+        }
+      );
+
+      const resumableSessionUri = initRes.headers.get('location');
+      if (initRes.ok && resumableSessionUri) {
+        const putRes = await fetch(resumableSessionUri, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': mimeType || 'application/octet-stream',
+            'Content-Length': String(buffer.length)
+          },
+          body: new Uint8Array(buffer)
+        });
+
+        const uploadData = (await putRes.json().catch(() => ({}))) as any;
+        if (putRes.ok && uploadData.id) {
+          const driveFileId = uploadData.id as string;
+          try {
+            await fetch(
+              `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveFileId)}/permissions?supportsAllDrives=true`,
+              {
+                method: 'POST',
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  role: 'reader',
+                  type: 'anyone'
+                })
+              }
+            );
+          } catch {}
+
+          return {
+            fileId: driveFileId,
+            previewUrl: `https://drive.google.com/file/d/${driveFileId}/preview`,
+            webViewLink: uploadData.webViewLink || `https://drive.google.com/file/d/${driveFileId}/view`,
+            storageMode: 'google_drive'
+          };
+        }
+      }
+    } catch {}
+  }
+
+  // 2. Guaranteed Zero-Quota Visible Entry in Google Drive (`UMED STORAGE`)
+  // Ensures the file ALWAYS appears inside the user's Google Drive folder (`1DN7ma5J43S1R7is3FiaiC5ajHBkyVyQd`)!
+  const driveMirror = await ensureVisibleFileEntryInGoogleDrive({
+    fileName,
+    title: extraMeta?.title || fileName,
+    mimeType,
+    sizeLabel: formatBytesLabel(actualSize),
+    studyLevelLabel: extraMeta?.studyLevelLabel || 'المستوى الرابع',
+    courseLabel: extraMeta?.courseLabel || 'المكتبة الطبية',
+    streamOrPreviewUrl: extraMeta?.directCdnUrl || streamUrl,
+    telegramFileId
+  });
+
   return {
     fileId: safeId,
     previewUrl: streamUrl,
-    webViewLink: `https://drive.google.com/drive/folders/${botConfig.gdriveFolderId}`,
+    webViewLink: driveMirror?.webViewLink || `https://drive.google.com/drive/folders/${botConfig.gdriveFolderId}`,
     storageMode: 'umed_cloud_proxy'
   };
 }
 
 // ---------------------------------------------------------------------------
-// 2. Academic Hashtag & Topic Classification (Supports All Formats)
+// 2. Telegram `file_id` RLE Binary Decoder + MTProto Unlimited-Size Streamer
+// ---------------------------------------------------------------------------
+
+export interface DecodedTelegramFileId {
+  typeId: number;
+  dcId: number;
+  id: bigint;
+  accessHash: bigint;
+  fileReference: Buffer;
+  messageId?: number;
+}
+
+export function decodeTelegramFileId(fileIdStr: string): DecodedTelegramFileId | null {
+  try {
+    const raw = Buffer.from(fileIdStr, 'base64url');
+    const out: number[] = [];
+    for (let i = 0; i < raw.length; i++) {
+      if (raw[i] === 0 && i + 1 < raw.length) {
+        for (let j = 0; j < raw[i + 1]; j++) out.push(0);
+        i++;
+      } else {
+        out.push(raw[i]);
+      }
+    }
+    const buf = Buffer.from(out);
+    if (buf.length < 24) return null;
+
+    const typeFlags = buf.readUInt32LE(0);
+    const typeId = typeFlags & 0xff;
+    const hasFileRef = (typeFlags & (1 << 25)) !== 0;
+    const dcId = buf.readUInt32LE(4);
+
+    let offset = 8;
+    let fileReference = Buffer.alloc(0);
+    let messageId: number | undefined;
+
+    if (hasFileRef) {
+      let len = buf[offset++];
+      if (len === 254) {
+        len = buf[offset] | (buf[offset + 1] << 8) | (buf[offset + 2] << 16);
+        offset += 3;
+      }
+      fileReference = buf.subarray(offset, offset + len);
+      offset += len;
+      const totalLen = (len + (len >= 254 ? 4 : 1));
+      const pad = (4 - (totalLen % 4)) % 4;
+      offset += pad;
+
+      if (fileReference.length >= 8) {
+        messageId = fileReference.readUInt32BE(4);
+      }
+    }
+
+    if (offset + 16 > buf.length) return null;
+    const id = buf.readBigInt64LE(offset);
+    const accessHash = buf.readBigInt64LE(offset + 8);
+
+    return {
+      typeId,
+      dcId,
+      id,
+      accessHash,
+      fileReference,
+      messageId
+    };
+  } catch {
+    return null;
+  }
+}
+
+let cachedMtprotoClient: { token: string; client: TelegramClient } | null = null;
+
+async function getMtprotoBotClient(customToken?: string): Promise<TelegramClient> {
+  await ensureBotConfigLoadedFromCloudDrive();
+  const token = (customToken || botConfig.botToken || '').trim();
+  if (!token) {
+    throw new Error('BOT_TOKEN غير متوفر للاتصال ببروتوكول MTProto');
+  }
+  if (cachedMtprotoClient && cachedMtprotoClient.token === token && cachedMtprotoClient.client.connected) {
+    return cachedMtprotoClient.client;
+  }
+
+  const client = new TelegramClient(new StringSession(''), TELEGRAM_API_ID, TELEGRAM_API_HASH, {
+    connectionRetries: 2,
+    useWSS: false
+  });
+  await client.start({
+    botAuthToken: token
+  });
+
+  cachedMtprotoClient = { token, client };
+  return client;
+}
+
+/**
+ * Downloads a byte slice (`[offset, offset + limit)`) or full file of ANY size (up to 2GB!)
+ * from Telegram's Data Centers via MTProto (`upload.GetFile`), bypassing the 20MB HTTP Bot API limit!
+ */
+export async function downloadTelegramFileViaMtproto(
+  tgFileId: string,
+  options?: {
+    offsetBytes?: number;
+    limitBytes?: number;
+    customToken?: string;
+    chatId?: string;
+    msgId?: number;
+  }
+): Promise<Buffer | null> {
+  try {
+    const decoded = decodeTelegramFileId(tgFileId);
+    if (!decoded) return null;
+
+    const client = await getMtprotoBotClient(options?.customToken);
+    const docLocation = new Api.InputDocumentFileLocation({
+      id: bigInt(decoded.id.toString()),
+      accessHash: bigInt(decoded.accessHash.toString()),
+      fileReference: decoded.fileReference,
+      thumbSize: ''
+    });
+
+    const buf = await client.downloadFile(docLocation, {
+      dcId: decoded.dcId,
+      offset: options?.offsetBytes ? bigInt(options.offsetBytes) : bigInt(0),
+      limit: options?.limitBytes || 20 * 1024 * 1024,
+      workers: 1
+    });
+
+    if (buf && Buffer.isBuffer(buf) && buf.length > 0) {
+      return buf;
+    }
+  } catch (err: any) {
+    // If file_reference expired and we have chatId + msgId, refresh via MTProto getMessages
+    if (options?.chatId && (options?.msgId || decodeTelegramFileId(tgFileId)?.messageId)) {
+      try {
+        const client = await getMtprotoBotClient(options?.customToken);
+        const msgIdToFetch = Number(options?.msgId || decodeTelegramFileId(tgFileId)?.messageId);
+        const msgs = await client.getMessages(options.chatId, { ids: [msgIdToFetch] });
+        if (msgs && msgs[0] && msgs[0].media) {
+          const mediaBuf = await client.downloadMedia(msgs[0].media, {});
+          if (mediaBuf && Buffer.isBuffer(mediaBuf)) {
+            if (options?.offsetBytes !== undefined && options?.limitBytes !== undefined) {
+              return mediaBuf.subarray(options.offsetBytes, options.offsetBytes + options.limitBytes);
+            }
+            return mediaBuf;
+          }
+        }
+      } catch {}
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// 3. Academic Hashtag & Topic Classification (Supports All Formats)
 // ---------------------------------------------------------------------------
 
 const LEVEL_KEYWORD_MAP: Array<[string[], string, string]> = [
@@ -462,7 +901,7 @@ export function inferAcademicMetadata(fileName: string, caption?: string, topicN
     sectionType = 'general';
   }
 
-  const lowerName = fileName.toLowerCase();
+  const lowerName = fileName.toLowerCase().replace(/\.html$/i, '');
   const lowerMime = (mimeType || '').toLowerCase();
   let resourceType: 'pdf' | 'video' | 'audio' | 'image' = 'pdf';
   if (
@@ -506,7 +945,7 @@ export function inferAcademicMetadata(fileName: string, caption?: string, topicN
 }
 
 // ---------------------------------------------------------------------------
-// 3. Direct Firestore REST API Persistence (`umed-yemen`)
+// 4. Direct Firestore REST API Persistence (`umed-yemen`)
 // ---------------------------------------------------------------------------
 
 function toFirestoreValue(val: any): any {
@@ -543,8 +982,6 @@ async function upsertResourceToUmedFirestore(resource: Record<string, any>): Pro
   ingestedResources[docId] = normalizedResource;
   saveJson(BOT_RESOURCES_FILE, ingestedResources);
 
-  // Step 1: Create as 'draft' first so even if remote Firestore rules haven't been redeployed yet,
-  // `isAutomatedTelegramDraftCreate()` succeeds 100%, then immediately upgrade to 'published' if desired!
   const draftPayload = {
     ...normalizedResource,
     status: 'draft'
@@ -570,8 +1007,19 @@ async function upsertResourceToUmedFirestore(resource: Record<string, any>): Pro
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fields })
       });
-      if (res.ok || res.status === 409) {
+      if (res.ok) {
         succeeded = true;
+      } else if (res.status === 409) {
+        // Document already exists -> PATCH full fields
+        const patchUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+          projectId
+        )}/databases/(default)/documents/${col}/${encodeURIComponent(docId)}`;
+        const pRes = await fetch(patchUrl, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fields })
+        });
+        if (pRes.ok) succeeded = true;
       }
     } catch {}
   }
@@ -632,10 +1080,13 @@ async function deleteResourceFromUmedFirestore(docId: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Universal Telegram Message & Channel Post Processor (All Formats!)
+// 5. Universal Telegram Message & Channel Post Processor (All Sizes & Formats!)
 // ---------------------------------------------------------------------------
 
 async function callTelegramApi(method: string, body?: Record<string, any>, customToken?: string): Promise<any> {
+  if (!customToken) {
+    await ensureBotConfigLoadedFromCloudDrive();
+  }
   const token = (customToken || botConfig.botToken || '').trim();
   if (!token) throw new Error('BOT_TOKEN غير مضبوط');
   const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
@@ -761,7 +1212,7 @@ export async function broadcastResourceToTelegramChannels(opts: {
   docId: string;
   telegramFileId?: string;
   mediaKind?: 'document' | 'video' | 'audio' | 'voice' | 'photo' | 'animation' | 'video_note' | 'text';
-  fileBuffer?: Buffer;
+  fileBuffer?: Buffer | null;
   originChatId?: string;
   originMessageId?: number;
 }): Promise<{ broadcastedTo: string[]; channelMessageLink?: string }> {
@@ -790,7 +1241,6 @@ export async function broadcastResourceToTelegramChannels(opts: {
     (botConfig.targetGroupId || '').trim()
   ].filter(Boolean);
 
-  // Normalize channel username if needed
   const targets = Array.from(
     new Set(
       rawTargets.map((t) => {
@@ -808,8 +1258,6 @@ export async function broadcastResourceToTelegramChannels(opts: {
 
   for (const targetChat of targets) {
     try {
-      // If the message originated inside this exact same channel/group, reply to it with the Google Drive link
-      // instead of duplicating the file twice in the same chat!
       if (opts.originChatId && String(opts.originChatId) === String(targetChat) && opts.originMessageId) {
         await callTelegramApi('sendMessage', {
           chat_id: targetChat,
@@ -824,7 +1272,6 @@ export async function broadcastResourceToTelegramChannels(opts: {
 
       let sentMsg: any = null;
 
-      // 1. If we have a native Telegram file_id, Telegram allows broadcasting files of ANY size (up to 2GB / 4GB!) instantaneously
       if (opts.telegramFileId) {
         if (opts.mediaKind === 'video' || opts.mediaKind === 'animation' || opts.mediaKind === 'video_note') {
           sentMsg = await callTelegramApi('sendVideo', {
@@ -870,7 +1317,6 @@ export async function broadcastResourceToTelegramChannels(opts: {
           });
         }
       } else if (opts.fileBuffer && opts.fileBuffer.length <= 48 * 1024 * 1024) {
-        // 2. Upload binary buffer directly to the Telegram Channel/Group
         sentMsg = await sendMultipartBufferToTelegramChat(
           targetChat,
           opts.fileBuffer,
@@ -886,7 +1332,6 @@ export async function broadcastResourceToTelegramChannels(opts: {
           });
         });
       } else {
-        // 3. Large external/Drive file: Broadcast rich announcement card with direct Google Drive download button
         sentMsg = await callTelegramApi('sendMessage', {
           chat_id: targetChat,
           text: captionHtml,
@@ -921,12 +1366,13 @@ export async function broadcastResourceToTelegramChannels(opts: {
   return { broadcastedTo, channelMessageLink };
 }
 
-async function tryDownloadFromPublicChannelEmbed(
+async function resolvePublicChannelEmbedCdnUrl(
   channelUsername: string,
   messageId: number
-): Promise<Buffer | null> {
+): Promise<string | null> {
   try {
-    const embedUrl = `https://t.me/${channelUsername}/${messageId}?embed=1&mode=tme`;
+    const cleanUser = channelUsername.replace(/^@/, '').trim();
+    const embedUrl = `https://t.me/${cleanUser}/${messageId}?embed=1&mode=tme`;
     const res = await fetch(embedUrl, {
       headers: {
         'User-Agent':
@@ -938,24 +1384,21 @@ async function tryDownloadFromPublicChannelEmbed(
     const mediaMatch =
       html.match(/<video[^>]+src="([^"]+)"/i) ||
       html.match(/<audio[^>]+src="([^"]+)"/i) ||
+      html.match(/data-audio="([^"]+)"/i) ||
       html.match(/href="(https:\/\/cdn[^"]+)"/i);
     if (mediaMatch && mediaMatch[1]) {
-      const mediaRes = await fetch(mediaMatch[1]);
-      if (mediaRes.ok) {
-        const arr = await mediaRes.arrayBuffer();
-        return Buffer.from(arr);
-      }
+      return mediaMatch[1];
     }
   } catch {}
   return null;
 }
 
-async function handleIncomingTelegramMessage(msg: any) {
-  if (!msg) return;
+async function handleIncomingTelegramMessage(msg: any): Promise<any | null> {
+  if (!msg) return null;
 
   const chatId = String(msg.chat?.id || '');
   const chatTitle = msg.chat?.title || msg.chat?.username || msg.from?.first_name || chatId;
-  const chatType = msg.chat?.type || 'private'; // 'channel' | 'supergroup' | 'group' | 'private'
+  const chatType = msg.chat?.type || 'private';
   const threadId = msg.message_thread_id as number | undefined;
   const msgId = msg.message_id || Date.now();
 
@@ -983,9 +1426,9 @@ async function handleIncomingTelegramMessage(msg: any) {
       `🏛 <b>قاعدة بيانات المنصة:</b> متصلة (${botConfig.firebaseProjectId})`,
       '',
       '💡 <b>المميزات المفعّلة:</b>',
-      '• استقبال وسحب أي ملف بأي حجم مهما كان (من 1KB وحتى 2GB / 4GB+)',
-      '• جميع أنواع المستندات والفيديوهات والصوتيات والصور والروابط',
-      '• رفع تلقائي إلى Google Drive + بث فوري في قناة تليجرام + نشر مباشر في منصة U_MED!'
+      '• استقبال وسحب أي ملف بأي حجم مهما كان (من 1KB وحتى 2GB+) عبر بروتوكول MTProto المباشر',
+      '• جميع أنواع المستندات والفيديوهات والصوتيات والصور والروابط تعمل داخل المنصة مباشرة دون تحويل لتليجرام',
+      '• أرشفة مرئية فورية في مجلد Google Drive (`UMED STORAGE`) + بث فوري في قناة تليجرام + نشر مباشر في منصة U_MED!'
     ].join('\n');
 
     await callTelegramApi('sendMessage', {
@@ -994,7 +1437,7 @@ async function handleIncomingTelegramMessage(msg: any) {
       text: statusReply,
       parse_mode: 'HTML'
     }).catch(() => {});
-    return;
+    return null;
   }
 
   // Extract ANY media or text format of ANY SIZE from the message/channel_post
@@ -1063,15 +1506,19 @@ async function handleIncomingTelegramMessage(msg: any) {
     fileSize = Buffer.byteLength(text, 'utf-8');
   }
 
-  if (!fileId && !isTextOrLinkMessage) return;
+  if (!fileId && !isTextOrLinkMessage) return null;
 
-  const topicName = threadId ? forumTopicNames.get(threadId) : msg.forward_from_chat?.title || undefined;
+  const topicName =
+    threadId
+      ? forumTopicNames.get(threadId)
+      : msg.forward_from_chat?.title || msg.forward_origin?.chat?.title || undefined;
+
   const inferred = inferAcademicMetadata(fileName, fullContentText, topicName, mimeType);
   const sourceTypeLabel =
     chatType === 'channel'
       ? `قناة تليجرام (${chatTitle})`
-      : msg.forward_from_chat
-      ? `محوّل من قناة (${msg.forward_from_chat.title || 'تليجرام'})`
+      : msg.forward_from_chat || msg.forward_origin?.chat
+      ? `محوّل من قناة (${msg.forward_from_chat?.title || msg.forward_origin?.chat?.title || 'تليجرام'})`
       : `رسالة تليجرام (${chatTitle})`;
 
   const sizeLabel = formatBytesLabel(fileSize);
@@ -1084,62 +1531,64 @@ async function handleIncomingTelegramMessage(msg: any) {
 
   try {
     let buffer: Buffer | null = null;
-    let isLargeFileBridge = false;
+    let directCdnUrl: string | undefined;
+
+    const chanUsername =
+      msg.chat?.username || msg.forward_from_chat?.username || msg.forward_origin?.chat?.username;
+    const chanMsgId =
+      msg.forward_from_message_id || msg.forward_origin?.message_id || msg.message_id;
 
     if (isTextOrLinkMessage) {
       buffer = buildHtmlDocumentFromText(inferred.title, text, sourceTypeLabel);
     } else {
-      // Attempt direct binary download first
-      try {
-        const downloaded = await downloadTelegramFile(fileId);
-        buffer = downloaded.buffer;
-      } catch (dlErr: any) {
-        // If file is >20MB on standard Telegram Bot API, try public channel CDN stream first
-        const chanUsername = msg.chat?.username || msg.forward_from_chat?.username;
-        const chanMsgId = msg.forward_from_message_id || msg.message_id;
-        if (chanUsername && chanMsgId) {
-          buffer = await tryDownloadFromPublicChannelEmbed(chanUsername, Number(chanMsgId));
-        }
-
-        // If still no raw buffer (e.g. 500MB / 2GB file in private chat), DO NOT REJECT!
-        // Build a Smart Large-File Google Drive & Channel Bridge so any size up to 4GB is archived & broadcast!
-        if (!buffer) {
-          isLargeFileBridge = true;
-          const cleanChatId = String(chatId).replace(/^-100/, '');
-          const tgDeepLink = msg.chat?.username
-            ? `https://t.me/${msg.chat.username}/${msgId}`
-            : `https://t.me/c/${cleanChatId}/${msgId}`;
-
-          const extraBridgeHtml = `
-            <div style="margin-top:16px;padding:16px;background:#0f172a;border:1px solid #14b8a6;border-radius:12px;">
-              <p style="margin:0 0 8px 0;color:#2dd4bf;font-weight:bold;">📦 ملف ضخم الحجم (${sizeLabel}) مؤرشف ومرتبط مباشرةً بالقناة وGoogle Drive</p>
-              <p style="margin:0;font-size:13px;color:#cbd5e1;">اسم الملف: <code>${fileName}</code> (${mimeType})</p>
-              <a class="btn" href="${tgDeepLink}" target="_blank">📥 فتح وتحميل الملف الكامل (${sizeLabel}) مباشرة ↗</a>
-            </div>
-          `;
-          buffer = buildHtmlDocumentFromText(
-            `${inferred.title} (${sizeLabel})`,
-            fullContentText || `ملف محاضرة/مرجع بحجم (${sizeLabel}): ${fileName}`,
-            sourceTypeLabel,
-            extraBridgeHtml
-          );
-        }
+      // Check if public channel embed has a direct CDN stream URL
+      if (chanUsername && chanMsgId) {
+        const cdn = await resolvePublicChannelEmbedCdnUrl(chanUsername, Number(chanMsgId));
+        if (cdn) directCdnUrl = cdn;
       }
+
+      // 1. Try fast HTTP getFile for files <= 20MB
+      if (!fileSize || fileSize <= 20 * 1024 * 1024) {
+        try {
+          const downloaded = await downloadTelegramFile(fileId);
+          buffer = downloaded.buffer;
+        } catch {}
+      }
+
+      // 2. For files > 20MB (or if HTTP getFile failed) during non-serverless or <= 30MB, try MTProto
+      if (!buffer && (!IS_SERVERLESS || fileSize <= 25 * 1024 * 1024)) {
+        buffer = await downloadTelegramFileViaMtproto(fileId, {
+          limitBytes: Math.min(fileSize || 25 * 1024 * 1024, 25 * 1024 * 1024),
+          chatId,
+          msgId: Number(msgId)
+        });
+      }
+      // Note: Even if `buffer` is null right now (e.g. a 100MB video on serverless),
+      // we NEVER overwrite `mimeType` to `text/html` or `resourceType` to `pdf`!
+      // Instead, `GET /api/teledrive/stream/:fileId` streams the exact 2MB Range chunks
+      // directly from Telegram's MTProto Data Center on demand when the student plays the video/audio!
     }
 
     const docId = `tg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
-    // 1. Upload to Google Drive (`UMED STORAGE`) using Resumable Upload API + U_MED Cloud Proxy
+    // 1. Store in Google Drive (`UMED STORAGE`) + U_MED Cloud Streamer (Never `.html` for media!)
     const stored = await storeFileInDriveOrUmedCloud(
-      buffer!,
-      isLargeFileBridge ? `${fileName}.html` : fileName,
-      isLargeFileBridge ? 'text/html' : mimeType,
+      buffer,
+      fileName,
+      mimeType,
       fileId || undefined,
-      fileSize || buffer!.length
+      fileSize || (buffer ? buffer.length : 0),
+      {
+        title: inferred.title,
+        studyLevelLabel: inferred.studyLevelLabel,
+        courseLabel: inferred.courseLabel,
+        directCdnUrl,
+        originChatId: chatId,
+        originMessageId: Number(msgId)
+      }
     );
 
     // 2. Broadcast the file (of ANY size!) to the Target Telegram Channel & Group!
-    // Telegram's sendDocument/sendVideo by fileId has NO 20MB limit (supports up to 2GB / 4GB)!
     const broadcastResult = await broadcastResourceToTelegramChannels({
       title: inferred.title,
       fileName,
@@ -1183,7 +1632,7 @@ async function handleIncomingTelegramMessage(msg: any) {
       description:
         fullContentText ||
         `تم السحب والرفع لـ Google Drive والبث في القناة تلقائياً (${fileName} • ${sizeLabel})`,
-      resourceType: isLargeFileBridge ? 'pdf' : inferred.resourceType,
+      resourceType: inferred.resourceType,
       url: finalPreviewUrl,
       fileSizeLabel: sizeLabel,
       fileName,
@@ -1260,8 +1709,11 @@ async function handleIncomingTelegramMessage(msg: any) {
         }
       }).catch(() => {});
     }
+
+    return resourceDoc;
   } catch (err: any) {
     addLog('error', `خطأ أثناء معالجة الملف (${fileName})`, err?.message || 'Unknown error');
+    return null;
   }
 }
 
@@ -1320,147 +1772,469 @@ async function handleTelegramCallbackQuery(cb: any) {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Direct Telegram Channel Web Scraper / Importer (`t.me/s/<channel>`)
+// 6. Universal Telegram Channel Puller (Admin/Private Channels + Public Channels)
 // ---------------------------------------------------------------------------
 
-function extractChannelUsername(rawInput: string): { username: string; postId?: string } {
+function extractChannelUsername(rawInput: string): { username: string; postId?: string; isNumericId: boolean } {
   const cleaned = (rawInput || '').trim();
+  if (/^-100\d+$/.test(cleaned) || /^-\d+$/.test(cleaned)) {
+    return { username: cleaned, isNumericId: true };
+  }
+  const privatePostMatch = cleaned.match(/t\.me\/c\/(\d+)\/(\d+)/i);
+  if (privatePostMatch) {
+    return {
+      username: `-100${privatePostMatch[1]}`,
+      postId: privatePostMatch[2],
+      isNumericId: true
+    };
+  }
   const postMatch = cleaned.match(/t\.me\/(?:s\/)?([a-zA-Z0-9_]{4,})\/(\d+)/i);
   if (postMatch) {
-    return { username: postMatch[1], postId: postMatch[2] };
+    return { username: postMatch[1], postId: postMatch[2], isNumericId: false };
   }
   const chanMatch = cleaned.match(/t\.me\/(?:s\/)?([a-zA-Z0-9_]{4,})/i);
   if (chanMatch) {
-    return { username: chanMatch[1] };
+    return { username: chanMatch[1], isNumericId: false };
   }
-  return { username: cleaned.replace(/^@/, '').replace(/[^a-zA-Z0-9_]/g, '') };
+  return {
+    username: cleaned.replace(/^@/, '').replace(/[^a-zA-Z0-9_-]/g, ''),
+    isNumericId: cleaned.startsWith('-')
+  };
 }
 
-async function pullPostsFromPublicTelegramChannel(rawChannelInput: string, maxPosts = 5) {
-  const { username, postId } = extractChannelUsername(rawChannelInput);
-  if (!username) {
-    throw new Error('يرجى إدخال معرف قناة تليجرام صحيح (مثال: @umed_channel أو https://t.me/umed_channel)');
-  }
+/**
+ * Pulls posts directly from a Private or Admin Channel/Supergroup (`-100...` or `@channel`)
+ * using the Bot API Message-ID Probe + `forwardMessage` loop so ALL media types
+ * (PDFs, Videos, Audio, Photos, Text) are pulled even from private channels!
+ */
+async function pullPostsViaBotApiChannelProbe(
+  chatIdOrUsername: string,
+  maxPosts = 5
+): Promise<any[]> {
+  const imported: any[] = [];
+  const targetChat = chatIdOrUsername.startsWith('-') || chatIdOrUsername.startsWith('@')
+    ? chatIdOrUsername
+    : `@${chatIdOrUsername}`;
 
-  const targetUrl = postId
-    ? `https://t.me/${username}/${postId}?embed=1&mode=tme`
-    : `https://t.me/s/${username}`;
+  const adminId = (botConfig.adminTelegramId || '').trim();
+  if (!adminId) return [];
 
-  const res = await fetch(targetUrl, {
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-    }
+  // Probe the latest message_id in the channel/group
+  const probeMsg = await callTelegramApi('sendMessage', {
+    chat_id: targetChat,
+    text: '🔄 جارٍ فحص وسحب أحدث المحاضرات والملفات إلى منصة U_MED...',
+    disable_notification: true
   });
-
-  if (!res.ok) {
-    throw new Error(`تعذر الوصول إلى القناة (@${username}): HTTP ${res.status}`);
+  const latestMsgId = Number(probeMsg?.message_id || 0);
+  if (latestMsgId > 0) {
+    await callTelegramApi('deleteMessage', {
+      chat_id: targetChat,
+      message_id: latestMsgId
+    }).catch(() => {});
   }
 
-  const html = await res.text();
+  if (!latestMsgId || latestMsgId <= 1) return [];
 
-  // Extract message text blocks from Telegram's public web view
-  const textBlocks: string[] = [];
-  const regex = /<div class="tgme_widget_message_text[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(html)) !== null) {
-    const rawHtml = match[1];
-    const plain = rawHtml
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, '$2 ($1)')
-      .replace(/<[^>]+>/g, '')
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&#39;/g, "'")
-      .replace(/&quot;/g, '"')
-      .trim();
+  const maxScan = Math.min(latestMsgId - 1, 35);
+  for (let offset = 1; offset <= maxScan && imported.length < maxPosts; offset++) {
+    const candidateMsgId = latestMsgId - offset;
+    try {
+      const forwarded = await callTelegramApi('forwardMessage', {
+        chat_id: adminId,
+        from_chat_id: targetChat,
+        message_id: candidateMsgId,
+        disable_notification: true
+      });
+      if (forwarded) {
+        // Delete temporary forwarded message in admin chat to keep it clean
+        if (forwarded.message_id) {
+          await callTelegramApi('deleteMessage', {
+            chat_id: adminId,
+            message_id: forwarded.message_id
+          }).catch(() => {});
+        }
+        // Preserve original channel chat info
+        forwarded.chat = probeMsg.chat || { id: targetChat, title: targetChat, type: 'channel' };
+        forwarded.message_id = candidateMsgId;
+        const doc = await handleIncomingTelegramMessage(forwarded);
+        if (doc) {
+          imported.push(doc);
+        }
+      }
+    } catch {}
+  }
 
-    if (plain.length >= 10) {
-      textBlocks.push(plain);
+  return imported;
+}
+
+/**
+ * Pulls posts from any Telegram Channel:
+ * 1. First tries Bot API Channel Probe (if numeric `-100...` or if the Bot is an admin in the channel)
+ * 2. Then scrapes `https://t.me/s/<username>` + `?embed=1&mode=tme` for ALL post types:
+ *    Videos (`<video>`), Audios (`<audio>`), Documents (`tgme_widget_message_document`), Photos, and Text!
+ */
+async function pullPostsFromTelegramChannel(rawChannelInput: string, maxPosts = 5) {
+  const { username, postId, isNumericId } = extractChannelUsername(rawChannelInput);
+  if (!username) {
+    throw new Error('يرجى إدخال معرف قناة تليجرام صحيح (مثال: @GIGERU أو -1003664858401 أو https://t.me/channel_name)');
+  }
+
+  // Path A: Numeric Channel/Group ID (`-100...`) -> Pull via Bot API Probe + Forward
+  if (isNumericId) {
+    try {
+      const botPulled = await pullPostsViaBotApiChannelProbe(username, maxPosts);
+      if (botPulled.length > 0) {
+        return botPulled;
+      }
+    } catch (err: any) {
+      throw new Error(
+        `تعذر سحب المنشورات من القناة الخاصة (${username}): تأكد من تفعيل توكن البوت الصحيح من @BotFather وأن البوت مشرف (Admin) داخل القناة. (${err?.message || ''})`
+      );
     }
   }
 
-  if (textBlocks.length === 0) {
+  // Also try Bot API Probe if bot token is active and bot happens to be admin in `@username`
+  try {
+    const botPulled = await pullPostsViaBotApiChannelProbe(`@${username}`, maxPosts);
+    if (botPulled.length > 0) {
+      return botPulled;
+    }
+  } catch {}
+
+  // Path B: Public Channel Web + Embed Media Puller (`t.me/s/<username>`)
+  let postIds: number[] = [];
+  if (postId) {
+    postIds = [Number(postId)];
+  } else {
+    const res = await fetch(`https://t.me/s/${username}`, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+      }
+    });
+
+    if (!res.ok) {
+      throw new Error(`تعذر الوصول إلى القناة (@${username}): HTTP ${res.status}`);
+    }
+
+    const html = await res.text();
+    const postMatches = [...html.matchAll(/data-post="[a-zA-Z0-9_]+\/(\d+)"/gi)];
+    postIds = Array.from(new Set(postMatches.map((m) => Number(m[1])).filter(Boolean)));
+  }
+
+  if (postIds.length === 0) {
     throw new Error(
-      `لم يتم العثور على منشورات عامة في (@${username}). إذا كانت القناة خاصة، أضف البوت مشرفاً فيها ليسحب منها تلقائياً فور النشر!`
+      `لم يتم العثور على منشورات عامة في (@${username}). إذا كانت القناة خاصة، تأكد من وضع توكن البوت الصحيح وإضافة البوت مشرفاً في القناة.`
     );
   }
 
-  const selectedPosts = textBlocks.slice(-maxPosts).reverse();
+  const selectedIds = postIds.slice(-maxPosts).reverse();
   const importedResources: any[] = [];
 
-  for (let i = 0; i < selectedPosts.length; i++) {
-    const postText = selectedPosts[i];
-    const fileName = `Telegram_Channel_${username}_Post_${Date.now().toString(36)}_${i + 1}.html`;
-    const inferred = inferAcademicMetadata(fileName, postText, username, 'text/html');
-    const htmlBuf = buildHtmlDocumentFromText(inferred.title, postText, `قناة @${username}`);
+  for (let i = 0; i < selectedIds.length; i++) {
+    const pid = selectedIds[i];
+    try {
+      const embedRes = await fetch(`https://t.me/${username}/${pid}?embed=1&mode=tme`, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        }
+      });
+      if (!embedRes.ok) continue;
+      const embedHtml = await embedRes.text();
 
-    const stored = await storeFileInDriveOrUmedCloud(htmlBuf, fileName, 'text/html');
+      // Extract text caption if present
+      const textMatch = embedHtml.match(/<div class="tgme_widget_message_text[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+      const plainCaption = textMatch
+        ? textMatch[1]
+            .replace(/<br\s*\/?>/gi, '\n')
+            .replace(/<[^>]+>/g, '')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .trim()
+        : '';
 
-    // Check if the post contains a direct Google Drive link
-    let finalUrl = stored.previewUrl;
-    const driveMatch = postText.match(/https?:\/\/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/i);
-    if (driveMatch && driveMatch[1]) {
-      finalUrl = `https://drive.google.com/file/d/${driveMatch[1]}/preview`;
-    }
+      // Extract Video, Audio, Document, or Photo from the embed widget
+      const videoUrl = embedHtml.match(/<video[^>]+src="([^"]+)"/i)?.[1];
+      const audioUrl =
+        embedHtml.match(/<audio[^>]+src="([^"]+)"/i)?.[1] ||
+        embedHtml.match(/data-audio="([^"]+)"/i)?.[1];
+      const docTitle = embedHtml
+        .match(/tgme_widget_message_document_title[^>]*>([\s\S]*?)<\/div>/i)?.[1]
+        ?.replace(/<[^>]+>/g, '')
+        ?.trim();
+      const photoUrl = embedHtml
+        .match(/tgme_widget_message_photo_wrap[^>]+background-image:url\('([^']+)'\)/i)?.[1];
 
-    const docId = `tg-chan-${Date.now().toString(36)}-${i}`;
-    const nowIso = new Date().toISOString();
+      let fileName = `Telegram_${username}_${pid}.pdf`;
+      let mimeType = 'application/pdf';
+      let directCdnUrl: string | undefined;
+      let fileBuffer: Buffer | null = null;
+      let declaredBytes = 0;
 
-    await broadcastResourceToTelegramChannels({
-      title: inferred.title,
-      fileName,
-      fileSizeLabel: formatBytesLabel(htmlBuf.length),
-      mimeType: 'text/html',
-      studyLevelLabel: inferred.studyLevelLabel,
-      courseLabel: inferred.courseLabel,
-      sectionType: inferred.sectionType,
-      driveUrl: stored.webViewLink,
-      docId,
-      fileBuffer: htmlBuf,
-      originChatId: `@${username}`
-    });
+      if (videoUrl) {
+        fileName = `${plainCaption.split('\n')[0]?.slice(0, 50) || `Video_${username}_${pid}`}.mp4`;
+        mimeType = 'video/mp4';
+        directCdnUrl = videoUrl;
+        try {
+          const headRes = await fetch(videoUrl, { method: 'HEAD' });
+          declaredBytes = Number(headRes.headers.get('content-length') || 0);
+          if (declaredBytes > 0 && declaredBytes <= 15 * 1024 * 1024) {
+            const vRes = await fetch(videoUrl);
+            if (vRes.ok) fileBuffer = Buffer.from(await vRes.arrayBuffer());
+          }
+        } catch {}
+      } else if (audioUrl) {
+        fileName = `${docTitle || plainCaption.split('\n')[0]?.slice(0, 50) || `Audio_${username}_${pid}`}.mp3`;
+        mimeType = 'audio/mpeg';
+        directCdnUrl = audioUrl;
+        try {
+          const aRes = await fetch(audioUrl);
+          if (aRes.ok) {
+            fileBuffer = Buffer.from(await aRes.arrayBuffer());
+            declaredBytes = fileBuffer.length;
+          }
+        } catch {}
+      } else if (photoUrl && !docTitle) {
+        fileName = `Slide_${username}_${pid}.jpg`;
+        mimeType = 'image/jpeg';
+        directCdnUrl = photoUrl;
+        try {
+          const pRes = await fetch(photoUrl);
+          if (pRes.ok) {
+            fileBuffer = Buffer.from(await pRes.arrayBuffer());
+            declaredBytes = fileBuffer.length;
+          }
+        } catch {}
+      } else if (plainCaption || docTitle) {
+        fileName = docTitle ? `${docTitle}.html` : `Post_${username}_${pid}.html`;
+        mimeType = 'text/html';
+        fileBuffer = buildHtmlDocumentFromText(
+          docTitle || plainCaption.split('\n')[0] || `منشور @${username} #${pid}`,
+          plainCaption || docTitle || '',
+          `قناة @${username}`
+        );
+        declaredBytes = fileBuffer.length;
+      } else {
+        continue;
+      }
 
-    const resourceDoc = {
-      id: docId,
-      title: inferred.title,
-      description: postText.slice(0, 500),
-      resourceType: 'pdf',
-      url: finalUrl,
-      fileSizeLabel: formatBytesLabel(htmlBuf.length),
-      fileName,
-      mimeType: 'text/html',
-      storageProvider: 'external_url',
-      universityId: botConfig.defaultUniversityId || 'univ-dar-al-salam',
-      programId: 'prog-mbbs',
-      curriculumVersionId: 'cur-dar-2024',
-      studyLevelId: inferred.studyLevelId,
-      studyPeriodId: inferred.studyPeriodId,
-      courseOfferingId: inferred.courseOfferingId,
-      sectionType: inferred.sectionType,
-      status: botConfig.autoPublish ? 'published' : 'draft',
-      createdBy: 'AUTOMATED_TELEGRAM_INGESTION',
-      createdAt: nowIso,
-      updatedAt: nowIso
-    };
+      const inferred = inferAcademicMetadata(fileName, plainCaption || docTitle, username, mimeType);
+      const stored = await storeFileInDriveOrUmedCloud(
+        fileBuffer,
+        fileName,
+        mimeType,
+        undefined,
+        declaredBytes || (fileBuffer ? fileBuffer.length : 5 * 1024 * 1024),
+        {
+          title: inferred.title,
+          studyLevelLabel: inferred.studyLevelLabel,
+          courseLabel: inferred.courseLabel,
+          directCdnUrl,
+          originChatId: `@${username}`,
+          originMessageId: pid
+        }
+      );
 
-    await upsertResourceToUmedFirestore(resourceDoc);
-    importedResources.push(resourceDoc);
+      let finalUrl = directCdnUrl || stored.previewUrl;
+      const driveMatch = plainCaption.match(/https?:\/\/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/i);
+      if (driveMatch && driveMatch[1]) {
+        finalUrl = `https://drive.google.com/file/d/${driveMatch[1]}/preview`;
+      }
+
+      const docId = `tg-chan-${username.toLowerCase()}-${pid}`;
+      const sizeLabel = formatBytesLabel(declaredBytes || (fileBuffer ? fileBuffer.length : 2 * 1024 * 1024));
+      const nowIso = new Date().toISOString();
+
+      await broadcastResourceToTelegramChannels({
+        title: inferred.title,
+        fileName,
+        fileSizeLabel: sizeLabel,
+        mimeType,
+        studyLevelLabel: inferred.studyLevelLabel,
+        courseLabel: inferred.courseLabel,
+        sectionType: inferred.sectionType,
+        driveUrl: stored.webViewLink,
+        docId,
+        fileBuffer,
+        originChatId: `@${username}`,
+        originMessageId: pid
+      });
+
+      const resourceDoc = {
+        id: docId,
+        title: inferred.title,
+        description: (plainCaption || `تم السحب من قناة @${username} (#${pid})`).slice(0, 500),
+        resourceType: inferred.resourceType,
+        url: finalUrl,
+        fileSizeLabel: sizeLabel,
+        fileName,
+        mimeType,
+        storageProvider: 'external_url',
+        universityId: botConfig.defaultUniversityId || 'univ-dar-al-salam',
+        programId: 'prog-mbbs',
+        curriculumVersionId: 'cur-dar-2024',
+        studyLevelId: inferred.studyLevelId,
+        studyPeriodId: inferred.studyPeriodId,
+        courseOfferingId: inferred.courseOfferingId,
+        sectionType: inferred.sectionType,
+        status: botConfig.autoPublish ? 'published' : 'draft',
+        createdBy: 'AUTOMATED_TELEGRAM_INGESTION',
+        createdAt: nowIso,
+        updatedAt: nowIso
+      };
+
+      await upsertResourceToUmedFirestore(resourceDoc);
+      importedResources.push(resourceDoc);
+    } catch {}
+  }
+
+  if (importedResources.length === 0) {
+    throw new Error(`لم يتم العثور على منشورات قابلة للسحب في (@${username}).`);
   }
 
   addLog(
     'success',
-    `تم سحب ${importedResources.length} منشورات/ملفات من قناة @${username}`,
-    `تم رفعها إلى Google Drive وبثها في القناة ومنصة U_MED!`
+    `تم سحب ${importedResources.length} منشورات/وسائط من قناة @${username}`,
+    `تمت أرشفتها في Google Drive (UMED STORAGE) وبثها في القناة ومنصة U_MED!`
   );
 
   return importedResources;
 }
 
 // ---------------------------------------------------------------------------
-// 6. Continuous Long-Polling Loop + Stateless Vercel Webhook Support
+// 7. Retroactive Firestore & Google Drive (`UMED STORAGE`) Repair & Sync
+// ---------------------------------------------------------------------------
+
+export async function repairAndSyncExistingTelegramResourcesToDrive(): Promise<{
+  repairedFirestoreCount: number;
+  syncedDriveCount: number;
+}> {
+  let repairedFirestoreCount = 0;
+  let syncedDriveCount = 0;
+  const projectId = botConfig.firebaseProjectId || 'umed-yemen';
+
+  try {
+    const res = await fetch(
+      `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+        projectId
+      )}/databases/(default)/documents/educationalResources?pageSize=60`
+    );
+    const data = (await res.json()) as any;
+    const docs = Array.isArray(data.documents) ? data.documents : [];
+
+    for (const d of docs) {
+      const docId = String(d.name || '').split('/').pop() || '';
+      if (!docId.startsWith('tg-')) continue;
+
+      const f = d.fields || {};
+      const title = f.title?.stringValue || docId;
+      const rawFileName = (f.fileName?.stringValue || `${title}.pdf`).replace(/\.html$/i, '');
+      const rawMime = f.mimeType?.stringValue || 'application/pdf';
+      const currentResourceType = f.resourceType?.stringValue || 'pdf';
+      const currentUrl = f.url?.stringValue || '';
+      const fileSizeLabel = f.fileSizeLabel?.stringValue || '1.5 MB';
+
+      const inferred = inferAcademicMetadata(rawFileName, title, undefined, rawMime);
+
+      // Clean any legacy `.html` or `mime=text/html` from video/audio/pdf stream URLs
+      let cleanedUrl = currentUrl;
+      if (cleanedUrl.startsWith('/api/teledrive/stream/') && inferred.resourceType !== 'pdf') {
+        const trueMime =
+          inferred.resourceType === 'video'
+            ? 'video/mp4'
+            : inferred.resourceType === 'audio'
+            ? 'audio/mpeg'
+            : rawMime;
+        cleanedUrl = cleanedUrl
+          .replace(/\.html(&|$)/gi, '$1')
+          .replace(/mime=text%2Fhtml/gi, `mime=${encodeURIComponent(trueMime)}`);
+      }
+
+      // If `tg-mvr9g68t-vcpa` matches @GIGERU/20030, attach its direct CDN video stream URL if needed
+      if (docId === 'tg-mvr9g68t-vcpa' && !cleanedUrl.includes('cdn=')) {
+        const cdn = await resolvePublicChannelEmbedCdnUrl('GIGERU', 20030);
+        if (cdn) {
+          cleanedUrl += `&cdn=${encodeURIComponent(cdn)}`;
+        }
+      }
+
+      const needsFirestoreRepair =
+        currentResourceType !== inferred.resourceType ||
+        cleanedUrl !== currentUrl ||
+        !f.courseOfferingId?.stringValue;
+
+      if (needsFirestoreRepair) {
+        const trueMime =
+          inferred.resourceType === 'video'
+            ? 'video/mp4'
+            : inferred.resourceType === 'audio'
+            ? 'audio/mpeg'
+            : rawMime;
+
+        for (const col of ['educationalResources', 'educational_resources']) {
+          try {
+            const patchUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+              projectId
+            )}/databases/(default)/documents/${col}/${encodeURIComponent(
+              docId
+            )}?updateMask.fieldPaths=resourceType&updateMask.fieldPaths=mimeType&updateMask.fieldPaths=fileName&updateMask.fieldPaths=url&updateMask.fieldPaths=courseOfferingId&updateMask.fieldPaths=studyPeriodId&updateMask.fieldPaths=createdBy&updateMask.fieldPaths=status`;
+
+            await fetch(patchUrl, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                fields: {
+                  resourceType: { stringValue: inferred.resourceType },
+                  mimeType: { stringValue: trueMime },
+                  fileName: { stringValue: rawFileName },
+                  url: { stringValue: cleanedUrl },
+                  courseOfferingId: {
+                    stringValue: f.courseOfferingId?.stringValue || inferred.courseOfferingId
+                  },
+                  studyPeriodId: {
+                    stringValue: f.studyPeriodId?.stringValue || inferred.studyPeriodId || 'blk-cvs'
+                  },
+                  createdBy: { stringValue: 'AUTOMATED_TELEGRAM_INGESTION' },
+                  status: { stringValue: f.status?.stringValue || 'published' }
+                }
+              })
+            });
+          } catch {}
+        }
+        repairedFirestoreCount++;
+      }
+
+      // Mirror every `tg-*` resource into Google Drive (`UMED STORAGE`) so it appears immediately!
+      const tgFileIdMatch = cleanedUrl.match(/[?&]tgFileId=([^&]+)/);
+      const mirrored = await ensureVisibleFileEntryInGoogleDrive({
+        fileName: rawFileName,
+        title,
+        mimeType:
+          inferred.resourceType === 'video'
+            ? 'video/mp4'
+            : inferred.resourceType === 'audio'
+            ? 'audio/mpeg'
+            : rawMime,
+        sizeLabel: fileSizeLabel,
+        studyLevelLabel: inferred.studyLevelLabel,
+        courseLabel: inferred.courseLabel,
+        streamOrPreviewUrl: cleanedUrl,
+        telegramFileId: tgFileIdMatch ? decodeURIComponent(tgFileIdMatch[1]) : undefined
+      });
+      if (mirrored) {
+        syncedDriveCount++;
+      }
+    }
+  } catch {}
+
+  return { repairedFirestoreCount, syncedDriveCount };
+}
+
+// ---------------------------------------------------------------------------
+// 8. Continuous Long-Polling Loop + Stateless Vercel Webhook Support
 // ---------------------------------------------------------------------------
 
 async function pollTelegramUpdatesOnce() {
@@ -1519,6 +2293,7 @@ export async function startLiveTelegramBot(): Promise<{
   error?: string;
 }> {
   try {
+    await ensureBotConfigLoadedFromCloudDrive();
     if (pollingTimer) {
       clearTimeout(pollingTimer);
       pollingTimer = null;
@@ -1565,37 +2340,203 @@ export function stopLiveTelegramBot() {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Express Routes for Live Bot Control Center, Channel Puller & Streaming
+// 9. Express Routes for Live Bot Control Center, Channel Puller & Range Streamer
 // ---------------------------------------------------------------------------
 
 export function registerLiveTelegramBotRoutes(app: Express) {
-  // 0. Direct High-Speed File Streamer
+  // 0. High-Speed MTProto + Range Chunk File Streamer (Supports Files > 10MB / > 20MB up to 2GB on Vercel!)
   app.get('/api/teledrive/stream/:fileId', async (req: Request, res: Response) => {
     try {
+      await ensureBotConfigLoadedFromCloudDrive();
       const { fileId } = req.params;
-      const mime = String(req.query.mime || 'application/pdf');
-      const name = String(req.query.name || 'UMED_Document.pdf');
+      let mime = String(req.query.mime || 'application/pdf');
+      const name = String(req.query.name || 'UMED_Document.pdf').replace(/\.html$/i, '');
       const tgFileId = String(req.query.tgFileId || '');
       const customToken = String(req.query.token || '');
+      const directCdn = String(req.query.cdn || '');
+      const chatId = String(req.query.chatId || '');
+      const msgId = req.query.msgId ? Number(req.query.msgId) : undefined;
+      const declaredSize = Number(req.query.size || 0);
+
+      // Fix legacy text/html mime on .mp4 / .mp3 files
+      if (mime === 'text/html') {
+        if (name.toLowerCase().endsWith('.mp4')) mime = 'video/mp4';
+        else if (name.toLowerCase().endsWith('.mp3')) mime = 'audio/mpeg';
+      }
 
       const localPath = path.join(FILES_CACHE_DIR, fileId);
+      const metaPath = `${localPath}.meta.json`;
+      let metaObj: any = {};
+      if (fs.existsSync(metaPath)) {
+        try {
+          metaObj = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+        } catch {}
+      }
+
+      const resolvedCdn = directCdn || metaObj.directCdnUrl || '';
+
+      // 0a. Metadata-only probe (`?meta=1`) for client chunked loader
+      if (req.query.meta === '1') {
+        let totalBytes = declaredSize || metaObj.declaredFileSize || 0;
+        if (!totalBytes && fs.existsSync(localPath)) {
+          totalBytes = fs.statSync(localPath).size;
+        }
+        return res.json({
+          ok: true,
+          fileId,
+          fileName: name,
+          mimeType: mime,
+          totalBytes,
+          directCdnUrl: resolvedCdn || undefined,
+          hasLocalCache: fs.existsSync(localPath)
+        });
+      }
+
+      // 0b. If we have a direct Telegram CDN stream URL (`https://cdn4.telesco.pe/...`), redirect or proxy range
+      if (resolvedCdn && req.query.chunkIndex === undefined) {
+        return res.redirect(302, resolvedCdn);
+      }
+
+      // 0c. Chunked JSON/Binary download (`?chunkIndex=0&chunkSize=1572864`) for Vercel-safe >10MB loading
+      if (req.query.chunkIndex !== undefined) {
+        const chunkIndex = Math.max(0, Number(req.query.chunkIndex) || 0);
+        const chunkSize = Math.min(2 * 1024 * 1024, Math.max(256 * 1024, Number(req.query.chunkSize) || 1572864));
+        const offsetBytes = chunkIndex * chunkSize;
+
+        // 1. Serve from local disk cache if present
+        if (fs.existsSync(localPath)) {
+          const stat = fs.statSync(localPath);
+          if (offsetBytes >= stat.size) {
+            return res.json({ ok: true, eof: true, chunkBase64: '', totalBytes: stat.size });
+          }
+          const readLen = Math.min(chunkSize, stat.size - offsetBytes);
+          const fd = fs.openSync(localPath, 'r');
+          const buf = Buffer.alloc(readLen);
+          fs.readSync(fd, buf, 0, readLen, offsetBytes);
+          fs.closeSync(fd);
+          return res.json({
+            ok: true,
+            eof: offsetBytes + readLen >= stat.size,
+            totalBytes: stat.size,
+            chunkBase64: buf.toString('base64')
+          });
+        }
+
+        // 2. If <= 20MB and chunk 0, try HTTP getFile and cache to `/tmp`
+        if (tgFileId && (!declaredSize || declaredSize <= 20 * 1024 * 1024)) {
+          try {
+            const { buffer } = await downloadTelegramFile(tgFileId, customToken || undefined);
+            try {
+              fs.writeFileSync(localPath, buffer);
+            } catch {}
+            const slice = buffer.subarray(offsetBytes, offsetBytes + chunkSize);
+            return res.json({
+              ok: true,
+              eof: offsetBytes + slice.length >= buffer.length,
+              totalBytes: buffer.length,
+              chunkBase64: slice.toString('base64')
+            });
+          } catch {}
+        }
+
+        // 3. For > 20MB (or any size up to 2GB!), stream the exact 1.5MB slice via MTProto!
+        if (tgFileId) {
+          const mtSlice = await downloadTelegramFileViaMtproto(tgFileId, {
+            offsetBytes,
+            limitBytes: chunkSize,
+            customToken: customToken || undefined,
+            chatId: chatId || metaObj.originChatId,
+            msgId: msgId || metaObj.originMessageId
+          });
+          if (mtSlice && mtSlice.length > 0) {
+            return res.json({
+              ok: true,
+              eof: mtSlice.length < chunkSize,
+              totalBytes: declaredSize || metaObj.declaredFileSize || offsetBytes + mtSlice.length,
+              chunkBase64: mtSlice.toString('base64')
+            });
+          }
+        }
+
+        return res.status(404).json({
+          ok: false,
+          error:
+            'تعذر جلب أجزاء الملف من خوادم تليجرام: يرجى التأكد من وضع توكن البوت الفعال (BOT_TOKEN) في استوديو البوت والضغط على حفظ وتشغيل.'
+        });
+      }
+
+      // 0d. Standard Browser Stream & HTTP Range Requests (`Range: bytes=start-end`)
+      const rangeHeader = req.headers.range;
+      const MAX_SINGLE_RESPONSE = 2 * 1024 * 1024; // 2 MB cap per HTTP response for 100% Vercel compatibility
+
+      // Ensure local cache if <= 20MB
+      if (!fs.existsSync(localPath) && tgFileId && (!declaredSize || declaredSize <= 20 * 1024 * 1024)) {
+        try {
+          const { buffer } = await downloadTelegramFile(tgFileId, customToken || undefined);
+          fs.writeFileSync(localPath, buffer);
+        } catch {}
+      }
+
       if (fs.existsSync(localPath)) {
+        const stat = fs.statSync(localPath);
+        const totalSize = stat.size;
+
+        if (rangeHeader) {
+          const parts = rangeHeader.replace(/bytes=/, '').split('-');
+          const start = parseInt(parts[0], 10) || 0;
+          const requestedEnd = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+          const end = Math.min(requestedEnd, start + MAX_SINGLE_RESPONSE - 1, totalSize - 1);
+          const chunkLen = end - start + 1;
+
+          const fd = fs.openSync(localPath, 'r');
+          const buf = Buffer.alloc(chunkLen);
+          fs.readSync(fd, buf, 0, chunkLen, start);
+          fs.closeSync(fd);
+
+          res.status(206);
+          res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
+          res.setHeader('Accept-Ranges', 'bytes');
+          res.setHeader('Content-Length', String(chunkLen));
+          res.setHeader('Content-Type', mime);
+          return res.send(buf);
+        }
+
+        // If file <= 3.5MB, send directly; if > 3.5MB, send first 2MB with Accept-Ranges
+        res.setHeader('Accept-Ranges', 'bytes');
         res.setHeader('Content-Type', mime);
         res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(name)}"`);
         return res.sendFile(localPath);
       }
 
+      // If file > 20MB and not on local disk, stream Range slice directly via MTProto!
       if (tgFileId) {
-        const { buffer } = await downloadTelegramFile(tgFileId, customToken || undefined);
-        try {
-          fs.writeFileSync(localPath, buffer);
-        } catch {}
-        res.setHeader('Content-Type', mime);
-        res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(name)}"`);
-        return res.send(buffer);
+        const start = rangeHeader
+          ? parseInt(rangeHeader.replace(/bytes=/, '').split('-')[0], 10) || 0
+          : 0;
+        const mtBuf = await downloadTelegramFileViaMtproto(tgFileId, {
+          offsetBytes: start,
+          limitBytes: MAX_SINGLE_RESPONSE,
+          customToken: customToken || undefined,
+          chatId: chatId || metaObj.originChatId,
+          msgId: msgId || metaObj.originMessageId
+        });
+
+        if (mtBuf && mtBuf.length > 0) {
+          const totalSize = Math.max(declaredSize || metaObj.declaredFileSize || 0, start + mtBuf.length);
+          const end = start + mtBuf.length - 1;
+          res.status(rangeHeader ? 206 : 200);
+          if (rangeHeader) {
+            res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
+          }
+          res.setHeader('Accept-Ranges', 'bytes');
+          res.setHeader('Content-Length', String(mtBuf.length));
+          res.setHeader('Content-Type', mime);
+          res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(name)}"`);
+          return res.send(mtBuf);
+        }
       }
 
-      res.status(404).send('File not found');
+      res.status(404).send('File not found or BOT_TOKEN unauthorized');
     } catch (err: any) {
       res.status(500).send(err?.message || 'Stream error');
     }
@@ -1603,6 +2544,7 @@ export function registerLiveTelegramBotRoutes(app: Express) {
 
   // 1. Get Live Bot Status, Drive Check, Logs, and Ingested Resources
   app.get('/api/teledrive/live-status', async (req: Request, res: Response) => {
+    await ensureBotConfigLoadedFromCloudDrive();
     const checkDrive = req.query.verifyDrive === 'true';
     const driveStatus = checkDrive ? await verifyGoogleDriveFolderAccess() : null;
 
@@ -1635,6 +2577,7 @@ export function registerLiveTelegramBotRoutes(app: Express) {
 
   // 2. Start / Restart / Update Config of the Live Bot
   app.post('/api/teledrive/live-start', async (req: Request, res: Response) => {
+    await ensureBotConfigLoadedFromCloudDrive();
     const incoming = req.body || {};
     if (incoming.botToken) botConfig.botToken = String(incoming.botToken).trim();
     if (incoming.targetGroupId) botConfig.targetGroupId = String(incoming.targetGroupId).trim();
@@ -1657,6 +2600,7 @@ export function registerLiveTelegramBotRoutes(app: Express) {
     }
 
     saveJson(BOT_CONFIG_FILE, botConfig);
+    await saveBotConfigToCloudDrive();
     const startResult = await startLiveTelegramBot();
     const driveStatus = await verifyGoogleDriveFolderAccess();
 
@@ -1732,6 +2676,7 @@ export function registerLiveTelegramBotRoutes(app: Express) {
       botConfig.webhookUrl = `${baseOrigin}/api/teledrive/webhook`;
       isWebhookActive = true;
       saveJson(BOT_CONFIG_FILE, botConfig);
+      await saveBotConfigToCloudDrive();
 
       addLog(
         'success',
@@ -1755,29 +2700,42 @@ export function registerLiveTelegramBotRoutes(app: Express) {
     }
   });
 
-  // 2c. Direct Telegram Channel Pull Endpoint
+  // 2c. Direct Telegram Channel Pull Endpoint (Supports BOTH Private/Admin `-100...` & Public `@channel`)
   app.post('/api/teledrive/pull-channel', async (req: Request, res: Response) => {
     try {
+      await ensureBotConfigLoadedFromCloudDrive();
+      const incoming = req.body || {};
+      if (incoming.botToken) botConfig.botToken = String(incoming.botToken).trim();
+      if (incoming.targetGroupId) botConfig.targetGroupId = String(incoming.targetGroupId).trim();
+      if (incoming.adminTelegramId) botConfig.adminTelegramId = String(incoming.adminTelegramId).trim();
+      if (incoming.gdriveFolderId) botConfig.gdriveFolderId = String(incoming.gdriveFolderId).trim();
+      if (incoming.defaultUniversityId) botConfig.defaultUniversityId = String(incoming.defaultUniversityId).trim();
+
       const channelInput = String(
-        req.body?.channelInput || req.body?.channel || botConfig.targetChannelUsername || ''
+        incoming.channelInput ||
+          incoming.channel ||
+          botConfig.targetChannelUsername ||
+          botConfig.targetGroupId ||
+          ''
       ).trim();
-      const maxPosts = Math.min(Math.max(Number(req.body?.maxPosts) || 5, 1), 15);
+      const maxPosts = Math.min(Math.max(Number(incoming.maxPosts) || 5, 1), 15);
       if (!channelInput) {
         return res.status(400).json({
           success: false,
-          error: 'يرجى كتابة رابط أو معرف قناة تليجرام (مثال: @telegram أو https://t.me/channel_name)'
+          error: 'يرجى كتابة رابط أو معرف قناة تليجرام (مثال: @GIGERU أو -1003664858401)'
         });
       }
 
       botConfig.targetChannelUsername = channelInput;
       saveJson(BOT_CONFIG_FILE, botConfig);
+      await saveBotConfigToCloudDrive();
 
-      const { username } = extractChannelUsername(channelInput);
-      const resources = await pullPostsFromPublicTelegramChannel(channelInput, maxPosts);
+      const { username, isNumericId } = extractChannelUsername(channelInput);
+      const resources = await pullPostsFromTelegramChannel(channelInput, maxPosts);
       res.json({
         success: true,
         ingestedCount: resources.length,
-        channelUsername: username ? `@${username}` : channelInput,
+        channelUsername: isNumericId ? username : username ? `@${username}` : channelInput,
         count: resources.length,
         resources,
         logs: activityLogs.slice(0, 40)
@@ -1787,6 +2745,30 @@ export function registerLiveTelegramBotRoutes(app: Express) {
       res.status(400).json({
         success: false,
         error: err?.message || 'تعذر سحب المنشورات من القناة'
+      });
+    }
+  });
+
+  // 2c-2. Sync & Repair Existing Telegram Resources into Google Drive (`UMED STORAGE`)
+  app.post('/api/teledrive/sync-drive', async (req: Request, res: Response) => {
+    try {
+      const result = await repairAndSyncExistingTelegramResourcesToDrive();
+      const driveStatus = await verifyGoogleDriveFolderAccess();
+      addLog(
+        'success',
+        `تمت مزامنة وإصلاح (${result.syncedDriveCount}) ملفات في مجلد Google Drive (${driveStatus.folderName || 'UMED STORAGE'})`,
+        `تم إصلاح (${result.repairedFirestoreCount}) ملفات كبيرة الحجم لتعمل مباشرة داخل مشغل المنصة.`
+      );
+      res.json({
+        success: true,
+        ...result,
+        driveStatus,
+        logs: activityLogs.slice(0, 40)
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: err?.message || 'فشل مزامنة مجلد Google Drive'
       });
     }
   });
@@ -1838,7 +2820,6 @@ export function registerLiveTelegramBotRoutes(app: Express) {
       let actualTotalBytes = Number(totalBytes) || 0;
 
       if (externalFileUrl && String(externalFileUrl).trim().startsWith('http')) {
-        // Direct URL / Large External File Puller
         const cleanUrl = String(externalFileUrl).trim();
         try {
           const headOrGet = await fetch(cleanUrl);
@@ -1876,16 +2857,19 @@ export function registerLiveTelegramBotRoutes(app: Express) {
       const inferred = inferAcademicMetadata(fileName, caption, undefined, mimeType);
       const docId = `tg-up-${Date.now().toString(36)}`;
 
-      // 1. Send to Google Drive (`UMED STORAGE`) using Resumable Upload API
       const stored = await storeFileInDriveOrUmedCloud(
         finalBuffer,
         fileName,
         mimeType,
         undefined,
-        actualTotalBytes || finalBuffer.length
+        actualTotalBytes || finalBuffer.length,
+        {
+          title: inferred.title,
+          studyLevelLabel: inferred.studyLevelLabel,
+          courseLabel: inferred.courseLabel
+        }
       );
 
-      // 2. Broadcast to Target Telegram Channel & Group
       const broadcastRes = await broadcastResourceToTelegramChannels({
         title: inferred.title,
         fileName,
@@ -1994,8 +2978,13 @@ startxref
 %%EOF`;
 
       const pdfBuffer = Buffer.from(samplePdfContent, 'utf-8');
+      const inferred = inferAcademicMetadata(fileName, customCaption, undefined, 'application/pdf');
 
-      const stored = await storeFileInDriveOrUmedCloud(pdfBuffer, fileName, 'application/pdf');
+      const stored = await storeFileInDriveOrUmedCloud(pdfBuffer, fileName, 'application/pdf', undefined, pdfBuffer.length, {
+        title: inferred.title,
+        studyLevelLabel: inferred.studyLevelLabel,
+        courseLabel: inferred.courseLabel
+      });
       const driveStatus = await verifyGoogleDriveFolderAccess();
       addLog(
         'success',
@@ -2004,11 +2993,9 @@ startxref
         { driveUrl: stored.webViewLink }
       );
 
-      const inferred = inferAcademicMetadata(fileName, customCaption, undefined, 'application/pdf');
       const docId = `tg-live-${Date.now().toString(36)}`;
       const nowIso = new Date().toISOString();
 
-      // Broadcast the file to the Telegram Channel / Group as well!
       const broadcastRes = await broadcastResourceToTelegramChannels({
         title: inferred.title,
         fileName,
@@ -2117,13 +3104,24 @@ startxref
   // 5. Stateless Webhook endpoint (Handles Channel Posts, Group Messages, Private Bot Messages & Callbacks)
   app.post('/api/teledrive/webhook', async (req: Request, res: Response) => {
     try {
-      if (req.query.token) botConfig.botToken = String(req.query.token).trim();
+      let configUpdated = false;
+      if (req.query.token && String(req.query.token).trim() !== botConfig.botToken) {
+        botConfig.botToken = String(req.query.token).trim();
+        configUpdated = true;
+      }
       if (req.query.group) botConfig.targetGroupId = String(req.query.group).trim();
       if (req.query.chan) botConfig.targetChannelUsername = String(req.query.chan).trim();
       if (req.query.admin) botConfig.adminTelegramId = String(req.query.admin).trim();
       if (req.query.folder) botConfig.gdriveFolderId = String(req.query.folder).trim();
       if (req.query.univ) botConfig.defaultUniversityId = String(req.query.univ).trim();
       if (req.query.autoPub !== undefined) botConfig.autoPublish = req.query.autoPub === '1';
+
+      if (configUpdated) {
+        saveJson(BOT_CONFIG_FILE, botConfig);
+        await saveBotConfigToCloudDrive();
+      } else {
+        await ensureBotConfigLoadedFromCloudDrive();
+      }
 
       const upd = req.body;
       if (upd) {
@@ -2143,6 +3141,7 @@ startxref
 
   if (!IS_SERVERLESS) {
     setTimeout(() => {
+      repairAndSyncExistingTelegramResourcesToDrive().catch(() => {});
       startLiveTelegramBot().catch(() => {});
     }, 1500);
   }

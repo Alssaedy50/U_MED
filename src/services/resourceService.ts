@@ -294,7 +294,129 @@ export async function resolveResourceFileUrl(
     return { viewUrl: blobUrl, downloadUrl: blobUrl, isCloudFile: true };
   }
 
-  // Case 3: External URL (e.g. Google Drive link — auto-normalize /view to /preview for iframe embedding)
+  // Case 3: Built-in Telegram Live Bot Stream (`/api/teledrive/stream/...`)
+  if (rawUrl.startsWith('/api/teledrive/stream/')) {
+    const lowerFile = (resource.fileName || resource.title || '').toLowerCase();
+    const isVideoFile =
+      resource.resourceType === 'video' ||
+      lowerFile.endsWith('.mp4') ||
+      lowerFile.endsWith('.mkv') ||
+      lowerFile.endsWith('.webm') ||
+      (resource.mimeType || '').includes('video');
+    const isAudioFile =
+      resource.resourceType === 'audio' ||
+      lowerFile.endsWith('.mp3') ||
+      lowerFile.endsWith('.m4a') ||
+      lowerFile.endsWith('.ogg') ||
+      lowerFile.endsWith('.wav') ||
+      (resource.mimeType || '').includes('audio');
+
+    const trueMime = isVideoFile
+      ? 'video/mp4'
+      : isAudioFile
+      ? 'audio/mpeg'
+      : resource.mimeType && resource.mimeType !== 'text/html'
+      ? resource.mimeType
+      : 'application/pdf';
+
+    // Strip any legacy `.html` or `mime=text/html` from video/audio/pdf stream URLs
+    const cleanStreamUrl = rawUrl
+      .replace(/\.html(&|$)/gi, '$1')
+      .replace(/mime=text%2Fhtml/gi, `mime=${encodeURIComponent(trueMime)}`);
+
+    const cacheKey = `tgstream_${resource.id}`;
+    const cachedBlobDataUrl = await getFileFromIDB(cacheKey);
+    if (cachedBlobDataUrl) {
+      onProgress?.(100);
+      const blob = dataUrlToBlob(cachedBlobDataUrl);
+      const blobUrl = URL.createObjectURL(blob);
+      return { viewUrl: blobUrl, downloadUrl: blobUrl, isCloudFile: true };
+    }
+
+    onProgress?.(8);
+    try {
+      const sep = cleanStreamUrl.includes('?') ? '&' : '?';
+      const metaRes = await fetch(`${cleanStreamUrl}${sep}meta=1`);
+      if (metaRes.ok) {
+        const meta = await metaRes.json();
+        if (meta.directCdnUrl) {
+          onProgress?.(100);
+          return {
+            viewUrl: meta.directCdnUrl,
+            downloadUrl: meta.directCdnUrl,
+            isCloudFile: false
+          };
+        }
+      }
+
+      // Download in Vercel-safe 1.5 MB chunks with real-time progress bar (works for 10MB, 20.4MB, 55.9MB+)
+      const CHUNK_SIZE = 1572864; // 1.5 MB
+      const byteChunks: Uint8Array[] = [];
+      let chunkIdx = 0;
+      let totalExpected = 0;
+
+      while (chunkIdx < 160) {
+        const chunkRes = await fetch(
+          `${cleanStreamUrl}${sep}chunkIndex=${chunkIdx}&chunkSize=${CHUNK_SIZE}`
+        );
+        if (!chunkRes.ok) {
+          const errJson = await chunkRes.json().catch(() => ({}));
+          if (chunkIdx === 0) {
+            throw new Error(
+              errJson.error ||
+                'تعذر جلب الملف من خوادم تليجرام. تأكد من إدخال توكن البوت الفعال (BOT_TOKEN) في استوديو البوت والضغط على حفظ وتشغيل.'
+            );
+          }
+          break;
+        }
+        const chunkData = await chunkRes.json();
+        if (!chunkData.ok) {
+          throw new Error(chunkData.error || 'تعذر جلب أجزاء الملف');
+        }
+        if (chunkData.totalBytes) {
+          totalExpected = Number(chunkData.totalBytes);
+        }
+        if (chunkData.chunkBase64) {
+          const bin = atob(chunkData.chunkBase64);
+          const arr = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) {
+            arr[i] = bin.charCodeAt(i);
+          }
+          byteChunks.push(arr);
+        }
+        chunkIdx++;
+        if (totalExpected > 0) {
+          const loadedBytes = byteChunks.reduce((acc, b) => acc + b.byteLength, 0);
+          const pct = Math.min(98, Math.max(12, Math.round((loadedBytes / totalExpected) * 95)));
+          onProgress?.(pct);
+        } else {
+          onProgress?.(Math.min(95, 15 + chunkIdx * 10));
+        }
+        if (chunkData.eof) break;
+      }
+
+      if (byteChunks.length > 0) {
+        const finalBlob = new Blob(byteChunks, { type: trueMime });
+        if (finalBlob.size <= 35 * 1024 * 1024) {
+          readBlobAsDataUrl(finalBlob)
+            .then((dUrl) => saveFileToIDB(cacheKey, dUrl))
+            .catch(() => {});
+        }
+        onProgress?.(100);
+        const blobUrl = URL.createObjectURL(finalBlob);
+        return { viewUrl: blobUrl, downloadUrl: blobUrl, isCloudFile: true };
+      }
+    } catch (streamErr: any) {
+      throw new Error(
+        streamErr?.message ||
+          'تعذر تشغيل الملف الكبير: تأكد من تفعيل توكن البوت الصحيح (BOT_TOKEN) في استوديو البوت.'
+      );
+    }
+
+    return { viewUrl: cleanStreamUrl, downloadUrl: cleanStreamUrl, isCloudFile: false };
+  }
+
+  // Case 4: External URL (e.g. Google Drive link — auto-normalize /view to /preview for iframe embedding)
   let viewUrl = rawUrl;
   const gdriveMatch = rawUrl.match(/drive\.google\.com\/file\/d\/([^/]+)/);
   if (gdriveMatch && gdriveMatch[1]) {

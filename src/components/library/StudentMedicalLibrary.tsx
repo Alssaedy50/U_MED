@@ -402,10 +402,31 @@ export default function StudentMedicalLibrary({
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 sm:gap-4">
           {filteredResources.map((res) => {
-            const isPdf = res.resourceType === 'pdf';
-            const isImage = res.resourceType === 'image';
-            const isAudio = res.resourceType === 'audio';
-            const isVideo = res.resourceType === 'video';
+            const lowerFile = (res.fileName || res.title || '').toLowerCase().replace(/\.html$/i, '');
+            const lowerMime = (res.mimeType || '').toLowerCase();
+            const isVideo =
+              res.resourceType === 'video' ||
+              lowerFile.endsWith('.mp4') ||
+              lowerFile.endsWith('.mkv') ||
+              lowerFile.endsWith('.webm') ||
+              lowerMime.includes('video');
+            const isAudio =
+              !isVideo &&
+              (res.resourceType === 'audio' ||
+                lowerFile.endsWith('.mp3') ||
+                lowerFile.endsWith('.m4a') ||
+                lowerFile.endsWith('.ogg') ||
+                lowerFile.endsWith('.wav') ||
+                lowerMime.includes('audio'));
+            const isImage =
+              !isVideo &&
+              !isAudio &&
+              (res.resourceType === 'image' ||
+                lowerFile.endsWith('.jpg') ||
+                lowerFile.endsWith('.jpeg') ||
+                lowerFile.endsWith('.png') ||
+                lowerMime.includes('image'));
+            const isPdf = !isVideo && !isAudio && !isImage && res.resourceType === 'pdf';
             const linkedCourse = courses.find((c) => c.id === res.courseOfferingId);
             const courseDoctor =
               linkedCourse?.instructorNameArabic ||
@@ -485,10 +506,10 @@ export default function StudentMedicalLibrary({
                       className="flex-1 min-h-[42px] py-2 px-3 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm active:scale-[0.98]"
                     >
                       <Eye className="w-4 h-4 shrink-0" />
-                      <span>{isAudio ? 'استماع للمحاضرة' : 'معاينة وتحميل'}</span>
+                      <span>{isVideo ? 'تشغيل الفيديو' : isAudio ? 'استماع للمحاضرة' : 'معاينة وتحميل'}</span>
                     </button>
 
-                    {!res.url.startsWith('umed-cloud://') && (
+                    {!res.url.startsWith('umed-cloud://') && !res.url.startsWith('/api/teledrive/stream/') && (
                       <a
                         href={res.url}
                         target="_blank"

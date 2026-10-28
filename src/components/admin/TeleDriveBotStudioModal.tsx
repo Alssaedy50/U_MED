@@ -336,9 +336,9 @@ export default function TeleDriveBotStudioModal({
   };
 
   const handlePullFromChannel = async () => {
-    const target = channelPullInput.trim();
+    const target = (channelPullInput || config.targetGroupId || '').trim();
     if (!target) {
-      setLiveTestBanner('⚠️ يرجى إدخال معرّف القناة (@channel) أو رابط القناة (https://t.me/...) أولاً.');
+      setLiveTestBanner('⚠️ يرجى إدخال معرّف القناة (@channel أو -100...) أو رابط القناة (https://t.me/...) أولاً.');
       return;
     }
     setChannelPullBusy(true);
@@ -350,6 +350,7 @@ export default function TeleDriveBotStudioModal({
         body: JSON.stringify({
           channelInput: target,
           maxPosts: 5,
+          targetGroupId: config.targetGroupId,
           gdriveFolderId: config.defaultFolderId,
           defaultUniversityId: config.defaultUniversityId,
           botToken: config.botToken,
@@ -366,7 +367,7 @@ export default function TeleDriveBotStudioModal({
       }
       if (data.success) {
         setLiveTestBanner(
-          `✅ تم سحب (${data.ingestedCount || data.resources?.length || 1}) منشور/ملف من قناة (${data.channelUsername || target}) ورفعها إلى Google Drive وبثها في القناة ومنصة U_MED!`
+          `✅ تم سحب (${data.ingestedCount || data.resources?.length || 1}) منشور/ملف من قناة (${data.channelUsername || target}) وأرشفتها في Google Drive وبثها في القناة ومنصة U_MED!`
         );
       } else {
         setLiveTestBanner(`⚠️ تعذر السحب من القناة: ${data.error || 'تأكد أن القناة عامة أو أن البوت مشرف فيها'}`);
@@ -375,6 +376,32 @@ export default function TeleDriveBotStudioModal({
       setLiveTestBanner(`⚠️ خطأ في سحب القناة: ${err?.message || ''}`);
     } finally {
       setChannelPullBusy(false);
+    }
+  };
+
+  const handleSyncAndRepairDrive = async () => {
+    setLiveActionBusy(true);
+    setLiveTestBanner(null);
+    try {
+      const res = await fetch('/api/teledrive/sync-drive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await res.json();
+      if (Array.isArray(data.logs)) setLiveLogs(data.logs);
+      if (data.driveStatus) setLiveDriveStatus(data.driveStatus);
+      if (data.success) {
+        onDraftSimulated?.();
+        setLiveTestBanner(
+          `✅ تمت مزامنة وإظهار (${data.syncedDriveCount || 0}) ملفات ومجلدات داخل Google Drive (${data.driveStatus?.folderName || 'UMED STORAGE'}) وإصلاح (${data.repairedFirestoreCount || 0}) ملفات كبيرة الحجم لتعمل مباشرة داخل المنصة!`
+        );
+      } else {
+        setLiveTestBanner(`⚠️ تعذر مزامنة Google Drive: ${data.error || ''}`);
+      }
+    } catch (err: any) {
+      setLiveTestBanner(`⚠️ خطأ في المزامنة: ${err?.message || ''}`);
+    } finally {
+      setLiveActionBusy(false);
     }
   };
 
@@ -940,7 +967,7 @@ export default function TeleDriveBotStudioModal({
                 </div>
 
                 {/* Big Clear Action Buttons */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <button
                     type="button"
                     disabled={liveActionBusy}
@@ -951,8 +978,18 @@ export default function TeleDriveBotStudioModal({
                     <span>
                       {liveActionBusy
                         ? 'جارٍ التنفيذ...'
-                        : '🚀 اختبار حي الآن (بث ملف في المنصة + إشعار تليجرام)'}
+                        : '🚀 اختبار حي الآن (Drive + U_MED)'}
                     </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={liveActionBusy}
+                    onClick={handleSyncAndRepairDrive}
+                    className="w-full py-2.5 px-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <FolderArchive className="w-3.5 h-3.5 shrink-0" />
+                    <span>📂 مزامنة وإصلاح ملفات Google Drive</span>
                   </button>
 
                   <button
@@ -978,8 +1015,8 @@ export default function TeleDriveBotStudioModal({
                     </span>
                   </div>
                   <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
-                    • <strong>استقبال وبث تلقائي بلا حدود للحجم:</strong> أي ملف (مهما كان حجمه أو صيغته) يُرسل للبوت أو يُنشر في القناة يتم رفعه إلى <strong>Google Drive (`UMED STORAGE`)</strong> وبثه مباشرةً في <strong>قناة/قروب تليجرام</strong> ونشره في <strong>منصة U_MED</strong>.<br />
-                    • <strong>سحب مباشر من قناة أو رفع ملف ضخم من جهازك الآن:</strong>
+                    • <strong>استقبال وبث تلقائي بلا حدود للحجم:</strong> أي ملف (مهما كان حجمه أو صيغته) يُرسل للبوت أو يُنشر في القناة يتم إظهاره وأرشفته في <strong>Google Drive (`UMED STORAGE`)</strong> وبثه مباشرةً في <strong>قناة/قروب تليجرام</strong> وتشغيله داخل <strong>منصة U_MED</strong> دون تحويل لتليجرام.<br />
+                    • <strong>سحب مباشر من قناة عامة أو خاصة أو رفع ملف ضخم من جهازك الآن:</strong>
                   </p>
 
                   {/* Row 1: Channel Pull & Target Broadcast Channel */}
@@ -989,7 +1026,7 @@ export default function TeleDriveBotStudioModal({
                       dir="ltr"
                       value={channelPullInput}
                       onChange={(e) => setChannelPullInput(e.target.value)}
-                      placeholder="@channel_username أو https://t.me/channel_name"
+                      placeholder="@channel_username أو -1003664858401 أو https://t.me/channel_name"
                       className="flex-1 px-3 py-1.5 rounded-lg bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono text-xs"
                     />
                     <button
