@@ -60,6 +60,10 @@ import {
   PendingGuestExamSubmission,
   downloadExamBookletFile
 } from '../../services/assessmentService.ts';
+import {
+  extractOptionAndExplanation,
+  sanitizeOptionTextForDisplay
+} from '../../services/mcqBulkParser.ts';
 
 import { useAuth } from '../../context/AuthContext.tsx';
 
@@ -123,7 +127,17 @@ export default function ExamTakingModal({
   );
 
   // Per-Question Timer state (Optional)
-  const perQuestionDuration = Number(assessment.questionDurationSeconds || 0);
+  const perQuestionDuration = Math.max(
+    0,
+    Math.round(
+      Number(
+        assessment.questionDurationSeconds ||
+          assessment.perQuestionSeconds ||
+          assessment.questionTimerSeconds ||
+          0
+      )
+    )
+  );
   const isQuestionTimerEnabled = perQuestionDuration > 0;
   const [questionTimeLeft, setQuestionTimeLeft] = useState<number>(perQuestionDuration);
 
@@ -209,29 +223,36 @@ export default function ExamTakingModal({
     setQuestionTimeLeft(perQuestionDuration);
   }, [currentQuestionIndex, isQuestionTimerEnabled, perQuestionDuration, result, showMandatoryGuestGate, hasStartedSolving]);
 
-  // Per-question countdown interval
+  // Per-question countdown interval (strictly clamped to perQuestionDuration so it never overshoots by +1/+2s)
   useEffect(() => {
     if (!isQuestionTimerEnabled || result || submitting || showMandatoryGuestGate || !hasStartedSolving) return;
 
+    const deadline = Date.now() + perQuestionDuration * 1000;
+    setQuestionTimeLeft(perQuestionDuration);
+
     const qTimer = setInterval(() => {
-      setQuestionTimeLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(qTimer);
-          // Auto-advance to next question or trigger finish if on last question
-          if (currentQuestionIndex < questions.length - 1) {
-            setCurrentQuestionIndex((idx) => Math.min(questions.length - 1, idx + 1));
-          } else {
-            handleFinalSubmit();
-          }
-          return 0;
+      const rem = Math.min(
+        perQuestionDuration,
+        Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
+      );
+      if (rem <= 0) {
+        clearInterval(qTimer);
+        setQuestionTimeLeft(0);
+        // Auto-advance to next question or trigger finish if on last question
+        if (currentQuestionIndex < questions.length - 1) {
+          setCurrentQuestionIndex((idx) => Math.min(questions.length - 1, idx + 1));
+        } else {
+          handleFinalSubmit();
         }
-        return prev - 1;
-      });
+        return;
+      }
+      setQuestionTimeLeft((prev) => Math.min(perQuestionDuration, Math.min(prev, rem)));
     }, 1000);
 
     return () => clearInterval(qTimer);
   }, [
     isQuestionTimerEnabled,
+    perQuestionDuration,
     currentQuestionIndex,
     questions.length,
     result,
@@ -930,6 +951,11 @@ export default function ExamTakingModal({
                           {(rev.options || []).map((opt) => {
                             const isOptCorrect = opt.id === rev.correctOptionId || opt.isCorrect;
                             const isStudentPick = opt.id === rev.studentAnswer;
+                            const cleanOptText = sanitizeOptionTextForDisplay(opt.textArabic);
+                            const optExplanation =
+                              opt.explanation ||
+                              opt.explanationArabic ||
+                              extractOptionAndExplanation(opt.textArabic).explanation;
                             return (
                               <div
                                 key={opt.id}
@@ -942,7 +968,7 @@ export default function ExamTakingModal({
                                 }`}
                               >
                                 <div className="flex items-center justify-between gap-2">
-                                  <span className="font-semibold">{opt.textArabic}</span>
+                                  <span className="font-semibold">{cleanOptText}</span>
                                   <div className="flex items-center gap-1.5 shrink-0" dir="rtl">
                                     {isStudentPick && (
                                       <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-200">
@@ -956,9 +982,15 @@ export default function ExamTakingModal({
                                     )}
                                   </div>
                                 </div>
-                                {opt.explanationArabic && (
-                                  <p className="text-[11px] text-slate-300 pr-2 pl-2 border-r-2 border-slate-700 mt-1">
-                                    {opt.explanationArabic}
+                                {optExplanation && (
+                                  <p
+                                    className="text-[11px] text-slate-300 pr-2 pl-2 border-r-2 border-teal-500/60 mt-1 leading-relaxed"
+                                    dir={!/[\u0600-\u06FF]/.test(optExplanation) ? 'ltr' : 'rtl'}
+                                  >
+                                    <strong className="text-teal-300 mr-1 ml-1">
+                                      {!/[\u0600-\u06FF]/.test(optExplanation) ? 'Rationale:' : 'التعليل:'}
+                                    </strong>
+                                    {optExplanation}
                                   </p>
                                 )}
                               </div>
@@ -1231,7 +1263,8 @@ export default function ExamTakingModal({
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2" dir={isEnglishQuestion ? 'ltr' : 'rtl'}>
                           {currentQuestion.options.map((opt) => {
                             const isSelected = answers[currentQuestion.id] === opt.id;
-                            const isTrue = opt.id === 'opt-a' || opt.textArabic.includes('صح') || /true/i.test(opt.textArabic);
+                            const cleanOptLabel = sanitizeOptionTextForDisplay(opt.textArabic);
+                            const isTrue = opt.id === 'opt-a' || cleanOptLabel.includes('صح') || /true/i.test(cleanOptLabel);
                             return (
                               <button
                                 key={opt.id}
@@ -1250,7 +1283,7 @@ export default function ExamTakingModal({
                                 ) : (
                                   <X className={`w-6 h-6 ${isSelected ? 'text-rose-400' : 'text-slate-500'}`} />
                                 )}
-                                <span>{opt.textArabic}</span>
+                                <span>{cleanOptLabel}</span>
                               </button>
                             );
                           })}
@@ -1265,6 +1298,10 @@ export default function ExamTakingModal({
                             const letter = isEnglishQuestion
                               ? ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'][oIdx] || opt.id
                               : ['أ', 'ب', 'ج', 'د', 'هـ', 'و', 'ز', 'ح'][oIdx] || opt.id;
+                            const cleanOptArabic = sanitizeOptionTextForDisplay(opt.textArabic);
+                            const cleanOptEnglish = opt.textEnglish
+                              ? sanitizeOptionTextForDisplay(opt.textEnglish)
+                              : '';
 
                             return (
                               <button
@@ -1282,9 +1319,9 @@ export default function ExamTakingModal({
                                   {isSelected ? `✓ ${letter}` : letter}
                                 </div>
                                 <div className="flex-1 space-y-1">
-                                  <div>{opt.textArabic}</div>
-                                  {opt.textEnglish && opt.textEnglish !== opt.textArabic && (
-                                    <div className="text-xs text-slate-500 font-mono" dir="ltr">{opt.textEnglish}</div>
+                                  <div>{cleanOptArabic}</div>
+                                  {cleanOptEnglish && cleanOptEnglish !== cleanOptArabic && (
+                                    <div className="text-xs text-slate-500 font-mono" dir="ltr">{cleanOptEnglish}</div>
                                   )}
                                 </div>
                               </button>

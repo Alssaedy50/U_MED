@@ -78,7 +78,8 @@ import {
   subscribeToQuestionSyncState,
   buildShareableAssessmentUrl,
   resolveResultPublicDisplayName,
-  getQuestionsForAssessmentPreview
+  getQuestionsForAssessmentPreview,
+  sanitizeExistingQuestionsRationales
 } from '../../services/assessmentService.ts';
 import {
   fetchStudyLevels,
@@ -96,7 +97,9 @@ import {
   evaluateQuizVerificationReport,
   formatQuizVerificationText,
   downloadQuizVerificationFile,
-  QuizVerificationInput
+  QuizVerificationInput,
+  sanitizeOptionTextForDisplay,
+  extractOptionAndExplanation
 } from '../../services/mcqBulkParser.ts';
 import BulkQuestionImportModal from './BulkQuestionImportModal.tsx';
 import ExamTakingModal from '../assessment/ExamTakingModal.tsx';
@@ -218,6 +221,7 @@ export default function AssessmentManager({
 
   // Feedback & Bulk Import / Offline Outbox Sync State
   const [loading, setLoading] = useState<boolean>(false);
+  const [sanitizingDb, setSanitizingDb] = useState<boolean>(false);
   const [statusMsg, setStatusMsg] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
   const [showBulkImportModal, setShowBulkImportModal] = useState<boolean>(false);
   const [syncState, setSyncState] = useState<{
@@ -457,6 +461,32 @@ export default function AssessmentManager({
     }
   };
 
+  const handleSanitizeExistingQuestions = async () => {
+    setSanitizingDb(true);
+    setStatusMsg(null);
+    try {
+      const res = await sanitizeExistingQuestionsRationales();
+      if (selectedBank) {
+        const refreshed = await getBankQuestions(selectedBank.id);
+        setBankQuestions(refreshed);
+      }
+      setStatusMsg({
+        type: 'success',
+        text:
+          res.sanitizedQuestionsCount > 0
+            ? `تم تطهير وإصلاح ${res.sanitizedQuestionsCount} سؤال (${res.sanitizedOptionsCount} خيار) من أصل ${res.totalScanned} سؤال وحفظ التعليلات بنجاح ✓`
+            : `تم فحص جميع الأسئلة المحفوظة (${res.totalScanned} سؤال) — جميع الخيارات والتعليلات نظيفة ومطابقة للمعايير ✓`
+      });
+    } catch (err: any) {
+      setStatusMsg({
+        type: 'error',
+        text: err.message || 'حدث خطأ أثناء تطهير وإصلاح الخيارات والتعليلات'
+      });
+    } finally {
+      setSanitizingDb(false);
+    }
+  };
+
   const handleCreateQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedBank || !stemArabic.trim()) return;
@@ -618,6 +648,8 @@ export default function AssessmentManager({
           durationMinutes: enableExamTimer ? Number(durationMinutes) : 0,
           enableExamTimer,
           questionDurationSeconds: Number(questionDurationSeconds) || 0,
+          perQuestionSeconds: Number(questionDurationSeconds) || 0,
+          questionTimerSeconds: Number(questionDurationSeconds) || 0,
           availabilityDurationHours: Number(availabilityDurationHours) || 336,
           allowTrialSharing: true,
           showLeaderboard: true,
@@ -839,6 +871,8 @@ export default function AssessmentManager({
           enableExamTimer: editingAssessment.enableExamTimer !== false,
           durationMinutes: editingAssessment.enableExamTimer === false ? 0 : (Number(editingAssessment.durationMinutes) || 30),
           questionDurationSeconds: Number(editingAssessment.questionDurationSeconds) || 0,
+          perQuestionSeconds: Number(editingAssessment.questionDurationSeconds) || 0,
+          questionTimerSeconds: Number(editingAssessment.questionDurationSeconds) || 0,
           availabilityDurationHours: Number(editingAssessment.availabilityDurationHours) || 336,
           maxAttempts: Number(editingAssessment.maxAttempts) || 1,
           questionIds: updatedQuestionIds,
@@ -1422,6 +1456,21 @@ export default function AssessmentManager({
                     <Eye className="w-3.5 h-3.5 shrink-0" />
                     <span>فحص وتأكيد القيم</span>
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={handleSanitizeExistingQuestions}
+                    disabled={sanitizingDb}
+                    className="px-3 py-1.5 rounded-xl bg-indigo-950/80 hover:bg-indigo-900 text-indigo-200 border border-indigo-500/40 font-bold flex items-center gap-1.5 transition-colors disabled:opacity-40 whitespace-nowrap"
+                    title="تنظيف جميع الأسئلة المحفوظة من علامات * ونصوص (Rationale: ...) المتسربة وحفظها في حقل التعليل"
+                  >
+                    {sanitizingDb ? (
+                      <RefreshCw className="w-3.5 h-3.5 shrink-0 animate-spin text-indigo-300" />
+                    ) : (
+                      <Sparkles className="w-3.5 h-3.5 shrink-0 text-indigo-300" />
+                    )}
+                    <span>{sanitizingDb ? 'جاري التطهير...' : 'تطهير وإصلاح الخيارات والتعليلات'}</span>
+                  </button>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
@@ -1549,6 +1598,12 @@ export default function AssessmentManager({
                             {q.options.map((o, optIdx) => {
                               const optionLetters = ['أ', 'ب', 'ج', 'د', 'هـ', 'و', 'ز', 'ح', 'ط', 'ي'];
                               const isCorrect = o.id === q.correctOptionId;
+                              const cleanOptText = sanitizeOptionTextForDisplay(o.textArabic);
+                              const optRationale =
+                                o.explanation ||
+                                o.explanationArabic ||
+                                q.optionExplanations?.[o.id] ||
+                                extractOptionAndExplanation(o.textArabic).explanation;
                               return (
                                 <div
                                   key={o.id}
@@ -1565,7 +1620,7 @@ export default function AssessmentManager({
                                       }`}>
                                         {optionLetters[optIdx] || optIdx + 1}
                                       </span>
-                                      <span dir="auto" className="leading-relaxed break-words flex-1">{o.textArabic}</span>
+                                      <span dir="auto" className="leading-relaxed break-words flex-1">{cleanOptText}</span>
                                     </div>
                                     {isCorrect && (
                                       <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/40 shrink-0">
@@ -1573,9 +1628,9 @@ export default function AssessmentManager({
                                       </span>
                                     )}
                                   </div>
-                                  {q.optionExplanations?.[o.id] && (
+                                  {optRationale && (
                                     <div dir="auto" className="text-[11px] font-normal text-slate-400 mt-2 pt-1.5 border-t border-slate-800 leading-relaxed">
-                                      {q.optionExplanations[o.id]}
+                                      <strong className="text-teal-400/90">التعليل:</strong> {optRationale}
                                     </div>
                                   )}
                                 </div>

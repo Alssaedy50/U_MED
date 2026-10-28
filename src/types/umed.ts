@@ -425,6 +425,7 @@ export interface QuestionOption {
   textArabic: string;
   textEnglish?: string;
   explanationArabic?: string; // تعليل الخيار (لماذا هو صحيح أو لماذا هو خاطئ)
+  explanation?: string; // Alias for explanationArabic
   explanationEnglish?: string;
   isCorrect?: boolean;
 }
@@ -480,6 +481,7 @@ export interface QuestionAnswerKey {
   modelAnswerArabic?: string;
   explanationArabic?: string;
   explanationEnglish?: string;
+  optionExplanations?: Record<string, string>;
   points: number;
 }
 
@@ -503,8 +505,11 @@ export interface DetectedAssessmentMetadata {
   blockCode?: string;
   durationMinutes?: number;
   questionDurationSeconds?: number;
+  questionTimerSeconds?: number;
   totalQuestions?: number;
 }
+
+export type TxtHeaderMetadata = DetectedAssessmentMetadata;
 
 export interface ParsedQuestionDraft {
   tempId: string;
@@ -586,6 +591,8 @@ export interface Assessment {
   durationMinutes: number; // e.g. 45
   enableExamTimer?: boolean;
   questionDurationSeconds?: number;
+  perQuestionSeconds?: number;
+  questionTimerSeconds?: number;
   availabilityDurationHours?: number;
   allowTrialSharing?: boolean;
   showLeaderboard?: boolean;

@@ -64,7 +64,9 @@ import {
   evaluateQuizVerificationReport,
   formatQuizVerificationText,
   downloadQuizVerificationFile,
-  getOptionIdByIndex
+  getOptionIdByIndex,
+  sanitizeOptionTextForDisplay,
+  extractOptionAndExplanation
 } from '../../services/mcqBulkParser.ts';
 import {
   saveBulkImportDraftSession,
@@ -522,22 +524,28 @@ export default function BulkQuestionImportModal({
         setPublishStudyLevelId(detectedMetadata.studyLevelId);
       }
       const validCount = parsed.filter((d) => d.isValid).length || parsed.length;
-      if (detectedMetadata.questionDurationSeconds && detectedMetadata.questionDurationSeconds > 0) {
+      const detectedQSec = detectedMetadata.questionTimerSeconds || detectedMetadata.questionDurationSeconds || 0;
+      const detectedMin = detectedMetadata.durationMinutes || 0;
+      if (detectedQSec > 0 && detectedMin > 0) {
         setTimerDriverMode('questionSeconds');
-        setPublishQuestionSeconds(detectedMetadata.questionDurationSeconds);
+        setPublishQuestionSeconds(detectedQSec);
+        setPublishDurationMinutes(detectedMin);
+      } else if (detectedQSec > 0) {
+        setTimerDriverMode('questionSeconds');
+        setPublishQuestionSeconds(detectedQSec);
         const synced = synchronizeExamTimers({
           questionsCount: validCount,
-          durationMinutes: detectedMetadata.durationMinutes || publishDurationMinutes,
-          questionDurationSeconds: detectedMetadata.questionDurationSeconds,
+          durationMinutes: publishDurationMinutes,
+          questionDurationSeconds: detectedQSec,
           changedField: 'questionSeconds'
         });
         setPublishDurationMinutes(synced.durationMinutes);
-      } else if (detectedMetadata.durationMinutes && detectedMetadata.durationMinutes > 0) {
+      } else if (detectedMin > 0) {
         setTimerDriverMode('totalMinutes');
-        setPublishDurationMinutes(detectedMetadata.durationMinutes);
+        setPublishDurationMinutes(detectedMin);
         const synced = synchronizeExamTimers({
           questionsCount: validCount,
-          durationMinutes: detectedMetadata.durationMinutes,
+          durationMinutes: detectedMin,
           questionDurationSeconds: publishQuestionSeconds,
           changedField: 'totalMinutes'
         });
@@ -659,11 +667,33 @@ export default function BulkQuestionImportModal({
           if (detectedMetadata.studyLevelId) {
             setPublishStudyLevelId(detectedMetadata.studyLevelId);
           }
-          if (detectedMetadata.durationMinutes && detectedMetadata.durationMinutes > 0) {
-            setPublishDurationMinutes(detectedMetadata.durationMinutes);
-          }
-          if (detectedMetadata.questionDurationSeconds && detectedMetadata.questionDurationSeconds > 0) {
-            setPublishQuestionSeconds(detectedMetadata.questionDurationSeconds);
+          const validCount = parsed.filter((d) => d.isValid).length || parsed.length;
+          const detectedQSec = detectedMetadata.questionTimerSeconds || detectedMetadata.questionDurationSeconds || 0;
+          const detectedMin = detectedMetadata.durationMinutes || 0;
+          if (detectedQSec > 0 && detectedMin > 0) {
+            setTimerDriverMode('questionSeconds');
+            setPublishQuestionSeconds(detectedQSec);
+            setPublishDurationMinutes(detectedMin);
+          } else if (detectedQSec > 0) {
+            setTimerDriverMode('questionSeconds');
+            setPublishQuestionSeconds(detectedQSec);
+            const synced = synchronizeExamTimers({
+              questionsCount: validCount,
+              durationMinutes: publishDurationMinutes,
+              questionDurationSeconds: detectedQSec,
+              changedField: 'questionSeconds'
+            });
+            setPublishDurationMinutes(synced.durationMinutes);
+          } else if (detectedMin > 0) {
+            setTimerDriverMode('totalMinutes');
+            setPublishDurationMinutes(detectedMin);
+            const synced = synchronizeExamTimers({
+              questionsCount: validCount,
+              durationMinutes: detectedMin,
+              questionDurationSeconds: publishQuestionSeconds,
+              changedField: 'totalMinutes'
+            });
+            setPublishQuestionSeconds(synced.questionDurationSeconds);
           }
         }
         setStep('review');
@@ -1119,6 +1149,8 @@ export default function BulkQuestionImportModal({
             durationMinutes: durationVal,
             enableExamTimer: durationVal > 0,
             questionDurationSeconds: Number(publishQuestionSeconds) || 0,
+            perQuestionSeconds: Number(publishQuestionSeconds) || 0,
+            questionTimerSeconds: Number(publishQuestionSeconds) || 0,
             availabilityDurationHours: availHours,
             allowTrialSharing: true,
             showLeaderboard: true,
@@ -2171,7 +2203,7 @@ export default function BulkQuestionImportModal({
                                       <textarea
                                         rows={2}
                                         dir="auto"
-                                        value={opt.textArabic}
+                                        value={sanitizeOptionTextForDisplay(opt.textArabic)}
                                         onChange={(e) =>
                                           updateDraftItem(draft.tempId, (d) => ({
                                             ...d,
@@ -2206,12 +2238,12 @@ export default function BulkQuestionImportModal({
                                     <input
                                       type="text"
                                       dir="auto"
-                                      value={opt.explanationArabic || ''}
+                                      value={opt.explanationArabic || opt.explanation || extractOptionAndExplanation(opt.textArabic).explanation || ''}
                                       onChange={(e) =>
                                         updateDraftItem(draft.tempId, (d) => ({
                                           ...d,
                                           options: d.options.map((o) =>
-                                            o.id === opt.id ? { ...o, explanationArabic: e.target.value } : o
+                                            o.id === opt.id ? { ...o, explanationArabic: e.target.value, explanation: e.target.value } : o
                                           )
                                         }))
                                       }

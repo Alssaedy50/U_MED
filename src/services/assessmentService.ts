@@ -34,7 +34,11 @@ import {
   ParsedQuestionDraft,
   LeaderboardNameMode
 } from '../types/umed.ts';
-import { computeQuestionFingerprint } from './mcqBulkParser.ts';
+import {
+  computeQuestionFingerprint,
+  extractOptionAndExplanation,
+  sanitizeOptionTextForDisplay
+} from './mcqBulkParser.ts';
 import {
   enqueueQuestionsUpsert,
   enqueueQuestionDelete,
@@ -500,6 +504,32 @@ export async function bulkSaveQuestions(
       createdCount++;
     }
 
+    const mergedOptionExplanations: Record<string, string> = {
+      ...(raw.optionExplanations || {})
+    };
+    const cleanedOptions = options.map((o, idx) => {
+      const optId = o.id || `opt-${['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'][idx] || 'a'}`;
+      const extracted = extractOptionAndExplanation(o.textArabic || '');
+      const cleanTextAr = sanitizeOptionTextForDisplay(extracted.text || o.textArabic || '');
+      const cleanTextEn = o.textEnglish ? sanitizeOptionTextForDisplay(o.textEnglish) : undefined;
+      const optExp = (
+        o.explanationArabic ||
+        o.explanation ||
+        extracted.explanation ||
+        mergedOptionExplanations[optId] ||
+        ''
+      ).trim() || undefined;
+      if (optExp) {
+        mergedOptionExplanations[optId] = optExp;
+      }
+      return {
+        id: optId,
+        textArabic: cleanTextAr,
+        ...(cleanTextEn ? { textEnglish: cleanTextEn } : {}),
+        ...(optExp ? { explanationArabic: optExp, explanation: optExp } : {})
+      };
+    });
+
     const fullQuestion: QuestionItemFull = cleanFirestoreData({
       id,
       bankId,
@@ -508,18 +538,13 @@ export async function bulkSaveQuestions(
       stemArabic,
       stemEnglish: raw.stemEnglish?.trim() || '',
       imageUrl: raw.imageUrl,
-      options: options.map((o, idx) => ({
-        id: o.id || `opt-${['a', 'b', 'c', 'd', 'e', 'f'][idx] || 'a'}`,
-        textArabic: (o.textArabic || '').trim(),
-        textEnglish: o.textEnglish?.trim() || undefined,
-        explanationArabic: o.explanationArabic?.trim() || undefined
-      })),
+      options: cleanedOptions,
       correctOptionId: raw.correctOptionId || (qType === 'essay' ? 'essay-answer' : qType === 'fill_blank' ? 'fill-blank-answer' : 'opt-a'),
       modelAnswerArabic: raw.modelAnswerArabic?.trim() || undefined,
       modelAnswerEnglish: raw.modelAnswerEnglish?.trim() || undefined,
       explanationArabic: raw.explanationArabic?.trim() || '',
       explanationEnglish: raw.explanationEnglish?.trim() || undefined,
-      optionExplanations: raw.optionExplanations,
+      ...(Object.keys(mergedOptionExplanations).length > 0 ? { optionExplanations: mergedOptionExplanations } : {}),
       points: Number(raw.points) || 5,
       createdBy: existingMatch?.createdBy || createdBy,
       createdAt: existingMatch?.createdAt || now,
@@ -1608,9 +1633,49 @@ export async function submitAttemptServer(
   // 2. If offline or API unreachable, try client-side Firestore answer key grading or local bundle fallback keys
   if (!finalResult) {
     try {
-      const resolvedKeyMap: Record<string, { correctOptionId: string; points: number }> = {
+      const resolvedKeyMap: Record<
+        string,
+        {
+          correctOptionId: string;
+          points: number;
+          explanationArabic?: string;
+          modelAnswerArabic?: string;
+          optionExplanations?: Record<string, string>;
+        }
+      > = {
         ...fallbackAnswerKeys
       };
+
+      // Enrich from local bank questions if available
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const lk = localStorage.key(i);
+          if (lk && lk.startsWith('umed_assessment_q_') && !lk.startsWith('umed_assessment_q_init_')) {
+            const raw = localStorage.getItem(lk);
+            if (raw) {
+              const list = JSON.parse(raw) as QuestionItemFull[];
+              if (Array.isArray(list)) {
+                list.forEach((fq) => {
+                  if (fq && fq.id && questionIds.includes(fq.id)) {
+                    const optExps: Record<string, string> = { ...(fq.optionExplanations || {}) };
+                    (fq.options || []).forEach((o) => {
+                      const exp = o.explanationArabic || o.explanation || extractOptionAndExplanation(o.textArabic).explanation;
+                      if (exp) optExps[o.id] = exp;
+                    });
+                    resolvedKeyMap[fq.id] = {
+                      correctOptionId: fq.correctOptionId || resolvedKeyMap[fq.id]?.correctOptionId || 'opt-a',
+                      points: Number(fq.points) || resolvedKeyMap[fq.id]?.points || 5,
+                      explanationArabic: fq.explanationArabic || resolvedKeyMap[fq.id]?.explanationArabic,
+                      modelAnswerArabic: fq.modelAnswerArabic || resolvedKeyMap[fq.id]?.modelAnswerArabic,
+                      optionExplanations: Object.keys(optExps).length > 0 ? optExps : resolvedKeyMap[fq.id]?.optionExplanations
+                    };
+                  }
+                });
+              }
+            }
+          }
+        }
+      } catch {}
 
       if (typeof navigator === 'undefined' || navigator.onLine) {
         const keyDocs = await Promise.all(
@@ -1623,7 +1688,10 @@ export async function submitAttemptServer(
           if (k && k.questionId && k.correctOptionId) {
             resolvedKeyMap[k.questionId] = {
               correctOptionId: k.correctOptionId,
-              points: Number(k.points) || 5
+              points: Number(k.points) || 5,
+              explanationArabic: k.explanationArabic || resolvedKeyMap[k.questionId]?.explanationArabic,
+              modelAnswerArabic: k.modelAnswerArabic || resolvedKeyMap[k.questionId]?.modelAnswerArabic,
+              optionExplanations: k.optionExplanations || resolvedKeyMap[k.questionId]?.optionExplanations
             };
           }
         });
@@ -1652,13 +1720,23 @@ export async function submitAttemptServer(
             questionType: pq?.questionType || 'mcq',
             language: pq?.language,
             stemArabic: pq?.stemArabic || '',
-            options: (pq?.options || []).map((o) => ({
-              id: o.id,
-              textArabic: o.textArabic,
-              isCorrect: o.id === correctId
-            })),
+            options: (pq?.options || []).map((o) => {
+              const optExp =
+                k?.optionExplanations?.[o.id] ||
+                o.explanationArabic ||
+                o.explanation ||
+                extractOptionAndExplanation(o.textArabic).explanation;
+              return {
+                id: o.id,
+                textArabic: sanitizeOptionTextForDisplay(o.textArabic),
+                ...(optExp ? { explanationArabic: optExp, explanation: optExp } : {}),
+                isCorrect: o.id === correctId
+              };
+            }),
             studentAnswer: studentAns,
             correctOptionId: correctId,
+            ...(k?.modelAnswerArabic ? { modelAnswerArabic: k.modelAnswerArabic } : {}),
+            ...(k?.explanationArabic ? { explanationArabic: k.explanationArabic } : {}),
             points: pts,
             earnedPoints: isCorrect ? pts : 0,
             isCorrect
@@ -3574,7 +3652,7 @@ export async function downloadExamBookletFile(params: {
           ? ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'][oIdx] || opt.id
           : ['أ', 'ب', 'ج', 'د', 'هـ', 'و', 'ز', 'ح'][oIdx] || opt.id;
         if (opt.id === correctOptionId || (opt as any).isCorrect) {
-          correctLabelForKey = `${letter} — ${opt.textArabic}`;
+          correctLabelForKey = `${letter} — ${sanitizeOptionTextForDisplay(opt.textArabic)}`;
         }
       });
       if ((qType === 'essay' || qType === 'fill_blank') && (rev?.modelAnswerArabic || fsKey?.modelAnswerArabic || bankQ?.modelAnswerArabic)) {
@@ -3602,6 +3680,17 @@ export async function downloadExamBookletFile(params: {
                     : ['أ', 'ب', 'ج', 'د', 'هـ', 'و', 'ز', 'ح'][oIdx] || opt.id;
                   const isCorrectOpt = opt.id === correctOptionId || Boolean((opt as any).isCorrect);
                   const isPickedOpt = Boolean(studentPick && studentPick === opt.id);
+                  const cleanOptText = sanitizeOptionTextForDisplay(opt.textArabic);
+                  const bankOptMatch = bankQ?.options?.find((bo) => bo.id === opt.id);
+                  const optRationale =
+                    (opt as any).explanation ||
+                    opt.explanationArabic ||
+                    fsKey?.optionExplanations?.[opt.id] ||
+                    bankQ?.optionExplanations?.[opt.id] ||
+                    bankOptMatch?.explanationArabic ||
+                    bankOptMatch?.explanation ||
+                    extractOptionAndExplanation(opt.textArabic).explanation ||
+                    '';
 
                   let optClass = 'opt-item';
                   if (isSolvedMode) {
@@ -3609,16 +3698,27 @@ export async function downloadExamBookletFile(params: {
                     else if (isPickedOpt && !isCorrectOpt) optClass += ' opt-wrong';
                   }
 
-                  return `<div class="${optClass}">
-                    <div class="opt-main">
-                      <span class="opt-letter">${isSolvedMode && isCorrectOpt ? '✓' : letter}</span>
-                      <span class="opt-text">${escapeHtmlSafe(opt.textArabic)}</span>
+                  return `<div class="${optClass}" style="flex-direction:column;align-items:stretch;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;">
+                      <div class="opt-main">
+                        <span class="opt-letter">${isSolvedMode && isCorrectOpt ? '✓' : letter}</span>
+                        <span class="opt-text">${escapeHtmlSafe(cleanOptText)}</span>
+                      </div>
+                      ${
+                        isSolvedMode
+                          ? `<div class="opt-badges" dir="rtl">
+                              ${isPickedOpt ? `<span class="badge ${isCorrectOpt ? 'badge-ok' : 'badge-err'}">اختيارك</span>` : ''}
+                              ${isCorrectOpt ? `<span class="badge badge-ok">الإجابة الصحيحة ✓</span>` : ''}
+                            </div>`
+                          : ''
+                      }
                     </div>
                     ${
-                      isSolvedMode
-                        ? `<div class="opt-badges" dir="rtl">
-                            ${isPickedOpt ? `<span class="badge ${isCorrectOpt ? 'badge-ok' : 'badge-err'}">اختيارك</span>` : ''}
-                            ${isCorrectOpt ? `<span class="badge badge-ok">الإجابة الصحيحة ✓</span>` : ''}
+                      isSolvedMode && optRationale
+                        ? `<div class="opt-rationale" dir="${!/[\u0600-\u06FF]/.test(optRationale) ? 'ltr' : 'rtl'}" style="margin-top:6px;padding-top:6px;border-top:1px dashed #cbd5e1;font-size:12.5px;color:#334155;font-weight:500;">
+                            <strong style="color:${isCorrectOpt ? '#047857' : '#475569'};">${
+                              !/[\u0600-\u06FF]/.test(optRationale) ? 'Rationale:' : 'التعليل:'
+                            }</strong> ${escapeHtmlSafe(optRationale)}
                           </div>`
                         : ''
                     }
@@ -3972,6 +4072,215 @@ export async function downloadExamBookletFile(params: {
   a.click();
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+}
+
+export const exportSolvedExamHtml = downloadExamBookletFile;
+
+// ---------------------------------------------------------------------------
+// 7. Database Sanitizer: Clean Leaked `*` and `(Rationale: ...)` from Saved Questions
+// ---------------------------------------------------------------------------
+
+export async function sanitizeExistingQuestionsRationales(targetBankId?: string): Promise<{
+  totalScanned: number;
+  sanitizedQuestionsCount: number;
+  sanitizedOptionsCount: number;
+}> {
+  let totalScanned = 0;
+  let sanitizedQuestionsCount = 0;
+  let sanitizedOptionsCount = 0;
+
+  const questionsByBank = new Map<string, Map<string, QuestionItemFull>>();
+
+  // 1. Collect from localStorage banks
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(`${LOCAL_STORAGE_PREFIX}q_`) && !k.startsWith(`${LOCAL_STORAGE_PREFIX}q_init_`)) {
+        const bId = k.slice(`${LOCAL_STORAGE_PREFIX}q_`.length);
+        if (targetBankId && bId !== targetBankId) continue;
+        const list = await readLocalBankQuestionsAsync(bId);
+        if (!questionsByBank.has(bId)) questionsByBank.set(bId, new Map());
+        const bMap = questionsByBank.get(bId)!;
+        for (const q of list) {
+          if (q && q.id) bMap.set(q.id, q);
+        }
+      }
+    }
+  } catch {}
+
+  if (targetBankId && !questionsByBank.has(targetBankId)) {
+    const list = await getBankQuestions(targetBankId);
+    const bMap = new Map<string, QuestionItemFull>();
+    for (const q of list) {
+      if (q && q.id) bMap.set(q.id, q);
+    }
+    questionsByBank.set(targetBankId, bMap);
+  }
+
+  // 2. Also fetch from Firestore `questions` collection when online
+  if (typeof navigator === 'undefined' || navigator.onLine) {
+    try {
+      const fsQuery = targetBankId
+        ? query(collection(db, 'questions'), where('bankId', '==', targetBankId))
+        : collection(db, 'questions');
+      const snap = await getDocs(fsQuery);
+      snap.forEach((d) => {
+        const q = { id: d.id, ...d.data() } as QuestionItemFull;
+        const bId = q.bankId || targetBankId || 'qbank-cvs-default';
+        if (targetBankId && bId !== targetBankId) return;
+        if (!questionsByBank.has(bId)) questionsByBank.set(bId, new Map());
+        const bMap = questionsByBank.get(bId)!;
+        if (!bMap.has(q.id)) {
+          bMap.set(q.id, q);
+        }
+      });
+    } catch {}
+  }
+
+  const nowIso = new Date().toISOString();
+
+  for (const [bId, bMap] of questionsByBank.entries()) {
+    const bankList = Array.from(bMap.values());
+    const modifiedInBank: QuestionItemFull[] = [];
+    const updatedBankList: QuestionItemFull[] = [];
+
+    for (const q of bankList) {
+      totalScanned++;
+      let questionModified = false;
+      let nextCorrectOptionId = q.correctOptionId;
+      const nextOptionExplanations: Record<string, string> = {
+        ...(q.optionExplanations || {})
+      };
+
+      const nextOptions = (q.options || []).map((opt) => {
+        const rawAr = opt.textArabic || '';
+        const extractedAr = extractOptionAndExplanation(rawAr);
+        const cleanAr = sanitizeOptionTextForDisplay(extractedAr.text || rawAr);
+
+        const rawEn = opt.textEnglish || '';
+        const extractedEn = rawEn ? extractOptionAndExplanation(rawEn) : undefined;
+        const cleanEn = rawEn ? sanitizeOptionTextForDisplay(extractedEn?.text || rawEn) : undefined;
+
+        const extractedExp = (
+          extractedAr.explanation ||
+          extractedEn?.explanation ||
+          opt.explanationArabic ||
+          opt.explanation ||
+          nextOptionExplanations[opt.id] ||
+          ''
+        ).trim();
+
+        const hadLeakedRationaleOrMarker =
+          cleanAr !== rawAr.trim() ||
+          (rawEn && cleanEn !== rawEn.trim()) ||
+          Boolean(extractedAr.explanation) ||
+          Boolean(extractedEn?.explanation) ||
+          (extractedExp && (!opt.explanationArabic || !nextOptionExplanations[opt.id]));
+
+        if (hadLeakedRationaleOrMarker) {
+          questionModified = true;
+          sanitizedOptionsCount++;
+        }
+
+        if (extractedExp) {
+          nextOptionExplanations[opt.id] = extractedExp;
+        }
+
+        if (extractedAr.isCorrect === true && (!nextCorrectOptionId || nextCorrectOptionId === 'opt-a')) {
+          nextCorrectOptionId = opt.id;
+        }
+
+        return {
+          ...opt,
+          textArabic: cleanAr,
+          ...(cleanEn ? { textEnglish: cleanEn } : {}),
+          ...(extractedExp ? { explanationArabic: extractedExp, explanation: extractedExp } : {})
+        };
+      });
+
+      if (questionModified) {
+        sanitizedQuestionsCount++;
+        const updatedQ: QuestionItemFull = cleanFirestoreData({
+          ...q,
+          options: nextOptions,
+          correctOptionId: nextCorrectOptionId,
+          ...(Object.keys(nextOptionExplanations).length > 0
+            ? { optionExplanations: nextOptionExplanations }
+            : {}),
+          contentHash: computeQuestionFingerprint(q.stemArabic, q.stemEnglish, nextOptions),
+          updatedAt: nowIso,
+          syncStatus: 'pending_sync'
+        });
+        modifiedInBank.push(updatedQ);
+        updatedBankList.push(updatedQ);
+      } else {
+        updatedBankList.push(q);
+      }
+    }
+
+    if (modifiedInBank.length > 0) {
+      await writeLocalBankQuestions(bId, updatedBankList);
+      await enqueueQuestionsUpsert(bId, modifiedInBank);
+
+      if (typeof navigator === 'undefined' || navigator.onLine) {
+        for (const mq of modifiedInBank) {
+          try {
+            await Promise.all([
+              setDoc(doc(db, 'questions', mq.id), cleanFirestoreData({ ...mq, syncStatus: 'synced' }), { merge: true }),
+              setDoc(doc(db, 'assessmentQuestions', mq.id), cleanFirestoreData(sanitizePublicQuestion(mq)), { merge: true }),
+              setDoc(doc(db, 'questionAnswerKeys', mq.id), cleanFirestoreData(extractProtectedAnswerKey(mq)), { merge: true })
+            ]);
+          } catch {}
+        }
+      }
+    }
+  }
+
+  // 3. Also sanitize any cached public questions in localStorage
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k) continue;
+      if (k.startsWith(`${LOCAL_STORAGE_PREFIX}public_q_`)) {
+        const raw = localStorage.getItem(k);
+        if (raw) {
+          const pq = JSON.parse(raw) as AssessmentQuestionPublic;
+          if (pq && Array.isArray(pq.options)) {
+            pq.options = pq.options.map((o) => ({
+              ...o,
+              textArabic: sanitizeOptionTextForDisplay(o.textArabic),
+              ...(o.textEnglish ? { textEnglish: sanitizeOptionTextForDisplay(o.textEnglish) } : {})
+            }));
+            localStorage.setItem(k, JSON.stringify(pq));
+          }
+        }
+      } else if (k.startsWith(`${LOCAL_STORAGE_PREFIX}cached_questions_`)) {
+        const raw = localStorage.getItem(k);
+        if (raw) {
+          const list = JSON.parse(raw) as AssessmentQuestionPublic[];
+          if (Array.isArray(list)) {
+            const cleanedList = list.map((pq) => ({
+              ...pq,
+              options: (pq.options || []).map((o) => ({
+                ...o,
+                textArabic: sanitizeOptionTextForDisplay(o.textArabic),
+                ...(o.textEnglish ? { textEnglish: sanitizeOptionTextForDisplay(o.textEnglish) } : {})
+              }))
+            }));
+            localStorage.setItem(k, JSON.stringify(cleanedList));
+          }
+        }
+      }
+    }
+  } catch {}
+
+  await flushQuestionOutbox().catch(() => {});
+
+  return {
+    totalScanned,
+    sanitizedQuestionsCount,
+    sanitizedOptionsCount
+  };
 }
 
 

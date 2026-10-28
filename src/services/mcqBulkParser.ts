@@ -286,53 +286,96 @@ export function resolveCanonicalOptionId(
 }
 
 /**
- * Parses inline explanation / rationale embedded within an option line
- * Example: "الشريان التاجي الأيمن (التعليل: صحيح لأنه يغذي الجدار السفلي)"
- * Example: "Right Coronary Artery (Rationale: Correct because it supplies the inferior wall)"
+ * Parses inline explanation / rationale embedded within an option line.
+ * Supports nested brackets/parentheses inside the rationale (e.g. [Yops], [buboes], [globoside])
+ * while preserving legitimate scientific parentheses in the option text (e.g. M (microfold) cells).
  */
 export function extractOptionAndExplanation(rawText: string): {
   text: string;
   explanation?: string;
   isCorrect?: boolean;
 } {
-  let text = rawText.trim();
+  let text = String(rawText || '').trim();
   let explanation: string | undefined = undefined;
   let isCorrect: boolean | undefined = undefined;
 
-  // Check parenthesized or bracketed explanation: (التعليل: ...) or (Rationale: ...) or (Explanation: ...)
-  const bracketExpMatch = text.match(/[\(\[]\s*(?:التعليل|تعليل|السبب|سبب|تفسير|Explanation|Rationale|Reason|Why)\s*[:\-]?\s*([^\]\)]+)[\)\]]\s*$/iu);
-  if (bracketExpMatch) {
-    explanation = bracketExpMatch[1].trim();
-    text = text.replace(bracketExpMatch[0], '').trim();
-  }
+  // 1a. Parenthesized rationale (...) at end of line, even if it contains inner [...] or (...)
+  const parenExpRegex = /\(\s*(?:التعليل|تعليل|السبب|سبب|تفسير|Explanation|Rationale|Reason|Why)\s*[:\-]?\s*(.+)\)\s*([*✓✔☑✅]*)\s*$/iu;
+  // 1b. Bracketed rationale [...] at end of line, even if it contains inner (...) or [...]
+  const squareExpRegex = /\[\s*(?:التعليل|تعليل|السبب|سبب|تفسير|Explanation|Rationale|Reason|Why)\s*[:\-]?\s*(.+)\]\s*([*✓✔☑✅]*)\s*$/iu;
+  // 1c. Dashed or pipe rationale " - Rationale: ..." or " | تعليل: ..."
+  const dashExpRegex = /\s+[\-|—–]\s*(?:التعليل|تعليل|السبب|سبب|تفسير|Explanation|Rationale|Reason|Why)\s*[:\-]?\s*(.+)$/iu;
 
-  // Check dashed or pipe explanation: " - تعليل: ..." or " | Rationale: ..." or " — Explanation: ..."
-  if (!explanation) {
-    const dashExpMatch = text.match(/\s+[\-|—–]\s*(?:التعليل|تعليل|السبب|تفسير|Explanation|Rationale|Reason)\s*[:\-]?\s*(.+)$/iu);
-    if (dashExpMatch) {
-      explanation = dashExpMatch[1].trim();
-      text = text.slice(0, dashExpMatch.index).trim();
+  const parenMatch = text.match(parenExpRegex);
+  if (parenMatch && parenMatch.index !== undefined) {
+    explanation = parenMatch[1].trim();
+    if (parenMatch[2] && parenMatch[2].trim().length > 0) {
+      isCorrect = true;
+    }
+    text = text.slice(0, parenMatch.index).trim();
+  } else {
+    const squareMatch = text.match(squareExpRegex);
+    if (squareMatch && squareMatch.index !== undefined) {
+      explanation = squareMatch[1].trim();
+      if (squareMatch[2] && squareMatch[2].trim().length > 0) {
+        isCorrect = true;
+      }
+      text = text.slice(0, squareMatch.index).trim();
+    } else {
+      const dashMatch = text.match(dashExpRegex);
+      if (dashMatch && dashMatch.index !== undefined) {
+        let rawExp = dashMatch[1].trim();
+        const trailingOnDashExp = parseInlineCorrectMarker(rawExp);
+        if (trailingOnDashExp.isCorrect) {
+          rawExp = trailingOnDashExp.cleanedText;
+          isCorrect = true;
+        }
+        explanation = rawExp;
+        text = text.slice(0, dashMatch.index).trim();
+      }
     }
   }
 
-  // Re-check if there is a trailing * or ✓ left on `text` after stripping the parenthesized rationale!
-  // Example: "ب) الشريان التاجي الأيمن * (التعليل: ...)"
-  const trailingCheckAfterExp = parseInlineCorrectMarker(text);
-  if (trailingCheckAfterExp.isCorrect) {
-    text = trailingCheckAfterExp.cleanedText;
+  // 2. Capture and strip any correct answer marker (*, ✓, ✔, ✅) before or after the rationale
+  const markerCheck = parseInlineCorrectMarker(text);
+  if (markerCheck.isCorrect) {
+    text = markerCheck.cleanedText;
     isCorrect = true;
   }
 
-  // Check if explanation itself indicates correctness
+  // Also strip any stray trailing/leading *, ✓, ✔, ✅ on `text`
+  if (/(?:^\s*[*✓✔☑✅]+\s*|\s*[*✓✔☑✅]+\s*$)/u.test(text)) {
+    isCorrect = true;
+    text = text
+      .replace(/^\s*[*✓✔☑✅]+\s*/u, '')
+      .replace(/\s*[*✓✔☑✅]+\s*$/u, '')
+      .trim();
+  }
+
+  // 3. Infer `isCorrect` from the beginning of the rationale if no explicit marker was present
   if (explanation && isCorrect === undefined) {
-    if (/^(?:صحيح|صح|إجابة صحيحة|correct|true|right)/iu.test(explanation)) {
+    if (/^(?:صحيح|صح|إجابة صحيحة|اجابة صحيحة|correct|true|right)\b/iu.test(explanation)) {
       isCorrect = true;
-    } else if (/^(?:خطأ|خاطئ|غير صحيح|غلط|incorrect|false|wrong)/iu.test(explanation)) {
+    } else if (/^(?:خطأ|خاطئ|غير صحيح|غلط|إجابة خاطئة|اجابة خاطئة|incorrect|false|wrong)\b/iu.test(explanation)) {
       isCorrect = false;
     }
   }
 
   return { text, explanation, isCorrect };
+}
+
+/**
+ * Second line of defense for UI display and exports:
+ * Guarantees that no option text ever renders a leaked `*`, `✓`, or `(Rationale: ...)` block.
+ */
+export function sanitizeOptionTextForDisplay(rawText: string): string {
+  if (!rawText) return '';
+  const { text } = extractOptionAndExplanation(String(rawText));
+  return parseInlineCorrectMarker(text)
+    .cleanedText
+    .replace(/^\s*[*✓✔☑✅]+\s*/u, '')
+    .replace(/\s*[*✓✔☑✅]+\s*$/u, '')
+    .trim();
 }
 
 /**
@@ -441,17 +484,19 @@ export function extractAssessmentMetadataFromText(rawText: string): {
       continue;
     }
 
-    // Exam Duration: المدة: 30 دقيقة / Duration: 45 min
-    const durationMatch = trimmed.match(/^(?:المدة|مدة الاختبار|زمن الاختبار|وقت الاختبار|Duration|Exam\s*Duration|Time\s*Limit)\s*[:\-=]\s*(\d+)\s*(?:دقيقة|دقائق|د|min|mins|minutes)?/iu);
+    // Exam Duration: المدة: 30 دقيقة / الوقت: 30 دقيقة / Duration: 45 min / Time: 30 min
+    const durationMatch = trimmed.match(/^(?:المدة|مدة الاختبار|زمن الاختبار|وقت الاختبار|الوقت|Duration|Exam\s*Duration|Time\s*Limit|Time)\s*[:\-=]\s*(\d+)\s*(?:دقيقة|دقائق|د|min|mins|minutes|m)?/iu);
     if (durationMatch) {
       metadata.durationMinutes = parseInt(durationMatch[1], 10);
       continue;
     }
 
-    // Question Timer: مؤقت السؤال: 45 ثانية / Question Timer: 60s
-    const qTimerMatch = trimmed.match(/^(?:مؤقت السؤال|مدة السؤال|زمن السؤال|مؤقت لكل سؤال|Question\s*Timer|Time\s*Per\s*Question|Per\s*Question)\s*[:\-=]\s*(\d+)\s*(?:ثانية|ثواني|ث|sec|secs|seconds|s)?/iu);
+    // Question Timer: مؤقت السؤال: 45 ثانية / وقت السؤال: 45 ثانية / Question Timer: 45 seconds / Per Question Timer: 45s
+    const qTimerMatch = trimmed.match(/^(?:مؤقت السؤال|وقت السؤال|مدة السؤال|زمن السؤال|مؤقت لكل سؤال|Question\s*Timer|Per\s*Question\s*Timer|Time\s*Per\s*Question|Per\s*Question)\s*[:\-=]\s*(\d+)\s*(?:ثانية|ثواني|ث|sec|secs|seconds|s)?/iu);
     if (qTimerMatch) {
-      metadata.questionDurationSeconds = parseInt(qTimerMatch[1], 10);
+      const parsedSeconds = parseInt(qTimerMatch[1], 10);
+      metadata.questionDurationSeconds = parsedSeconds;
+      metadata.questionTimerSeconds = parsedSeconds;
       continue;
     }
 
@@ -478,6 +523,8 @@ export function extractAssessmentMetadataFromText(rawText: string): {
     cleanedText: cleanedBodyText
   };
 }
+
+export const parseTxtHeaderBlock = extractAssessmentMetadataFromText;
 
 /**
  * Validates a parsed question draft and populates its `issues`, `isValid`, and duplicate flags.
@@ -588,17 +635,37 @@ export function validateAndAnnotateDrafts(
             ];
 
       let mappedCorrectOptionId = '';
+      const extractedOptionExplanations: Record<string, string> = {
+        ...(draft.optionExplanations || {})
+      };
       normalizedOptions = sourceOptions.map((opt, optIdx) => {
         const canonicalId = getOptionIdByIndex(optIdx);
-        if (draft.correctOptionId && (opt.id === draft.correctOptionId || canonicalId === draft.correctOptionId)) {
-          mappedCorrectOptionId = canonicalId;
+        const rawOptText = (opt.textArabic ?? '').replace(/^\s+/, '');
+        const extracted = extractOptionAndExplanation(rawOptText);
+        const cleanOptText = extracted.text || rawOptText;
+        const resolvedExp =
+          (opt.explanationArabic || opt.explanation || extracted.explanation || extractedOptionExplanations[canonicalId] || '').trim() ||
+          undefined;
+        if (resolvedExp) {
+          extractedOptionExplanations[canonicalId] = resolvedExp;
+        }
+        if (
+          (draft.correctOptionId && (opt.id === draft.correctOptionId || canonicalId === draft.correctOptionId)) ||
+          opt.isCorrect === true ||
+          extracted.isCorrect === true
+        ) {
+          if (!mappedCorrectOptionId || opt.id === draft.correctOptionId || canonicalId === draft.correctOptionId) {
+            mappedCorrectOptionId = canonicalId;
+          }
         }
         return {
           id: canonicalId,
-          textArabic: (opt.textArabic ?? '').replace(/^\s+/, ''),
-          ...(opt.textEnglish ? { textEnglish: opt.textEnglish.trim() } : {}),
-          ...(opt.explanationArabic !== undefined ? { explanationArabic: opt.explanationArabic } : {}),
-          ...(opt.isCorrect !== undefined ? { isCorrect: opt.isCorrect } : {})
+          textArabic: cleanOptText,
+          ...(opt.textEnglish ? { textEnglish: sanitizeOptionTextForDisplay(opt.textEnglish) } : {}),
+          ...(resolvedExp ? { explanationArabic: resolvedExp, explanation: resolvedExp } : {}),
+          ...(opt.isCorrect !== undefined || extracted.isCorrect !== undefined
+            ? { isCorrect: Boolean(opt.isCorrect ?? extracted.isCorrect) }
+            : {})
         };
       });
 
@@ -693,6 +760,15 @@ export function validateAndAnnotateDrafts(
 
     const hasBlockingError = issues.some(i => i.severity === 'error');
     const deterministicId = existingQuestionId || `q-${bankId}-${contentHash.slice(0, 12)}`;
+    const mergedOptExplanations: Record<string, string> = {
+      ...(draft.optionExplanations || {})
+    };
+    for (const o of normalizedOptions) {
+      const expText = (o.explanationArabic || o.explanation || '').trim();
+      if (expText) {
+        mergedOptExplanations[o.id] = expText;
+      }
+    }
 
     return {
       ...draft,
@@ -701,6 +777,7 @@ export function validateAndAnnotateDrafts(
       stemEnglish: stemEn || undefined,
       options: normalizedOptions,
       correctOptionId: validCorrectId,
+      ...(Object.keys(mergedOptExplanations).length > 0 ? { optionExplanations: mergedOptExplanations } : {}),
       points: Number(draft.points) > 0 ? Number(draft.points) : 5,
       contentHash,
       deterministicId,
@@ -732,16 +809,21 @@ function parseInlineCorrectMarker(line: string): { cleanedText: string; isCorrec
   let isCorrect = false;
 
   const correctPatterns = [
-    /\s*[\(\[]\s*(?:صحيح|الإجابة الصحيحة|اجابة صحيحة|صح|correct|right|true)\s*[\)\]]\s*$/iu,
+    /\s*\*?\s*[\(\[]\s*[✓✔☑✅]?\s*(?:صحيح|الإجابة الصحيحة|اجابة صحيحة|صح|correct(?:\s*answer)?|right|true)\s*[\)\]]\s*$/iu,
     /\s*(?:✓|✔|☑|✅)\s*$/u,
     /^\s*(?:✓|✔|☑|✅|\*+)\s+/u,
     /\s*\*+\s*$/u
   ];
 
-  for (const pat of correctPatterns) {
-    if (pat.test(text)) {
-      isCorrect = true;
-      text = text.replace(pat, '').trim();
+  let matched = true;
+  while (matched) {
+    matched = false;
+    for (const pat of correctPatterns) {
+      if (pat.test(text)) {
+        isCorrect = true;
+        text = text.replace(pat, '').trim();
+        matched = true;
+      }
     }
   }
 
@@ -957,11 +1039,11 @@ export function parseStructuredTextMCQs(
         inModelAnswer = false;
         for (const m of inlineMatches) {
           const marker = m[1];
-          const { cleanedText, isCorrect } = parseInlineCorrectMarker(m[2]);
-          const { text: optText, explanation: optExp, isCorrect: expIsCorrect } = extractOptionAndExplanation(cleanedText);
+          const { text: optText, explanation: optExp, isCorrect: expIsCorrect } = extractOptionAndExplanation(m[2]);
+          const { cleanedText, isCorrect } = parseInlineCorrectMarker(optText);
           rawOptions.push({
             marker,
-            text: optText,
+            text: cleanedText,
             isMarkedCorrect: isCorrect || Boolean(expIsCorrect),
             explanation: optExp
           });
@@ -979,11 +1061,11 @@ export function parseStructuredTextMCQs(
         if (!isNumericMarker || rawStemLines.length > 0 || explicitEnglishStemLines.length > 0) {
           inExplanation = false;
           inModelAnswer = false;
-          const { cleanedText, isCorrect } = parseInlineCorrectMarker(optMatch[3]);
-          const { text: optText, explanation: optExp, isCorrect: expIsCorrect } = extractOptionAndExplanation(cleanedText);
+          const { text: optText, explanation: optExp, isCorrect: expIsCorrect } = extractOptionAndExplanation(optMatch[3]);
+          const { cleanedText, isCorrect } = parseInlineCorrectMarker(optText);
           rawOptions.push({
             marker: markerChar,
-            text: optText,
+            text: cleanedText,
             isMarkedCorrect: leadingCheck || isCorrect || Boolean(expIsCorrect),
             explanation: optExp
           });
@@ -1520,6 +1602,15 @@ export function parseJsonMCQs(
 // 4. Unified Auto-Detect Entry Point
 // ---------------------------------------------------------------------------
 
+export interface BulkParseResult {
+  detectedFormat: 'text' | 'csv' | 'json';
+  drafts: ParsedQuestionDraft[];
+  detectedMetadata: DetectedAssessmentMetadata;
+  durationMinutes?: number;
+  questionDurationSeconds?: number;
+  questionTimerSeconds?: number;
+}
+
 export function parseBulkQuestionsInput(params: {
   rawInput: string;
   formatHint?: 'auto' | 'text' | 'csv' | 'json';
@@ -1528,11 +1619,7 @@ export function parseBulkQuestionsInput(params: {
   bankId: string;
   defaultPoints?: number;
   existingBankQuestions?: QuestionItemFull[];
-}): {
-  detectedFormat: 'text' | 'csv' | 'json';
-  drafts: ParsedQuestionDraft[];
-  detectedMetadata: DetectedAssessmentMetadata;
-} {
+}): BulkParseResult {
   const {
     rawInput,
     formatHint = 'auto',
@@ -1548,7 +1635,7 @@ export function parseBulkQuestionsInput(params: {
     return { detectedFormat: 'text', drafts: [], detectedMetadata: {} };
   }
 
-  // Extract Metadata Header (Language, Title, Type, Level, Batch, Duration)
+  // Extract Metadata Header (Language, Title, Type, Level, Batch, Duration, Question Timer)
   const { detectedMetadata, cleanedText } = extractAssessmentMetadataFromText(trimmed);
   const effectiveLanguage = detectedMetadata.language || languageHint || detectLanguageFromText(cleanedText);
   if (!detectedMetadata.language) {
@@ -1595,23 +1682,36 @@ export function parseBulkQuestionsInput(params: {
   const validated = validateAndAnnotateDrafts(rawDrafts, bankId, existingBankQuestions);
   const validCount = validated.filter(d => d.isValid).length || validated.length;
 
+  if (detectedMetadata.questionTimerSeconds && !detectedMetadata.questionDurationSeconds) {
+    detectedMetadata.questionDurationSeconds = detectedMetadata.questionTimerSeconds;
+  } else if (detectedMetadata.questionDurationSeconds && !detectedMetadata.questionTimerSeconds) {
+    detectedMetadata.questionTimerSeconds = detectedMetadata.questionDurationSeconds;
+  }
+
   if (validCount > 0) {
     if (detectedMetadata.questionDurationSeconds && detectedMetadata.questionDurationSeconds > 0) {
-      // Compute total duration from per-question timer × question count
-      const computedMinutes = Math.max(1, Math.ceil((detectedMetadata.questionDurationSeconds * validCount) / 60));
-      if (!detectedMetadata.durationMinutes || detectedMetadata.durationMinutes < computedMinutes) {
-        detectedMetadata.durationMinutes = computedMinutes;
+      // Only compute total duration if the user did not explicitly specify Duration in the header
+      if (!detectedMetadata.durationMinutes || detectedMetadata.durationMinutes <= 0) {
+        detectedMetadata.durationMinutes = Math.max(
+          1,
+          Math.ceil((detectedMetadata.questionDurationSeconds * validCount) / 60)
+        );
       }
     } else if (detectedMetadata.durationMinutes && detectedMetadata.durationMinutes > 0 && detectedMetadata.questionDurationSeconds === undefined) {
       // Compute per-question timer from total duration ÷ question count
-      detectedMetadata.questionDurationSeconds = Math.max(5, Math.round((detectedMetadata.durationMinutes * 60) / validCount));
+      const calcSec = Math.max(5, Math.floor((detectedMetadata.durationMinutes * 60) / validCount));
+      detectedMetadata.questionDurationSeconds = calcSec;
+      detectedMetadata.questionTimerSeconds = calcSec;
     }
   }
 
   return {
     detectedFormat,
     drafts: validated,
-    detectedMetadata
+    detectedMetadata,
+    durationMinutes: detectedMetadata.durationMinutes,
+    questionDurationSeconds: detectedMetadata.questionDurationSeconds,
+    questionTimerSeconds: detectedMetadata.questionTimerSeconds
   };
 }
 

@@ -34,7 +34,9 @@ import {
   AiPromptGeneratorConfig,
   computeQuestionFingerprint,
   detectLanguageFromText,
-  getSampleTemplateByLanguage
+  extractOptionAndExplanation,
+  getSampleTemplateByLanguage,
+  sanitizeOptionTextForDisplay
 } from './mcqBulkParser.ts';
 
 const IDB_NAME = 'umed_offline_questions_db';
@@ -352,8 +354,8 @@ export async function readLocalBankQuestionsAsync(bankId: string): Promise<Quest
 export function sanitizePublicQuestion(q: QuestionItemFull): AssessmentQuestionPublic {
   const sanitizedOptions: QuestionOption[] = (q.options || []).map((o) => ({
     id: o.id,
-    textArabic: o.textArabic,
-    ...(o.textEnglish ? { textEnglish: o.textEnglish } : {})
+    textArabic: sanitizeOptionTextForDisplay(o.textArabic),
+    ...(o.textEnglish ? { textEnglish: sanitizeOptionTextForDisplay(o.textEnglish) } : {})
   }));
 
   return cleanFirestoreData({
@@ -370,12 +372,24 @@ export function sanitizePublicQuestion(q: QuestionItemFull): AssessmentQuestionP
 }
 
 export function extractProtectedAnswerKey(q: QuestionItemFull): QuestionAnswerKey {
+  const optionExplanations: Record<string, string> = {
+    ...(q.optionExplanations || {})
+  };
+  for (const o of q.options || []) {
+    const exp = (o.explanationArabic || o.explanation || extractOptionAndExplanation(o.textArabic).explanation || '').trim();
+    if (exp) {
+      optionExplanations[o.id] = exp;
+    }
+  }
+
   return cleanFirestoreData({
     questionId: q.id,
     assessmentId: q.bankId,
     correctOptionId: q.correctOptionId,
+    ...(q.modelAnswerArabic ? { modelAnswerArabic: q.modelAnswerArabic } : {}),
     ...(q.explanationArabic ? { explanationArabic: q.explanationArabic } : {}),
     ...(q.explanationEnglish ? { explanationEnglish: q.explanationEnglish } : {}),
+    ...(Object.keys(optionExplanations).length > 0 ? { optionExplanations } : {}),
     points: Number(q.points) || 5
   });
 }
