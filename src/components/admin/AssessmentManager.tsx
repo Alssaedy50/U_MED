@@ -897,503 +897,323 @@ export default function AssessmentManager({
     }
   };
 
+  const handleConvertBankToAssessment = (bank: QuestionBank, targetType: AssessmentType) => {
+    setSelectedBankForAssessment(bank.id);
+    setAssessmentType(targetType);
+    setAssessmentLanguage(bank.language || 'ar');
+    const cleanTitle = bank.titleArabic.replace(/^بنك\s+أسئلة\s*/i, '').trim() || bank.titleArabic;
+    setTitleArabic(targetType === 'competition' ? `مسابقة: ${cleanTitle}` : `اختبار: ${cleanTitle}`);
+    setDescArabic(
+      bank.descriptionArabic ||
+        (targetType === 'competition'
+          ? `مسابقة طبية تنافسية مستخرجة من ${bank.titleArabic}`
+          : `اختبار أكاديمي شامل مستخرج من ${bank.titleArabic}`)
+    );
+    if (bank.studyLevelId && !isBatchScoped) {
+      setStudyLevelId(bank.studyLevelId);
+    }
+    const qCount = Math.max(bankQuestions.length, bank.questionCount || 10, 1);
+    setCreateBankQuestionCount(qCount);
+    const defaultQSec = targetType === 'competition' ? 30 : 45;
+    setQuestionDurationSeconds(defaultQSec);
+    setDurationMinutes(Math.max(1, Math.ceil((qCount * defaultQSec) / 60)));
+    setMaxAttempts(targetType === 'competition' ? 1 : 2);
+    setActiveTab('assessments');
+    setShowNewAssessmentForm(true);
+    setStatusMsg({
+      type: 'success',
+      text: `تم تجهيز ${targetType === 'competition' ? 'المسابقة الطبية' : 'الاختبار الأكاديمي'} من "${bank.titleArabic}" (${qCount} سؤال) — راجع الإعدادات واضغط حفظ ونشر!`
+    });
+  };
+
   return (
-    <div className="space-y-6" dir="rtl">
+    <div className="space-y-5" dir="rtl">
       
-      {/* Top Banner */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <div className="flex flex-wrap items-center gap-2 mb-1.5">
-            <span className="text-xs px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-semibold leading-snug">
-              إدارة بنوك الأسئلة والاختبارات — {renderBiDiRoleBadge(userRole)}
-            </span>
-            {isBatchScoped && assignedStudyLevelId && (
-              <span className="text-xs px-2.5 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30 font-semibold">
-                مخصص للدفعة: {getLevelLabel(assignedStudyLevelId)}
+      {/* Unified Header, Scope Filter & Cloud Sync Bar (Replaces 3 duplicate stacked banners) */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg space-y-4">
+        {/* Top Row: Title + Role Context + Live Sync Status */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+              <span className="text-amber-300 font-bold">
+                {renderBiDiRoleBadge(userRole)}
               </span>
+              {isBatchScoped && assignedStudyLevelId && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="text-teal-300 font-semibold">
+                    دفعة: {getLevelLabel(assignedStudyLevelId)}
+                  </span>
+                </>
+              )}
+              <span aria-hidden="true">·</span>
+              <span className="font-mono tabular-nums">
+                البنوك: <strong className="text-white">{banks.length}</strong>
+              </span>
+              <span aria-hidden="true">·</span>
+              <span className="font-mono tabular-nums">
+                التقييمات: <strong className="text-white">{assessments.length}</strong>
+              </span>
+            </div>
+            <h2 className="text-base sm:text-lg font-black text-white">
+              إدارة بنوك الأسئلة والامتحانات والمسابقات الطبية
+            </h2>
+          </div>
+
+          {/* Compact Cloud Synchronization Indicator */}
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span
+              className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 border ${
+                syncState.isOnline
+                  ? 'bg-emerald-950/60 border-emerald-800/60 text-emerald-300'
+                  : 'bg-amber-950/80 border-amber-700/70 text-amber-300'
+              }`}
+            >
+              {syncState.isOnline ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
+              <span>{syncState.isOnline ? 'متزامن سحابياً' : 'وضع عدم الاتصال'}</span>
+              {syncState.pendingCount > 0 && (
+                <span className="font-mono tabular-nums text-amber-300">({syncState.pendingCount} بالانتظار)</span>
+              )}
+            </span>
+
+            {syncState.pendingCount > 0 && (
+              <button
+                type="button"
+                onClick={() => flushQuestionOutbox()}
+                disabled={syncState.syncing || !syncState.isOnline}
+                className="px-3 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-40 text-white text-xs font-bold flex items-center gap-1 transition-colors"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${syncState.syncing ? 'animate-spin' : ''}`} />
+                <span>{syncState.syncing ? 'جاري المزامنة...' : 'مزامنة الآن'}</span>
+              </button>
             )}
           </div>
-          <h2 className="text-xl font-bold text-white">منصة إدارة الامتحانات والمسابقات الطبية</h2>
-          <p className="text-xs text-slate-400 mt-1">
-            بناء وتعديل وحذف بنوك الأسئلة، ضبط مفاتيح الإجابات المحمية خادمياً، جدولة المواعيد، وتصدير النتائج
-          </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
-          {isOwner && (
-            <select
-              value={universityId}
-              onChange={(e) => setUniversityId(e.target.value)}
-              className="px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-teal-300 font-bold"
-            >
-              {universities.map(u => (
-                <option key={u.id} value={u.id}>{u.nameArabic}</option>
-              ))}
-            </select>
-          )}
-        <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-950 rounded-xl border border-slate-800 w-full lg:w-auto">
-          <button
-            onClick={() => setActiveTab('banks')}
-            className={`flex-1 sm:flex-initial justify-center px-3.5 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-              activeTab === 'banks' ? 'bg-teal-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <BookOpen className="w-4 h-4 shrink-0" />
-            <span>بنوك الأسئلة ({banks.length})</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('assessments')}
-            className={`flex-1 sm:flex-initial justify-center px-3.5 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-              activeTab === 'assessments' ? 'bg-amber-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <Trophy className="w-4 h-4 shrink-0" />
-            <span>الاختبارات والمسابقات ({assessments.length})</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('results')}
-            className={`flex-1 sm:flex-initial justify-center px-3.5 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-              activeTab === 'results' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <FileSpreadsheet className="w-4 h-4 shrink-0" />
-            <span>النتائج والتصدير</span>
-          </button>
-        </div>
-        </div>
-      </div>
-
-      {/* Inline Academic Filter Bar (replaces static Academic Scope banner) */}
-      <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-3.5 sm:p-4 flex flex-wrap items-center justify-between gap-3 text-xs overflow-hidden">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap items-center gap-2.5 w-full lg:w-auto">
-          <div className="flex items-center gap-1.5">
-            <span className="text-[var(--text-muted)] font-bold shrink-0">الجامعة:</span>
-            <select
-              value={universityId}
-              disabled={!isOwner}
-              onChange={(e) => {
-                const nextUnivId = e.target.value;
-                setUniversityId(nextUnivId);
-                const foundUniv = universities.find(u => u.id === nextUnivId);
-                saveUserAcademicContext({
-                  universityId: nextUnivId,
-                  universityName: foundUniv?.nameArabic || ''
-                });
-              }}
-              className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-bold text-xs focus:outline-none focus:border-teal-500"
-            >
-              {universities.map(u => (
-                <option key={u.id} value={u.id}>{u.nameArabic}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            <span className="text-[var(--text-muted)] font-bold shrink-0">المستوى الدراسي:</span>
-            <select
-              value={studyLevelId}
-              disabled={isBatchScoped}
-              onChange={(e) => {
-                const nextLvlId = e.target.value;
-                setStudyLevelId(nextLvlId);
-                const foundLvl = studyLevels.find(l => l.id === nextLvlId);
-                if (nextLvlId) {
+        {/* Bottom Row: Single University & Level Filter + Section Tabs */}
+        <div className="pt-3.5 border-t border-slate-800 flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-3">
+          {/* Academic Scope Selectors */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap items-center gap-2.5 text-xs">
+            <div className="flex items-center gap-1.5">
+              <span className="text-slate-400 font-bold shrink-0">الجامعة:</span>
+              <select
+                value={universityId}
+                disabled={!isOwner}
+                onChange={(e) => {
+                  const nextUnivId = e.target.value;
+                  setUniversityId(nextUnivId);
+                  const foundUniv = universities.find(u => u.id === nextUnivId);
                   saveUserAcademicContext({
-                    studyLevelId: nextLvlId,
-                    studyLevelName: foundLvl?.titleArabic || ''
+                    universityId: nextUnivId,
+                    universityName: foundUniv?.nameArabic || ''
                   });
-                }
-              }}
-              className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-bold text-xs focus:outline-none focus:border-teal-500"
-            >
-              {!isBatchScoped && <option value="">جميع المستويات الدراسية</option>}
-              {studyLevels.map(lvl => (
-                <option key={lvl.id} value={lvl.id}>{lvl.titleArabic}</option>
-              ))}
-            </select>
+                }}
+                className="w-full sm:w-auto px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-teal-300 font-bold text-xs focus:outline-none focus:border-teal-500"
+              >
+                {universities.map(u => (
+                  <option key={u.id} value={u.id}>{u.nameArabic}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <span className="text-slate-400 font-bold shrink-0">المستوى الدراسي:</span>
+              <select
+                value={studyLevelId}
+                disabled={isBatchScoped}
+                onChange={(e) => {
+                  const nextLvlId = e.target.value;
+                  setStudyLevelId(nextLvlId);
+                  const foundLvl = studyLevels.find(l => l.id === nextLvlId);
+                  if (nextLvlId) {
+                    saveUserAcademicContext({
+                      studyLevelId: nextLvlId,
+                      studyLevelName: foundLvl?.titleArabic || ''
+                    });
+                  }
+                }}
+                className="w-full sm:w-auto px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold text-xs focus:outline-none focus:border-teal-500"
+              >
+                {!isBatchScoped && <option value="">جميع المستويات الدراسية</option>}
+                {studyLevels.map(lvl => (
+                  <option key={lvl.id} value={lvl.id}>{lvl.titleArabic}</option>
+                ))}
+              </select>
+            </div>
           </div>
-        </div>
 
-        <div className="text-[11px] text-[var(--text-muted)] flex items-center gap-3">
-          <span>بنوك الأسئلة المعروضة: <strong className="text-[var(--text-primary)]">{banks.length}</strong></span>
-          <span>·</span>
-          <span>الاختبارات والمسابقات: <strong className="text-[var(--text-primary)]">{assessments.length}</strong></span>
-        </div>
-      </div>
-
-      {/* Offline / Outbox Synchronization Status Bar */}
-      <div className="px-4 py-2.5 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
-        <div className="flex flex-wrap items-center gap-2.5">
-          <span
-            className={`px-2.5 py-1 rounded-full font-bold flex items-center gap-1.5 border ${
-              syncState.isOnline
-                ? 'bg-emerald-950/70 border-emerald-700/60 text-emerald-300'
-                : 'bg-amber-950/80 border-amber-700/70 text-amber-300'
-            }`}
-          >
-            {syncState.isOnline ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
-            <span>{syncState.isOnline ? 'متصل بالسحابة (تزامن تلقائي نشط)' : 'وضع العمل بدون إنترنت (Offline Mode)'}</span>
-          </span>
-
-          {syncState.pendingCount > 0 ? (
-            <span className="text-amber-300 font-semibold">
-              يوجد {syncState.pendingCount} عملية محفوظة محلياً بانتظار المزامنة السحابية التلقائية
-            </span>
-          ) : (
-            <span className="text-slate-400">
-              جميع بنوك الأسئلة ومفاتيح الإجابات متزامنة ومحمية ✓
-            </span>
-          )}
-        </div>
-
-        <div className="flex items-center gap-2">
-          {syncState.lastSyncedAt && (
-            <span className="text-[11px] text-slate-400 font-mono">
-              آخر مزامنة: {new Date(syncState.lastSyncedAt).toLocaleTimeString('ar-YE')}
-            </span>
-          )}
-          {syncState.pendingCount > 0 && (
+          {/* Primary Navigation Tabs */}
+          <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-950 rounded-xl border border-slate-800">
             <button
-              type="button"
-              onClick={() => flushQuestionOutbox()}
-              disabled={syncState.syncing || !syncState.isOnline}
-              className="px-3 py-1 rounded-lg bg-teal-600 hover:bg-teal-500 disabled:opacity-40 text-white text-[11px] font-bold flex items-center gap-1 transition-colors"
+              onClick={() => setActiveTab('banks')}
+              className={`flex-1 sm:flex-initial justify-center px-3.5 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 tabular-nums ${
+                activeTab === 'banks' ? 'bg-teal-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'
+              }`}
             >
-              <RefreshCw className={`w-3 h-3 ${syncState.syncing ? 'animate-spin' : ''}`} />
-              <span>{syncState.syncing ? 'جاري المزامنة...' : 'مزامنة الآن'}</span>
+              <BookOpen className="w-4 h-4 shrink-0" />
+              <span>بنوك الأسئلة ({banks.length})</span>
             </button>
-          )}
+            <button
+              onClick={() => setActiveTab('assessments')}
+              className={`flex-1 sm:flex-initial justify-center px-3.5 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 tabular-nums ${
+                activeTab === 'assessments' ? 'bg-amber-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Trophy className="w-4 h-4 shrink-0" />
+              <span>الاختبارات والمسابقات ({assessments.length})</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('results')}
+              className={`flex-1 sm:flex-initial justify-center px-3.5 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                activeTab === 'results' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <FileSpreadsheet className="w-4 h-4 shrink-0" />
+              <span>النتائج والتصدير</span>
+            </button>
+          </div>
         </div>
       </div>
 
       {statusMsg && (
-        <div className={`p-4 rounded-xl text-xs font-semibold flex items-center gap-2 border ${
+        <div className={`p-3.5 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 border ${
           statusMsg.type === 'error' ? 'bg-rose-950/60 border-rose-800 text-rose-300' : 'bg-teal-950/60 border-teal-800 text-teal-300'
         }`}>
-          {statusMsg.type === 'error' ? <AlertCircle className="w-4 h-4 shrink-0" /> : <CheckCircle2 className="w-4 h-4 shrink-0" />}
-          <span>{statusMsg.text}</span>
+          <div className="flex items-center gap-2">
+            {statusMsg.type === 'error' ? <AlertCircle className="w-4 h-4 shrink-0" /> : <CheckCircle2 className="w-4 h-4 shrink-0" />}
+            <span>{statusMsg.text}</span>
+          </div>
+          <button type="button" onClick={() => setStatusMsg(null)} className="text-slate-400 hover:text-white">
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 
-      {/* TAB 1: QUESTION BANKS (Main Title Header + Standalone Popup Selector) */}
+      {/* TAB 1: QUESTION BANKS */}
       {activeTab === 'banks' && (
-        <div className="space-y-5">
+        <div className="space-y-4">
           {/* Active Question Bank Main Header Bar */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-start sm:items-center gap-3 min-w-0">
-              <div className="w-11 h-11 rounded-2xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-400 shrink-0">
-                <BookOpen className="w-5 h-5" />
-              </div>
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[11px] text-slate-400 font-semibold">بنك الأسئلة المختار حالياً:</span>
-                  <span className="px-2 py-0.5 rounded-full bg-teal-950/90 border border-teal-700/60 text-[10px] font-bold text-teal-300">
-                    إجمالي البنوك المتاحة لتخصصك ومستواك: {banks.length}
-                  </span>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg space-y-4">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="flex items-start sm:items-center gap-3 min-w-0">
+                <div className="w-11 h-11 rounded-2xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-400 shrink-0">
+                  <BookOpen className="w-5 h-5" />
                 </div>
-                <div className="flex flex-wrap items-center gap-2 mt-1">
+                <div className="min-w-0 space-y-1">
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+                    <span>بنك الأسئلة المفتوح حالياً</span>
+                    {selectedBank && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span className="text-teal-300 font-bold">
+                          {selectedBank.language === 'en' ? 'English' : selectedBank.language === 'bilingual' ? 'ثنائي اللغة (Ar+En)' : 'العربية'}
+                        </span>
+                        <span aria-hidden="true">·</span>
+                        <span className="text-amber-300 font-bold">
+                          {selectedBank.questionTypeMode === 'mcq' ? 'اختيارات MCQ' : selectedBank.questionTypeMode === 'true_false' ? 'صح وخطأ' : selectedBank.questionTypeMode === 'fill_blank' ? 'إكمال الفراغ' : selectedBank.questionTypeMode === 'essay' ? 'مقالي' : 'بنك هجين شامل'}
+                        </span>
+                        <span aria-hidden="true">·</span>
+                        <span className="font-mono tabular-nums">عدد الأسئلة: <strong className="text-white">{bankQuestions.length}</strong></span>
+                        {selectedBank.studyLevelId && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span className="text-indigo-300 font-semibold">{getLevelLabel(selectedBank.studyLevelId)}</span>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </div>
                   <h3 className="text-base sm:text-lg font-black text-white">
                     {selectedBank ? selectedBank.titleArabic : 'لم يتم اختيار بنك أسئلة'}
                   </h3>
                 </div>
+              </div>
+
+              {/* Bank Management & Question Addition Buttons */}
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowBankSelectorModal(true)}
+                  className="py-2 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-teal-300 hover:text-white text-xs font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 tabular-nums"
+                >
+                  <BookOpen className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                  <span>تبديل البنك ({banks.length}) ▾</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowNewBankForm(true)}
+                  className="py-2 px-3.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                >
+                  <Plus className="w-3.5 h-3.5 shrink-0" />
+                  <span>بنك جديد</span>
+                </button>
+
                 {selectedBank && (
-                  <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[11px] text-slate-400">
-                    <span className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800 text-teal-300 font-bold">
-                      اللغة: {selectedBank.language === 'en' ? 'English' : selectedBank.language === 'bilingual' ? 'ثنائي اللغة (Ar+En)' : 'العربية'}
-                    </span>
-                    <span className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800 text-amber-300 font-bold">
-                      النمط: {selectedBank.questionTypeMode === 'mcq' ? 'اختيارات فقط' : selectedBank.questionTypeMode === 'true_false' ? 'صح وخطأ فقط' : selectedBank.questionTypeMode === 'fill_blank' ? 'إكمال الفراغ فقط' : selectedBank.questionTypeMode === 'essay' ? 'مقالي فقط' : 'بنك هجين شامل'}
-                    </span>
-                    <span>•</span>
-                    <span>عدد الأسئلة: <strong className="text-white">{bankQuestions.length}</strong></span>
-                    {selectedBank.studyLevelId && (
-                      <>
-                        <span>•</span>
-                        <span className="text-indigo-300 font-semibold">{getLevelLabel(selectedBank.studyLevelId)}</span>
-                      </>
-                    )}
-                    {selectedBank.blockName && (
-                      <>
-                        <span>•</span>
-                        <span className="text-emerald-300 font-semibold">{selectedBank.blockName}</span>
-                      </>
-                    )}
-                  </div>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setEditingBank(selectedBank)}
+                      className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                    >
+                      <Edit2 className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                      <span>تعديل</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowBulkImportModal(true)}
+                      className="py-2 px-3.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                    >
+                      <Upload className="w-3.5 h-3.5 shrink-0" />
+                      <span>استيراد دفعة أسئلة</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowNewQuestionForm(true)}
+                      className="py-2 px-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                    >
+                      <Plus className="w-3.5 h-3.5 shrink-0" />
+                      <span>سؤال يدوي</span>
+                    </button>
+                  </>
                 )}
               </div>
             </div>
 
-            <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2.5 w-full lg:w-auto">
-              <button
-                type="button"
-                onClick={() => setShowBankSelectorModal(true)}
-                className="col-span-2 sm:col-span-1 py-2.5 px-4 min-h-[42px] rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-teal-300 hover:text-white text-xs font-bold flex items-center justify-center gap-2 transition-colors"
-                title="فتح نافذة اختيار وإدارة بنوك الأسئلة"
-              >
-                <BookOpen className="w-4 h-4 text-teal-400 shrink-0" />
-                <span>تبديل وإدارة البنوك ({banks.length}) ▾</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setShowNewBankForm(!showNewBankForm)}
-                className="py-2.5 px-3.5 min-h-[42px] rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md"
-              >
-                <Plus className="w-4 h-4 shrink-0" />
-                <span>بنك أسئلة جديد</span>
-              </button>
-
-              {selectedBank && (
-                <>
+            {/* 1-Click Direct Bank Conversion Bar (Convert Bank -> Exam or Competition) */}
+            {selectedBank && (
+              <div className="pt-3 border-t border-slate-800/90 flex flex-wrap items-center justify-between gap-2.5 text-xs">
+                <span className="text-slate-400 font-semibold">
+                  تحويل فوري لبنك الأسئلة الحالي ({bankQuestions.length} سؤال) إلى تقييم جاهز للنشر للطلاب:
+                </span>
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => setEditingBank(selectedBank)}
-                    className="py-2.5 px-3.5 min-h-[42px] rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+                    onClick={() => handleConvertBankToAssessment(selectedBank, 'exam')}
+                    className="px-3.5 py-1.5 rounded-xl bg-teal-500/15 hover:bg-teal-600 text-teal-300 hover:text-white border border-teal-500/30 font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap"
                   >
-                    <Edit2 className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-                    <span>تعديل البنك</span>
+                    <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
+                    <span>تحويل البنك إلى اختبار أكاديمي</span>
                   </button>
                   <button
                     type="button"
-                    onClick={() => setShowBulkImportModal(true)}
-                    className="py-2.5 px-3.5 min-h-[42px] rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-lg"
+                    onClick={() => handleConvertBankToAssessment(selectedBank, 'competition')}
+                    className="px-3.5 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-600 text-amber-300 hover:text-white border border-amber-500/30 font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap"
                   >
-                    <Upload className="w-4 h-4 shrink-0" />
-                    <span>استيراد دفعة أسئلة</span>
+                    <Trophy className="w-3.5 h-3.5 shrink-0" />
+                    <span>تحويل البنك إلى مسابقة تنافسية</span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowNewQuestionForm(!showNewQuestionForm)}
-                    className="py-2.5 px-3.5 min-h-[42px] rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md"
-                  >
-                    <Plus className="w-4 h-4 shrink-0" />
-                    <span>سؤال يدوي</span>
-                  </button>
-                </>
-              )}
-            </div>
+                </div>
+              </div>
+            )}
           </div>
-
-          {/* Compact New Bank Creation Form */}
-          {showNewBankForm && (
-            <form onSubmit={handleCreateBank} className="p-5 rounded-2xl bg-slate-900 border border-teal-500/40 space-y-4 shadow-xl">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
-                <h4 className="text-xs font-bold text-teal-300">إنشاء بنك أسئلة جديد (يرتبط تلقائياً بمستواك وبلوكك الدراسي)</h4>
-                <button type="button" onClick={() => setShowNewBankForm(false)} className="text-slate-400 hover:text-white">
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="text-[11px] text-slate-400 block mb-1 font-bold">لغة البنك الافتراضية (قائمة منبثقة):</label>
-                  <select
-                    value={newBankLanguage}
-                    onChange={(e) => setNewBankLanguage(e.target.value as AssessmentLanguage)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-teal-300 font-bold focus:outline-none focus:border-teal-500"
-                  >
-                    <option value="ar">العربية (مع مصطلحات طبية)</option>
-                    <option value="en">English (Pure Medical English)</option>
-                    <option value="bilingual">ثنائي اللغة (Ar + En)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-[11px] text-slate-400 block mb-1 font-bold">نوع أسئلة البنك (قائمة منبثقة):</label>
-                  <select
-                    value={newBankTypeMode}
-                    onChange={(e) => setNewBankTypeMode(e.target.value as BankQuestionTypeMode)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-amber-300 font-bold focus:outline-none focus:border-teal-500"
-                  >
-                    <option value="hybrid">بنك هجين شامل (اختيارات + صح وخطأ + إكمال + مقالي)</option>
-                    <option value="mcq">اختيارات من متعدد فقط (MCQ)</option>
-                    <option value="true_false">صح وخطأ فقط (True / False)</option>
-                    <option value="fill_blank">إكمال الفراغ فقط (Fill in the Blank)</option>
-                    <option value="essay">أسئلة مقالية وسريرية فقط (Essay)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-[11px] text-slate-400 block mb-1 font-bold">المستوى الدراسي للبنك:</label>
-                  <select
-                    value={studyLevelId}
-                    onChange={(e) => setStudyLevelId(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-bold focus:outline-none focus:border-teal-500"
-                  >
-                    {studyLevels.map(lvl => (
-                      <option key={lvl.id} value={lvl.id}>{lvl.titleArabic}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <input
-                  type="text"
-                  placeholder={newBankLanguage === 'en' ? 'Question Bank Title (e.g., Year 2 Hematology Block Bank)' : 'عنوان بنك الأسئلة (مثال: بنك أسئلة بلوك الدم سنة ثانية)'}
-                  value={newBankTitle}
-                  onChange={(e) => setNewBankTitle(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-teal-500"
-                  required
-                />
-                <input
-                  type="text"
-                  placeholder="وصف مختصر للبنك أو المقرر..."
-                  value={newBankDesc}
-                  onChange={(e) => setNewBankDesc(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-teal-500"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowNewBankForm(false)}
-                  className="px-4 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold"
-                >
-                  إلغاء
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold shadow-md"
-                >
-                  حفظ البنك وفتحه
-                </button>
-              </div>
-            </form>
-          )}
 
           {/* Selected Bank Questions Area */}
           <div>
             {selectedBank ? (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-5">
 
-                {showNewQuestionForm && (
-                  <form onSubmit={handleCreateQuestion} className="p-5 rounded-xl bg-slate-950 border border-slate-800 space-y-4">
-                    <h4 className="text-xs font-bold text-teal-400 border-b border-slate-800 pb-2">
-                      إضافة سؤال جديد لبنك {selectedBank.titleArabic}
-                    </h4>
-
-                    <div className="space-y-2">
-                      <label className="text-[11px] text-slate-400 block">نص السؤال (بالعربية)</label>
-                      <textarea
-                        value={stemArabic}
-                        onChange={(e) => setStemArabic(e.target.value)}
-                        placeholder="أدخل نص السؤال السريري..."
-                        className="w-full p-3 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white focus:border-teal-500 focus:outline-none"
-                        rows={2}
-                        required
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <label className="text-[11px] text-slate-400 block">النص الإنجليزي المصاحب (اختياري - للمصطلحات الطبية)</label>
-                      <input
-                        type="text"
-                        value={stemEnglish}
-                        onChange={(e) => setStemEnglish(e.target.value)}
-                        placeholder="Optional English medical stem..."
-                        className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono"
-                        dir="ltr"
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <div>
-                        <label className="text-[11px] text-slate-400 block">خيار (أ)</label>
-                        <input
-                          type="text"
-                          value={optA}
-                          onChange={(e) => setOptA(e.target.value)}
-                          className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white"
-                          required
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[11px] text-slate-400 block">خيار (ب)</label>
-                        <input
-                          type="text"
-                          value={optB}
-                          onChange={(e) => setOptB(e.target.value)}
-                          className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white"
-                          required
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[11px] text-slate-400 block">خيار (ج)</label>
-                        <input
-                          type="text"
-                          value={optC}
-                          onChange={(e) => setOptC(e.target.value)}
-                          className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[11px] text-slate-400 block">خيار (د)</label>
-                        <input
-                          type="text"
-                          value={optD}
-                          onChange={(e) => setOptD(e.target.value)}
-                          className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-                      <div>
-                        <label className="text-[11px] text-slate-400 block">الإجابة الصحيحة المعتمدة (محمية خادمياً)</label>
-                        <select
-                          value={correctOpt}
-                          onChange={(e) => setCorrectOpt(e.target.value)}
-                          className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs text-teal-400 font-bold"
-                        >
-                          <option value="opt-a">خيار (أ)</option>
-                          <option value="opt-b">خيار (ب)</option>
-                          <option value="opt-c">خيار (ج)</option>
-                          <option value="opt-d">خيار (د)</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="text-[11px] text-slate-400 block">درجة / نقاط السؤال</label>
-                        <input
-                          type="number"
-                          value={points}
-                          onChange={(e) => setPoints(Number(e.target.value))}
-                          className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white font-mono"
-                          min={1}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="text-[11px] text-slate-400 block">التفسير العلمي للإجابة (اختياري)</label>
-                      <input
-                        type="text"
-                        value={explanation}
-                        onChange={(e) => setExplanation(e.target.value)}
-                        placeholder="شرح سبب اختيار الإجابة الصحيحة..."
-                        className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white"
-                      />
-                    </div>
-
-                    <div className="flex items-center justify-end gap-2 pt-2">
-                      <button
-                        type="button"
-                        onClick={() => setShowNewQuestionForm(false)}
-                        className="px-4 py-2 rounded-xl bg-slate-800 text-slate-400 text-xs font-semibold"
-                      >
-                        إلغاء
-                      </button>
-                      <button
-                        type="submit"
-                        className="px-5 py-2 rounded-xl bg-teal-600 text-white text-xs font-bold"
-                      >
-                        حفظ السؤال في البنك
-                      </button>
-                    </div>
-                  </form>
-                )}
-
-                {bankQuestions.length === 0 && !showNewQuestionForm ? (
+                {bankQuestions.length === 0 ? (
                   <div className="p-6 text-center rounded-xl bg-slate-950/70 border border-slate-800 space-y-3">
                     <p className="text-xs text-slate-400">
                       لا توجد أسئلة مضافة في هذا البنك حتى الآن. يمكنك استيراد أو توليد دفعة أسئلة كاملة أو إضافة سؤال يدوياً.
@@ -1424,16 +1244,16 @@ export default function AssessmentManager({
                         <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                           <div className="space-y-1.5 flex-1 min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-xs font-extrabold px-2.5 py-1 rounded-lg bg-teal-500/15 border border-teal-500/30 text-teal-300">
+                              <span className="text-xs font-extrabold px-2.5 py-1 rounded-lg bg-teal-500/15 border border-teal-500/30 text-teal-300 tabular-nums">
                                 سؤال #{idx + 1} ({q.points} نقاط)
                               </span>
                               {q.syncStatus === 'pending_sync' ? (
-                                <span className="px-2.5 py-0.5 rounded-lg bg-amber-950/80 border border-amber-700/70 text-amber-300 text-xs font-semibold">
-                                  محفوظ محلياً — بانتظار المزامنة
+                                <span className="text-amber-300 text-xs font-semibold">
+                                  · محفوظ محلياً — بانتظار المزامنة
                                 </span>
                               ) : (
-                                <span className="px-2.5 py-0.5 rounded-lg bg-emerald-950/60 border border-emerald-800/60 text-emerald-300 text-xs font-semibold">
-                                  متزامن سحابياً ✓
+                                <span className="text-emerald-400 text-xs font-semibold">
+                                  · متزامن سحابياً
                                 </span>
                               )}
                             </div>
@@ -1526,21 +1346,284 @@ export default function AssessmentManager({
         </div>
       )}
 
+      {/* MODAL OVERLAY: New Question Bank Creation */}
+      {showNewBankForm && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto overscroll-contain" dir="rtl">
+          <div className="bg-slate-900 border border-teal-500/40 rounded-2xl max-w-xl w-full shadow-2xl overflow-hidden my-auto">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-950/80">
+              <div>
+                <h3 className="text-sm font-black text-white">إنشاء بنك أسئلة طبي جديد</h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">يرتبط تلقائياً بالجامعة والمستوى الدراسي المختار</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowNewBankForm(false)}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateBank} className="p-5 space-y-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] text-slate-300 block mb-1 font-bold">لغة البنك الافتراضية:</label>
+                  <select
+                    value={newBankLanguage}
+                    onChange={(e) => setNewBankLanguage(e.target.value as AssessmentLanguage)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-teal-300 font-bold focus:outline-none focus:border-teal-500"
+                  >
+                    <option value="ar">العربية (مع مصطلحات طبية)</option>
+                    <option value="en">English (Pure Medical English)</option>
+                    <option value="bilingual">ثنائي اللغة (Ar + En)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[11px] text-slate-300 block mb-1 font-bold">المستوى الدراسي للبنك:</label>
+                  <select
+                    value={studyLevelId}
+                    onChange={(e) => setStudyLevelId(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-bold focus:outline-none focus:border-teal-500"
+                  >
+                    {studyLevels.map(lvl => (
+                      <option key={lvl.id} value={lvl.id}>{lvl.titleArabic}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[11px] text-slate-300 block mb-1 font-bold">نوع أسئلة البنك:</label>
+                <select
+                  value={newBankTypeMode}
+                  onChange={(e) => setNewBankTypeMode(e.target.value as BankQuestionTypeMode)}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-amber-300 font-bold focus:outline-none focus:border-teal-500"
+                >
+                  <option value="hybrid">بنك هجين شامل (اختيارات + صح وخطأ + إكمال + مقالي)</option>
+                  <option value="mcq">اختيارات من متعدد فقط (MCQ)</option>
+                  <option value="true_false">صح وخطأ فقط (True / False)</option>
+                  <option value="fill_blank">إكمال الفراغ فقط (Fill in the Blank)</option>
+                  <option value="essay">أسئلة مقالية وسريرية فقط (Essay)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[11px] text-slate-300 block mb-1 font-bold">عنوان بنك الأسئلة:</label>
+                <input
+                  type="text"
+                  placeholder={newBankLanguage === 'en' ? 'Question Bank Title (e.g., Year 2 Hematology Block Bank)' : 'مثال: بنك أسئلة بلوك الدم والمناعة سنة ثانية'}
+                  value={newBankTitle}
+                  onChange={(e) => setNewBankTitle(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-teal-500"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-slate-300 block mb-1 font-bold">وصف مختصر للبنك أو المقرر (اختياري):</label>
+                <input
+                  type="text"
+                  placeholder="وصف مختصر لمحتويات البنك..."
+                  value={newBankDesc}
+                  onChange={(e) => setNewBankDesc(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-teal-500"
+                />
+              </div>
+
+              <div className="pt-3 border-t border-slate-800 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowNewBankForm(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold shadow-md"
+                >
+                  حفظ البنك وفتحه
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL OVERLAY: New Manual Question Form */}
+      {showNewQuestionForm && selectedBank && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-start sm:items-center justify-center p-2.5 sm:p-4 overflow-y-auto overscroll-contain" dir="rtl">
+          <div className="bg-slate-900 border border-indigo-500/40 rounded-2xl max-w-2xl w-full max-h-[90dvh] flex flex-col shadow-2xl my-auto overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-950/80 shrink-0">
+              <div>
+                <h3 className="text-sm font-black text-white">إضافة سؤال يدوي جديد</h3>
+                <p className="text-[11px] text-teal-300 mt-0.5">البنك الهدف: {selectedBank.titleArabic}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowNewQuestionForm(false)}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateQuestion} className="flex-1 overflow-y-auto p-5 space-y-4 text-xs overscroll-contain">
+              <div className="space-y-1.5">
+                <label className="text-[11px] text-slate-300 font-bold block">نص السؤال (بالعربية أو الإنجليزية):</label>
+                <textarea
+                  value={stemArabic}
+                  onChange={(e) => setStemArabic(e.target.value)}
+                  placeholder="أدخل نص السؤال السريري..."
+                  className="w-full p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:border-teal-500 focus:outline-none"
+                  rows={3}
+                  required
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[11px] text-slate-400 block">النص الإنجليزي المصاحب (اختياري - للمصطلحات الطبية):</label>
+                <input
+                  type="text"
+                  value={stemEnglish}
+                  onChange={(e) => setStemEnglish(e.target.value)}
+                  placeholder="Optional English medical stem..."
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-mono"
+                  dir="ltr"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] text-slate-300 font-semibold block mb-1">خيار (أ)</label>
+                  <input
+                    type="text"
+                    value={optA}
+                    onChange={(e) => setOptA(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-slate-300 font-semibold block mb-1">خيار (ب)</label>
+                  <input
+                    type="text"
+                    value={optB}
+                    onChange={(e) => setOptB(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-slate-300 font-semibold block mb-1">خيار (ج)</label>
+                  <input
+                    type="text"
+                    value={optC}
+                    onChange={(e) => setOptC(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-slate-300 font-semibold block mb-1">خيار (د)</label>
+                  <input
+                    type="text"
+                    value={optD}
+                    onChange={(e) => setOptD(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                <div>
+                  <label className="text-[11px] text-slate-300 font-semibold block mb-1">الإجابة الصحيحة المعتمدة (محمية خادمياً)</label>
+                  <select
+                    value={correctOpt}
+                    onChange={(e) => setCorrectOpt(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-teal-400 font-bold"
+                  >
+                    <option value="opt-a">خيار (أ)</option>
+                    <option value="opt-b">خيار (ب)</option>
+                    <option value="opt-c">خيار (ج)</option>
+                    <option value="opt-d">خيار (د)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[11px] text-slate-300 font-semibold block mb-1">درجة / نقاط السؤال</label>
+                  <input
+                    type="number"
+                    value={points}
+                    onChange={(e) => setPoints(Number(e.target.value))}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-mono"
+                    min={1}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[11px] text-slate-300 font-semibold block mb-1">التفسير العلمي للإجابة (اختياري)</label>
+                <input
+                  type="text"
+                  value={explanation}
+                  onChange={(e) => setExplanation(e.target.value)}
+                  placeholder="شرح سبب اختيار الإجابة الصحيحة..."
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800 sticky bottom-0 bg-slate-900">
+                <button
+                  type="button"
+                  onClick={() => setShowNewQuestionForm(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold shadow-md"
+                >
+                  حفظ السؤال في البنك
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* TAB 2: ASSESSMENTS CREATOR & MANAGER */}
       {activeTab === 'assessments' && (
-        <div className="space-y-6">
+        <div className="space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/90 border border-slate-800 p-4 rounded-2xl">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-bold text-slate-300">تصفية التقييمات المعروضة:</span>
-              <select
-                value={assessmentFilterType}
-                onChange={(e) => setAssessmentFilterType(e.target.value as 'all' | 'exam' | 'competition')}
-                className="px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-teal-300 font-bold focus:outline-none focus:border-teal-500"
+            <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-950 rounded-xl border border-slate-800 text-xs">
+              <button
+                type="button"
+                onClick={() => setAssessmentFilterType('all')}
+                className={`px-3 py-1.5 rounded-lg font-bold transition-colors tabular-nums ${
+                  assessmentFilterType === 'all' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white'
+                }`}
               >
-                <option value="all">جميع التقييمات في مستواك ({assessments.length})</option>
-                <option value="exam">📝 الاختبارات الأكاديمية فقط ({assessments.filter(a => a.assessmentType === 'exam').length})</option>
-                <option value="competition">🏆 المسابقات الطبية فقط ({assessments.filter(a => a.assessmentType === 'competition').length})</option>
-              </select>
+                الكل ({assessments.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setAssessmentFilterType('exam')}
+                className={`px-3 py-1.5 rounded-lg font-bold transition-colors tabular-nums ${
+                  assessmentFilterType === 'exam' ? 'bg-teal-600 text-white' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                الاختبارات الأكاديمية ({assessments.filter(a => a.assessmentType === 'exam').length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setAssessmentFilterType('competition')}
+                className={`px-3 py-1.5 rounded-lg font-bold transition-colors tabular-nums ${
+                  assessmentFilterType === 'competition' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                المسابقات التنافسية ({assessments.filter(a => a.assessmentType === 'competition').length})
+              </button>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -1552,10 +1635,10 @@ export default function AssessmentManager({
                   setMaxAttempts(2);
                   setShowNewAssessmentForm(true);
                 }}
-                className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-lg"
+                className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm"
               >
                 <Plus className="w-4 h-4" />
-                <span>إنشاء اختبار أكاديمي فقط</span>
+                <span>إنشاء اختبار أكاديمي</span>
               </button>
               <button
                 type="button"
@@ -1565,307 +1648,13 @@ export default function AssessmentManager({
                   setMaxAttempts(1);
                   setShowNewAssessmentForm(true);
                 }}
-                className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-lg"
+                className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm"
               >
                 <Plus className="w-4 h-4" />
-                <span>إنشاء مسابقة طبية فقط</span>
+                <span>إنشاء مسابقة طبية</span>
               </button>
             </div>
           </div>
-
-          {showNewAssessmentForm && (
-            <form onSubmit={handleCreateAssessment} className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-4 shadow-2xl">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                <h4 className={`text-sm font-bold ${assessmentType === 'competition' ? 'text-amber-400' : 'text-teal-400'}`}>
-                  {assessmentType === 'competition'
-                    ? '🏆 إعداد ونشر مسابقة طبية تنافسية فقط'
-                    : '📝 إعداد ونشر اختبار مادة أكاديمي فقط'}
-                </h4>
-                <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
-                  assessmentType === 'competition'
-                    ? 'bg-amber-950/80 border-amber-700 text-amber-300'
-                    : 'bg-teal-950/80 border-teal-700 text-teal-300'
-                }`}>
-                  {assessmentType === 'competition' ? 'ينشر في قسم المسابقات فقط' : 'ينشر في قسم الاختبارات فقط'}
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">نوع النشر (حصري ومستقل)</label>
-                  <select
-                    value={assessmentType}
-                    onChange={(e) => setAssessmentType(e.target.value as AssessmentType)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-bold"
-                  >
-                    <option value="exam">📝 اختبار مادة أكاديمي فقط (Exam Only)</option>
-                    <option value="competition">🏆 مسابقة طبية تنافسية فقط (Competition Only)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">لغة الاختبار / المسابقة</label>
-                  <select
-                    value={assessmentLanguage}
-                    onChange={(e) => setAssessmentLanguage(e.target.value as AssessmentLanguage)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-teal-300 font-bold"
-                  >
-                    <option value="ar">العربية (مع مصطلحات طبية)</option>
-                    <option value="en">English (Pure Medical English)</option>
-                    <option value="bilingual">ثنائي اللغة (عربي + إنجليزي)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">عنوان التقييم</label>
-                  <input
-                    type="text"
-                    value={titleArabic}
-                    onChange={(e) => setTitleArabic(e.target.value)}
-                    placeholder="مثال: اختبار بلوك الجهاز القلبي الوعائي الدوري"
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
-                    required
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs text-slate-400 block mb-1">وصف التقييم أو التعليمات</label>
-                <input
-                  type="text"
-                  value={descArabic}
-                  onChange={(e) => setDescArabic(e.target.value)}
-                  placeholder="وصف مختصر للاختبار أو المسابقة..."
-                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">المستوى الدراسي المستهدف</label>
-                  <select
-                    value={studyLevelId}
-                    onChange={(e) => setStudyLevelId(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
-                  >
-                    {studyLevels.map(lvl => (
-                      <option key={lvl.id} value={lvl.id}>
-                        {lvl.titleArabic}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">بنك الأسئلة المرتبط</label>
-                  <select
-                    value={selectedBankForAssessment}
-                    onChange={(e) => setSelectedBankForAssessment(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
-                  >
-                    {banks.map(b => (
-                      <option key={b.id} value={b.id}>
-                        {b.titleArabic}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">حالة التقييم عند الإنشاء (يدعم الأوفلاين)</label>
-                  <select
-                    value={initialAssessmentStatus}
-                    onChange={(e) => setInitialAssessmentStatus(e.target.value as AssessmentStatus)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-teal-300 font-bold"
-                  >
-                    <option value="published">منشور فوراً وجاهز للرابط (Published)</option>
-                    <option value="draft">مسودة للتجهيز والفحص أولاً (Draft)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs text-slate-400">
-                      مؤقت الاختبار الكلي (دقيقة)
-                      <span className="text-[10px] text-teal-400 mr-1">({createBankQuestionCount} سؤال)</span>
-                    </label>
-                    <label className="flex items-center gap-1.5 text-[11px] text-teal-300 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={enableExamTimer}
-                        onChange={(e) => setEnableExamTimer(e.target.checked)}
-                        className="rounded accent-teal-500"
-                      />
-                      <span>{enableExamTimer ? 'مفعل' : 'وقت مفتوح'}</span>
-                    </label>
-                  </div>
-                  {enableExamTimer ? (
-                    <div className="space-y-1">
-                      <input
-                        type="number"
-                        value={durationMinutes}
-                        onChange={(e) => handleCreateDurationChange(Number(e.target.value))}
-                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-mono"
-                        min={1}
-                        placeholder="المدة بالدقائق"
-                      />
-                      <p className="text-[10px] text-amber-300/90">
-                        يقسم تلقائياً على {createBankQuestionCount} سؤال = {questionDurationSeconds} ثانية/سؤال
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-emerald-400 font-bold">
-                      بدون مؤقت كلي (مفتوح)
-                    </div>
-                  )}
-                </div>
-
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">
-                    وقت السؤال (ثانية) ⇄ يحسب الوقت الكلي
-                  </label>
-                  <div className="flex items-center gap-1.5">
-                    <input
-                      type="number"
-                      min={0}
-                      max={600}
-                      value={questionDurationSeconds}
-                      onChange={(e) => handleCreateQuestionSecondsChange(Number(e.target.value))}
-                      className="w-20 px-2.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-amber-300 font-mono font-bold text-center"
-                    />
-                    <select
-                      value={[0, 20, 30, 45, 60, 90, 120].includes(questionDurationSeconds) ? questionDurationSeconds : 'custom'}
-                      onChange={(e) => {
-                        if (e.target.value !== 'custom') handleCreateQuestionSecondsChange(Number(e.target.value));
-                      }}
-                      className="flex-1 px-2.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-amber-300 font-bold"
-                    >
-                      <option value={0}>بدون مؤقت للسؤال</option>
-                      <option value={20}>20 ثانية / سؤال</option>
-                      <option value={30}>30 ثانية / سؤال</option>
-                      <option value={45}>45 ثانية / سؤال</option>
-                      <option value={60}>60 ثانية (دقيقة) / سؤال</option>
-                      <option value={90}>90 ثانية / سؤال</option>
-                      <option value={120}>120 ثانية / سؤال</option>
-                      {![0, 20, 30, 45, 60, 90, 120].includes(questionDurationSeconds) && (
-                        <option value="custom">{questionDurationSeconds} ثانية / سؤال (محسوب تلقائياً)</option>
-                      )}
-                    </select>
-                  </div>
-                  {questionDurationSeconds > 0 && (
-                    <p className="text-[10px] text-teal-300/90 mt-1">
-                      الوقت الكلي لـ {createBankQuestionCount} سؤال = {durationMinutes} دقيقة
-                    </p>
-                  )}
-                </div>
-
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">أقصى عدد محاولات لكل طالب</label>
-                  <input
-                    type="number"
-                    value={maxAttempts}
-                    onChange={(e) => setMaxAttempts(Number(e.target.value))}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-mono"
-                    min={1}
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">سياسة إعلان النتائج</label>
-                  <select
-                    value={releasePolicy}
-                    onChange={(e) => setReleasePolicy(e.target.value as ResultReleasePolicy)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
-                  >
-                    <option value="immediate">إعلان فوري عند تسليم الطالب</option>
-                    <option value="after_close">إعلان تلقائي بعد إغلاق نافذة الاختبار</option>
-                    <option value="manual">إعلان يدوي بموافقة المسؤول</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3.5 space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <label className="text-xs font-bold text-slate-300">
-                    مدة توفر الاختبار قبل الإغلاق التلقائي:
-                  </label>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {[
-                      { hours: 6, label: '6 ساعات' },
-                      { hours: 24, label: '24 ساعة (يوم)' },
-                      { hours: 72, label: '3 أيام' },
-                      { hours: 168, label: '7 أيام' },
-                      { hours: 336, label: '14 يوماً' },
-                      { hours: 720, label: '30 يوماً' }
-                    ].map((preset) => (
-                      <button
-                        key={preset.hours}
-                        type="button"
-                        onClick={() => {
-                          setAvailabilityDurationHours(preset.hours);
-                          const openDate = opensAt ? new Date(opensAt).getTime() : Date.now();
-                          const nextClose = new Date(openDate + preset.hours * 3600000);
-                          setClosesAt(nextClose.toISOString().slice(0, 16));
-                        }}
-                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${
-                          availabilityDurationHours === preset.hours
-                            ? 'bg-teal-600 text-white border-teal-500'
-                            : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
-                        }`}
-                      >
-                        {preset.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-xs text-slate-400 block mb-1">تاريخ ووقت الفتح</label>
-                    <input
-                      type="datetime-local"
-                      value={opensAt}
-                      onChange={(e) => setOpensAt(e.target.value)}
-                      className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white font-mono"
-                      dir="ltr"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-slate-400 block mb-1">تاريخ ووقت الإغلاق</label>
-                    <input
-                      type="datetime-local"
-                      value={closesAt}
-                      onChange={(e) => setClosesAt(e.target.value)}
-                      className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white font-mono"
-                      dir="ltr"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-3">
-                <button
-                  type="button"
-                  onClick={() => setShowNewAssessmentForm(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 text-slate-400 text-xs font-semibold"
-                >
-                  إلغاء
-                </button>
-                <button
-                  type="submit"
-                  className={`px-6 py-2 rounded-xl text-white text-xs font-bold transition-colors shadow-lg ${
-                    assessmentType === 'competition'
-                      ? 'bg-amber-600 hover:bg-amber-500'
-                      : 'bg-teal-600 hover:bg-teal-500'
-                  }`}
-                >
-                  {assessmentType === 'competition' ? 'حفظ ونشر كمسابقة طبية فقط' : 'حفظ ونشر كاختبار أكاديمي فقط'}
-                </button>
-              </div>
-            </form>
-          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {assessments
@@ -2038,6 +1827,267 @@ export default function AssessmentManager({
             ))}
           </div>
 
+        </div>
+      )}
+
+      {/* MODAL OVERLAY: CREATE NEW EXAM OR COMPETITION */}
+      {showNewAssessmentForm && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 overflow-y-auto"
+          onClick={() => setShowNewAssessmentForm(false)}
+        >
+          <form
+            onSubmit={handleCreateAssessment}
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-4xl bg-slate-900 border border-indigo-500/40 rounded-3xl p-5 sm:p-6 shadow-2xl space-y-5 my-auto max-h-[92vh] overflow-y-auto"
+          >
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div>
+                <h4 className="text-sm sm:text-base font-black text-indigo-300 flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-indigo-400" />
+                  <span>إعداد اختبار أكاديمي أو مسابقة طبية جديدة</span>
+                </h4>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  اربط الاختبار أو المسابقة ببنك أسئلة وحدد المؤقت ونظام الإفراج عن النتائج
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowNewAssessmentForm(false)}
+                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">نوع التقييم</label>
+                <select
+                  value={assessmentType}
+                  onChange={(e) => setAssessmentType(e.target.value as AssessmentType)}
+                  className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white"
+                >
+                  <option value="exam">اختبار أكاديمي (Exam / Quiz)</option>
+                  <option value="competition">مسابقة طبية تنافسية (Competition)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">لغة التقييم</label>
+                <select
+                  value={assessmentLanguage}
+                  onChange={(e) => setAssessmentLanguage(e.target.value as ContentLanguage)}
+                  className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white"
+                >
+                  <option value="ar">العربية (RTL)</option>
+                  <option value="en">الإنجليزية الطبية (English LTR)</option>
+                  <option value="bilingual">ثنائي اللغة (عربي / English)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">عنوان الاختبار / المسابقة *</label>
+                <input
+                  type="text"
+                  required
+                  value={titleArabic}
+                  onChange={(e) => setTitleArabic(e.target.value)}
+                  placeholder="مثال: الاختبار النصفي لبلوك القلب والأوعية الدموية"
+                  className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">المستوى الدراسي المستهدف</label>
+                <select
+                  value={studyLevelId}
+                  onChange={(e) => setStudyLevelId(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white"
+                >
+                  {studyLevels.map(lvl => (
+                    <option key={lvl.id} value={lvl.id}>{lvl.titleArabic}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">بنك الأسئلة المرتبط *</label>
+                <select
+                  required
+                  value={selectedBankForAssessment}
+                  onChange={(e) => setSelectedBankForAssessment(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white"
+                >
+                  <option value="">-- اختر بنك الأسئلة --</option>
+                  {banks.map(b => (
+                    <option key={b.id} value={b.id}>{b.titleArabic} ({b.questionIds.length} سؤال)</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">حالة النشر عند الإنشاء</label>
+                <select
+                  value={initialAssessmentStatus}
+                  onChange={(e) => setInitialAssessmentStatus(e.target.value as 'published' | 'draft')}
+                  className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white font-bold"
+                >
+                  <option value="published">نشر فوري للطلاب (معتمد)</option>
+                  <option value="draft">حفظ كمسودة خاصة</option>
+                </select>
+              </div>
+
+              {/* Timer Configuration Box */}
+              <div className="sm:col-span-2 lg:col-span-3 p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={enableExamTimer}
+                      onChange={(e) => setEnableExamTimer(e.target.checked)}
+                      className="w-4 h-4 accent-teal-500 rounded"
+                    />
+                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-teal-400" />
+                      تفعيل المؤقت الزمني للاختبار (مرتبط تلقائياً بزمن كل سؤال)
+                    </span>
+                  </label>
+                  <span className="text-[11px] text-slate-400">
+                    عدد أسئلة البنك المختار: <strong className="text-teal-400 font-mono">{createBankQuestionCount}</strong> سؤال
+                  </span>
+                </div>
+
+                {enableExamTimer ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">إجمالي مدة الاختبار (بالدقائق)</label>
+                      <input
+                        type="number"
+                        min={1}
+                        step="any"
+                        value={durationMinutes}
+                        onChange={(e) => handleCreateDurationChange(Math.max(1, Number(e.target.value)))}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-sm text-white font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">الوقت المخصص لكل سؤال (بالثواني)</label>
+                      <input
+                        type="number"
+                        min={5}
+                        value={questionDurationSeconds}
+                        onChange={(e) => handleCreateQuestionSecondsChange(Math.max(5, Number(e.target.value)))}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-sm text-white font-mono"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-xs text-amber-400 bg-amber-950/20 border border-amber-500/20 px-3 py-2 rounded-xl">
+                    تم إيقاف المؤقت الزمني — سيظهر الاختبار للطلاب كاختبار مفتوح الوقت.
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">الحد الأقصى للمحاولات</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={maxAttempts}
+                  onChange={(e) => setMaxAttempts(Number(e.target.value))}
+                  className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">سياسة الإفراج عن الدرجات والتصحيح</label>
+                <select
+                  value={releasePolicy}
+                  onChange={(e) => setReleasePolicy(e.target.value as ResultReleasePolicy)}
+                  className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white"
+                >
+                  <option value="immediate">فوري بعد تسليم الطالب</option>
+                  <option value="after_close">تلقائي بعد إغلاق فترة الاختبار</option>
+                  <option value="manual">يدوي بقرار من المشرف أو الدكتور</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">مدة بقاء الاختبار متاحاً للدخول</label>
+                <select
+                  value={availabilityDurationHours}
+                  onChange={(e) => {
+                    const hrs = Number(e.target.value);
+                    setAvailabilityDurationHours(hrs);
+                    if (hrs > 0) {
+                      const startMs = opensAt ? new Date(opensAt).getTime() : Date.now();
+                      const closeDate = new Date(startMs + hrs * 3600000);
+                      setClosesAt(closeDate.toISOString().slice(0, 16));
+                    } else {
+                      setClosesAt('');
+                    }
+                  }}
+                  className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white"
+                >
+                  <option value={0}>مفتوح دائماً (بدون وقت إغلاق)</option>
+                  <option value={1}>لمدة ساعة واحدة (1 Hour)</option>
+                  <option value={3}>لمدة 3 ساعات</option>
+                  <option value={6}>لمدة 6 ساعات</option>
+                  <option value={12}>لمدة 12 ساعة</option>
+                  <option value={24}>لمدة يوم كامل (24 ساعة)</option>
+                  <option value={48}>لمدة يومين (48 ساعة)</option>
+                  <option value={72}>لمدة 3 أيام (72 ساعة)</option>
+                  <option value={168}>لمدة أسبوع (7 أيام)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">تاريخ ووقت الفتح (اختياري)</label>
+                <input
+                  type="datetime-local"
+                  value={opensAt}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setOpensAt(val);
+                    if (availabilityDurationHours > 0 && val) {
+                      const closeDate = new Date(new Date(val).getTime() + availabilityDurationHours * 3600000);
+                      setClosesAt(closeDate.toISOString().slice(0, 16));
+                    }
+                  }}
+                  className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">تاريخ ووقت الإغلاق النهائي (اختياري)</label>
+                <input
+                  type="datetime-local"
+                  value={closesAt}
+                  onChange={(e) => setClosesAt(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white font-mono"
+                />
+              </div>
+              <div className="sm:col-span-2 lg:col-span-3">
+                <label className="block text-xs text-slate-400 mb-1">تعليمات الاختبار / المسابقة</label>
+                <input
+                  type="text"
+                  value={descArabic}
+                  onChange={(e) => setDescArabic(e.target.value)}
+                  placeholder="تعليمات تظهر للطالب قبل بدء التقييم..."
+                  className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowNewAssessmentForm(false)}
+                className="px-4 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold"
+              >
+                إلغاء
+              </button>
+              <button
+                type="submit"
+                className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-lg"
+              >
+                {initialAssessmentStatus === 'published' ? 'إنشاء ونشر التقييم للطلاب الآن' : 'حفظ كمسودة خاصة'}
+              </button>
+            </div>
+          </form>
         </div>
       )}
 

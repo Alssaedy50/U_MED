@@ -200,6 +200,15 @@ export default function AcademicStructureManager({
     instructorNameArabic: ''
   });
 
+  // Inline Quick Course Add Form State
+  const [quickCourseForm, setQuickCourseForm] = useState({
+    titleArabic: '',
+    code: '',
+    creditHours: 3,
+    instructorNameArabic: ''
+  });
+  const [quickCourseSaving, setQuickCourseSaving] = useState(false);
+
   // Load universities on mount (Strictly scoped for University Owner & Batch Rep + Saved User Context)
   const loadUniversities = async () => {
     setLoading(true);
@@ -924,6 +933,91 @@ export default function AcademicStructureManager({
     }
   };
 
+  const handleQuickCreateCourse = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedPeriod || !selectedLevel || !selectedUniversity) return;
+    const trimmedTitle = quickCourseForm.titleArabic.trim();
+    if (!trimmedTitle) return;
+
+    setQuickCourseSaving(true);
+    try {
+      const id = `crs-${Date.now().toString(36)}`;
+      const rawHours = Number(quickCourseForm.creditHours);
+      const creditHours = !isNaN(rawHours) && rawHours >= 1 ? Math.min(Math.floor(rawHours), 20) : 3;
+      const autoCode =
+        quickCourseForm.code.trim().toUpperCase() ||
+        `MED-${courses.length + 101}`;
+      const trimmedInstructorName = quickCourseForm.instructorNameArabic.trim();
+      let resolvedInstructorId = '';
+
+      if (trimmedInstructorName) {
+        const existingInst = batchInstructors.find(
+          (inst) =>
+            inst.instructorNameArabic.trim() === trimmedInstructorName ||
+            `${inst.academicTitle} ${inst.instructorNameArabic}`.trim() === trimmedInstructorName
+        );
+        if (existingInst) {
+          resolvedInstructorId = existingInst.id;
+        } else {
+          const newInstId = `inst-${Date.now().toString(36)}`;
+          const newInst: CourseInstructor = {
+            id: newInstId,
+            universityId: selectedUniversity.id,
+            studyLevelId: selectedLevel.id,
+            studyPeriodId: selectedPeriod.id,
+            courseOfferingId: id,
+            courseTitleArabic: trimmedTitle,
+            instructorNameArabic: trimmedInstructorName.replace(/^(أ\.د\.|أ\.م\.د\.|د\.)\s*/, ''),
+            academicTitle: trimmedInstructorName.startsWith('أ.د.')
+              ? 'أ.د.'
+              : trimmedInstructorName.startsWith('أ.م.د.')
+              ? 'أ.م.د.'
+              : 'د.',
+            teachingType: 'both',
+            createdBy: userRole,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+          const savedInst = await saveCourseInstructor(newInst, userRole);
+          setBatchInstructors((prev) => [...prev.filter((i) => i.id !== savedInst.id), savedInst]);
+          resolvedInstructorId = savedInst.id;
+        }
+      }
+
+      const newCourse: CourseOffering = {
+        id,
+        studyPeriodId: selectedPeriod.id,
+        studyLevelId: selectedLevel.id,
+        curriculumVersionId: 'cur-dar-2024',
+        universityId: selectedUniversity.id,
+        titleArabic: trimmedTitle,
+        titleEnglish: '',
+        code: autoCode,
+        creditHours,
+        instructorId: resolvedInstructorId || undefined,
+        instructorNameArabic: trimmedInstructorName || undefined,
+        isActive: true
+      };
+
+      await saveCourseOffering(newCourse);
+      setCourses((prev) => [...prev, newCourse]);
+      setQuickCourseForm({
+        titleArabic: '',
+        code: '',
+        creditHours: 3,
+        instructorNameArabic: ''
+      });
+      setStatusMessage({
+        type: 'success',
+        text: `تمت الإضافة السريعة للمقرر "${newCourse.titleArabic}" (${autoCode}) بنجاح`
+      });
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || 'تعذر إضافة المقرر السريع' });
+    } finally {
+      setQuickCourseSaving(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       
@@ -1106,6 +1200,84 @@ export default function AcademicStructureManager({
         </div>
       ) : (
         <>
+          {/* 1.5 Unified Interactive Breadcrumb Bar for Instant Context Switching */}
+          <div className="bg-slate-900/95 border border-slate-800 rounded-2xl p-3 sm:p-4 shadow-md flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-xs">
+              <span className="text-[11px] font-bold text-slate-400 ml-1">المسار الأكاديمي النشط:</span>
+
+              <button
+                type="button"
+                onClick={() => setActivePopupList('university')}
+                className="px-2.5 py-1.5 rounded-xl bg-teal-950/50 hover:bg-teal-900/60 border border-teal-500/40 text-teal-300 font-bold flex items-center gap-1.5 transition-colors"
+                title="تغيير الجامعة"
+              >
+                <Building2 className="w-3.5 h-3.5 shrink-0" />
+                <span>{selectedUniversity?.nameArabic || 'اختر الجامعة'}</span>
+                <span className="text-[10px] opacity-75">▾</span>
+              </button>
+
+              <span className="text-slate-600 font-bold">←</span>
+
+              <button
+                type="button"
+                onClick={() => setActivePopupList('college')}
+                className="px-2.5 py-1.5 rounded-xl bg-indigo-950/50 hover:bg-indigo-900/60 border border-indigo-500/40 text-indigo-300 font-bold flex items-center gap-1.5 transition-colors"
+                title="تغيير الكلية"
+              >
+                <GraduationCap className="w-3.5 h-3.5 shrink-0" />
+                <span>{selectedCollege?.nameArabic || 'اختر الكلية'}</span>
+                <span className="text-[10px] opacity-75">▾</span>
+              </button>
+
+              <span className="text-slate-600 font-bold">←</span>
+
+              <button
+                type="button"
+                onClick={() => setActivePopupList('program')}
+                className="px-2.5 py-1.5 rounded-xl bg-emerald-950/50 hover:bg-emerald-900/60 border border-emerald-500/40 text-emerald-300 font-bold flex items-center gap-1.5 transition-colors"
+                title="تغيير التخصص / البرنامج"
+              >
+                <BookOpen className="w-3.5 h-3.5 shrink-0" />
+                <span>{selectedProgram?.nameArabic || 'اختر التخصص'}</span>
+                <span className="text-[10px] opacity-75">▾</span>
+              </button>
+
+              <span className="text-slate-600 font-bold">←</span>
+
+              <button
+                type="button"
+                onClick={() => setActivePopupList('level')}
+                className="px-2.5 py-1.5 rounded-xl bg-amber-950/50 hover:bg-amber-900/60 border border-amber-500/40 text-amber-300 font-bold flex items-center gap-1.5 transition-colors"
+                title="تغيير المستوى الدراسي"
+              >
+                <Layers className="w-3.5 h-3.5 shrink-0" />
+                <span>{selectedLevel?.titleArabic || 'اختر المستوى'}</span>
+                <span className="text-[10px] opacity-75">▾</span>
+              </button>
+
+              {selectedLevel && (
+                <>
+                  <span className="text-slate-600 font-bold">←</span>
+                  <button
+                    type="button"
+                    onClick={() => setActivePopupList('period')}
+                    className="px-2.5 py-1.5 rounded-xl bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-500/40 text-cyan-300 font-bold flex items-center gap-1.5 transition-colors"
+                    title="تغيير البلوك أو الفصل الدراسي"
+                  >
+                    <span>{selectedPeriod ? `${selectedPeriod.titleArabic} (${selectedPeriod.code})` : 'اختر البلوك الدراسي'}</span>
+                    <span className="text-[10px] opacity-75">▾</span>
+                  </button>
+                </>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 text-[11px] text-slate-400">
+              <span className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-300 font-bold">
+                المقررات في البلوك الحالي: <strong className="text-teal-400 font-mono">{courses.length}</strong>
+              </span>
+            </div>
+          </div>
+
           {/* 2. Main Title Cards for Academic Hierarchy (Click any card to open its Standalone Popup Selector/Manager) */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
             {/* Main Card 1: Active University */}
@@ -1449,6 +1621,83 @@ export default function AcademicStructureManager({
                 </div>
               </div>
 
+              {/* Inline Quick Course Add Bar */}
+              {selectedPeriod && (
+                <form
+                  onSubmit={handleQuickCreateCourse}
+                  className="p-3.5 sm:p-4 rounded-2xl bg-slate-950/90 border border-indigo-500/30 space-y-2.5"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
+                      <Plus className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>إضافة سريعة لمقرر داخل ({selectedPeriod.titleArabic}) بضغطة واحدة</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowAddCourseModal(true)}
+                      className="text-[11px] text-slate-400 hover:text-indigo-300 underline"
+                    >
+                      فتح النموذج التفصيلي المتقدم
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+                    <div className="sm:col-span-4">
+                      <input
+                        type="text"
+                        required
+                        value={quickCourseForm.titleArabic}
+                        onChange={(e) => setQuickCourseForm({ ...quickCourseForm, titleArabic: e.target.value })}
+                        placeholder="اسم المقرر بالعربية (مثال: علم وظائف الأعضاء) *"
+                        className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 focus:border-indigo-500 text-xs text-white outline-none"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <input
+                        type="text"
+                        value={quickCourseForm.code}
+                        onChange={(e) => setQuickCourseForm({ ...quickCourseForm, code: e.target.value })}
+                        placeholder="رمز المقرر (اختياري)"
+                        dir="ltr"
+                        className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 focus:border-indigo-500 text-xs text-white font-mono outline-none"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <div className="flex items-center bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2">
+                        <input
+                          type="number"
+                          min={1}
+                          max={20}
+                          value={quickCourseForm.creditHours}
+                          onChange={(e) => setQuickCourseForm({ ...quickCourseForm, creditHours: Number(e.target.value) })}
+                          className="w-full bg-transparent text-xs text-white font-mono outline-none"
+                        />
+                        <span className="text-[10px] text-slate-400 shrink-0 mr-1">ساعات</span>
+                      </div>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <input
+                        type="text"
+                        value={quickCourseForm.instructorNameArabic}
+                        onChange={(e) => setQuickCourseForm({ ...quickCourseForm, instructorNameArabic: e.target.value })}
+                        placeholder="اسم الدكتور (اختياري)"
+                        className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 focus:border-indigo-500 text-xs text-white outline-none"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <button
+                        type="submit"
+                        disabled={quickCourseSaving || !quickCourseForm.titleArabic.trim()}
+                        className="w-full h-full min-h-[36px] px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-md transition-colors"
+                      >
+                        <Plus className="w-3.5 h-3.5 shrink-0" />
+                        <span>{quickCourseSaving ? 'جاري الإضافة...' : 'إضافة فورية'}</span>
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              )}
+
               {/* Courses of the Active Block */}
               {!selectedPeriod ? (
                 <div className="p-8 bg-slate-950 rounded-xl border border-slate-800 text-center text-slate-400 text-xs">
@@ -1456,7 +1705,7 @@ export default function AcademicStructureManager({
                 </div>
               ) : courses.length === 0 ? (
                 <div className="p-8 bg-slate-950 rounded-xl border border-slate-800 text-center text-slate-400 text-xs">
-                  لا توجد مقررات مضافة في ({selectedPeriod.titleArabic}) حتى الآن. اضغط "+ إضافة مقرر للبلوك".
+                  لا توجد مقررات مضافة في ({selectedPeriod.titleArabic}) حتى الآن. استخدم شريط الإضافة السريعة أعلاه أو اضغط "+ إضافة مقرر".
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">

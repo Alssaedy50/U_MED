@@ -7,7 +7,7 @@
  * Dynamically linked to Universities, Study Levels, Blocks, and Courses
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Plus, 
   FileText, 
@@ -24,7 +24,11 @@ import {
   Mic,
   Square,
   Volume2,
-  Cloud
+  Cloud,
+  Search,
+  CheckSquare,
+  FolderInput,
+  Filter
 } from 'lucide-react';
 import { 
   EducationalResource, 
@@ -81,7 +85,8 @@ export default function EducationalContentManager({
     })
   );
   const [loading, setLoading] = useState<boolean>(false);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'published' | 'draft' | 'archived'>('all');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'published' | 'draft' | 'telegram_draft' | 'archived'>('all');
   const [typeFilter, setTypeFilter] = useState<ResourceType | 'all'>('all');
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
   const [showBotStudioModal, setShowBotStudioModalState] = useState<boolean>(() => {
@@ -110,6 +115,24 @@ export default function EducationalContentManager({
   const [studyLevels, setStudyLevels] = useState<StudyLevel[]>([]);
   const [studyPeriods, setStudyPeriods] = useState<StudyPeriod[]>([]);
   const [courses, setCourses] = useState<CourseOffering[]>([]);
+
+  // Complete Lookup Dictionaries for Arabic Titles across all Levels/Blocks
+  const [allPeriodsCatalog, setAllPeriodsCatalog] = useState<StudyPeriod[]>([]);
+  const [allCoursesCatalog, setAllCoursesCatalog] = useState<CourseOffering[]>([]);
+
+  // Bulk Selection & Bulk Categorization State
+  const [selectedResourceIds, setSelectedResourceIds] = useState<string[]>([]);
+  const [showBulkCategorizeModal, setShowBulkCategorizeModal] = useState<boolean>(false);
+  const [bulkBusy, setBulkBusy] = useState<boolean>(false);
+  const [bulkForm, setBulkForm] = useState({
+    studyLevelId: '',
+    studyPeriodId: '',
+    courseOfferingId: '',
+    sectionType: 'theoretical' as 'theoretical' | 'practical' | 'general',
+    publishImmediately: true
+  });
+  const [bulkPeriods, setBulkPeriods] = useState<StudyPeriod[]>([]);
+  const [bulkCourses, setBulkCourses] = useState<CourseOffering[]>([]);
 
   // Edit Modal Cascading Academic Options
   const [editPeriods, setEditPeriods] = useState<StudyPeriod[]>([]);
@@ -200,16 +223,25 @@ export default function EducationalContentManager({
       const finalLvls = scopedLvls.length > 0 ? scopedLvls : allLvls;
       setStudyLevels(finalLvls);
 
+      // Load complete catalog of periods and courses across all levels so Arabic names are always resolved
+      const periodArrays = await Promise.all(finalLvls.map(lvl => fetchStudyPeriods(lvl.id)));
+      const flatPeriods = periodArrays.flat();
+      setAllPeriodsCatalog(flatPeriods);
+
+      const courseArrays = await Promise.all(flatPeriods.map(p => fetchCourseOfferings(p.id)));
+      const flatCourses = courseArrays.flat();
+      setAllCoursesCatalog(flatCourses);
+
       const savedCtx = getUserAcademicContext();
       const defaultLvlId = isBatchScoped && assignedStudyLevelId
         ? assignedStudyLevelId
         : finalLvls.find(l => l.id === (savedCtx.studyLevelId || form.studyLevelId))?.id || finalLvls[0]?.id || 'lvl-2';
 
-      const periods = await fetchStudyPeriods(defaultLvlId);
+      const periods = flatPeriods.filter(p => p.studyLevelId === defaultLvlId);
       setStudyPeriods(periods);
 
       const defaultPeriodId = periods.find(p => p.id === (savedCtx.studyPeriodId || form.studyPeriodId))?.id || periods[0]?.id || '';
-      const rawCrs = defaultPeriodId ? await fetchCourseOfferings(defaultPeriodId) : [];
+      const rawCrs = defaultPeriodId ? flatCourses.filter(c => c.studyPeriodId === defaultPeriodId) : [];
       const crs = userRole === 'department_head' && assignedCourseId
         ? rawCrs.filter(c => c.id === assignedCourseId)
         : rawCrs;
@@ -326,6 +358,69 @@ export default function EducationalContentManager({
       setEditCourses([]);
     }
   }, [editingResource?.studyPeriodId]);
+
+  // Cascade Periods & Courses for Bulk Categorization Modal
+  useEffect(() => {
+    if (bulkForm.studyLevelId) {
+      fetchStudyPeriods(bulkForm.studyLevelId).then(periods => {
+        setBulkPeriods(periods);
+        const firstPeriod = periods[0]?.id || '';
+        setBulkForm(prev => ({
+          ...prev,
+          studyPeriodId: periods.some(p => p.id === prev.studyPeriodId) ? prev.studyPeriodId : firstPeriod
+        }));
+      });
+    } else {
+      setBulkPeriods([]);
+    }
+  }, [bulkForm.studyLevelId]);
+
+  useEffect(() => {
+    if (bulkForm.studyPeriodId) {
+      fetchCourseOfferings(bulkForm.studyPeriodId).then(crs => {
+        setBulkCourses(crs);
+        setBulkForm(prev => ({
+          ...prev,
+          courseOfferingId: crs.some(c => c.id === prev.courseOfferingId) ? prev.courseOfferingId : (crs[0]?.id || '')
+        }));
+      });
+    } else {
+      setBulkCourses([]);
+    }
+  }, [bulkForm.studyPeriodId]);
+
+  // Fast In-Memory Arabic Lookup Dictionaries
+  const periodTitleMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const p of [...allPeriodsCatalog, ...studyPeriods, ...filterPeriodsList, ...editPeriods]) {
+      if (p?.id && p?.titleArabic) map[p.id] = p.titleArabic;
+    }
+    return map;
+  }, [allPeriodsCatalog, studyPeriods, filterPeriodsList, editPeriods]);
+
+  const courseTitleMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const c of [...allCoursesCatalog, ...courses, ...filterCoursesList, ...editCourses]) {
+      if (c?.id && c?.titleArabic) map[c.id] = c.titleArabic;
+    }
+    return map;
+  }, [allCoursesCatalog, courses, filterCoursesList, editCourses]);
+
+  const getLevelLabel = (lvlId?: string) => {
+    if (!lvlId || lvlId === 'pending_review') return 'قيد المراجعة';
+    const found = studyLevels.find(l => l.id === lvlId);
+    return found ? found.titleArabic : lvlId;
+  };
+
+  const getPeriodLabel = (periodId?: string) => {
+    if (!periodId || periodId === 'pending_review') return 'عام للمستوى';
+    return periodTitleMap[periodId] || periodId;
+  };
+
+  const getCourseLabel = (courseId?: string) => {
+    if (!courseId || courseId === 'pending_review') return 'قيد تحديد المادة';
+    return courseTitleMap[courseId] || courseId;
+  };
 
   const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>, isEditMode: boolean = false) => {
     const file = e.target.files?.[0];
@@ -551,13 +646,115 @@ export default function EducationalContentManager({
   const handleDelete = async (resourceId: string) => {
     await deleteEducationalResource(resourceId);
     setResources(resources.filter(r => r.id !== resourceId));
-    setStatusMessage({ type: 'success', text: 'تم حذف المورد التعليمي نهائياً.' });
+    setSelectedResourceIds(prev => prev.filter(id => id !== resourceId));
+    setStatusMessage({ type: 'success', text: 'تم حذف المورد التعليمي من المنصة والسحابة نهائياً.' });
   };
 
-  const getLevelLabel = (lvlId: string) => {
-    if (!lvlId || lvlId === 'pending_review') return 'قيد المراجعة (Pending Review)';
-    const found = studyLevels.find(l => l.id === lvlId);
-    return found ? found.titleArabic : lvlId;
+  // Bulk Action Handlers
+  const toggleSelectResource = (id: string) => {
+    setSelectedResourceIds(prev =>
+      prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
+    );
+  };
+
+  const handleBulkStatusChange = async (nextStatus: 'published' | 'draft') => {
+    if (selectedResourceIds.length === 0) return;
+    setBulkBusy(true);
+    try {
+      const fallbackLevelId = studyLevels[0]?.id || 'lvl-2';
+      const updatedList: EducationalResource[] = [];
+
+      for (const res of resources) {
+        if (!selectedResourceIds.includes(res.id)) {
+          updatedList.push(res);
+          continue;
+        }
+        const resolvedLevel = (!res.studyLevelId || res.studyLevelId === 'pending_review')
+          ? fallbackLevelId
+          : res.studyLevelId;
+        const patched: EducationalResource = {
+          ...res,
+          studyLevelId: resolvedLevel,
+          status: nextStatus,
+          updatedAt: new Date().toISOString()
+        };
+        await saveEducationalResource(patched);
+        updatedList.push(patched);
+      }
+
+      setResources(updatedList);
+      const count = selectedResourceIds.length;
+      setSelectedResourceIds([]);
+      setStatusMessage({
+        type: 'success',
+        text: nextStatus === 'published'
+          ? `تم اعتماد ونشر (${count}) ملفات محددة للطلاب في السحابة بنجاح!`
+          : `تم تحويل (${count}) ملفات محددة إلى مسودة.`
+      });
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || 'حدث خطأ أثناء تنفيذ العملية الجماعية' });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const handleBulkCategorizeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (selectedResourceIds.length === 0) return;
+    setBulkBusy(true);
+    try {
+      const updatedList: EducationalResource[] = [];
+      for (const res of resources) {
+        if (!selectedResourceIds.includes(res.id)) {
+          updatedList.push(res);
+          continue;
+        }
+        const patched: EducationalResource = {
+          ...res,
+          studyLevelId: bulkForm.studyLevelId || res.studyLevelId,
+          studyPeriodId: bulkForm.studyPeriodId || undefined,
+          courseOfferingId: bulkForm.courseOfferingId || undefined,
+          sectionType: bulkForm.sectionType,
+          status: bulkForm.publishImmediately ? 'published' : res.status,
+          updatedAt: new Date().toISOString()
+        };
+        await saveEducationalResource(patched);
+        updatedList.push(patched);
+      }
+      setResources(updatedList);
+      const count = selectedResourceIds.length;
+      setSelectedResourceIds([]);
+      setShowBulkCategorizeModal(false);
+      setStatusMessage({
+        type: 'success',
+        text: `تم تصنيف وتحديث (${count}) ملفات دفعة واحدة في السحابة بنجاح!`
+      });
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || 'تعذر تصنيف الملفات المحددة' });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedResourceIds.length === 0) return;
+    setBulkBusy(true);
+    try {
+      for (const id of selectedResourceIds) {
+        await deleteEducationalResource(id);
+      }
+      const count = selectedResourceIds.length;
+      setResources(prev => prev.filter(r => !selectedResourceIds.includes(r.id)));
+      setSelectedResourceIds([]);
+      setStatusMessage({
+        type: 'success',
+        text: `تم حذف (${count}) ملفات محددة نهائياً من المنصة وقاعدة البيانات السحابية.`
+      });
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || 'تعذر حذف الملفات المحددة' });
+    } finally {
+      setBulkBusy(false);
+    }
   };
 
   const telegramDraftCount = resources.filter(
@@ -578,8 +775,8 @@ export default function EducationalContentManager({
       }
       setFilterCoursesList(allCrs);
     } else {
-      setFilterPeriodsList([]);
-      setFilterCoursesList([]);
+      setFilterPeriodsList(allPeriodsCatalog);
+      setFilterCoursesList(allCoursesCatalog);
     }
   };
 
@@ -596,33 +793,74 @@ export default function EducationalContentManager({
         allCrs.push(...crs);
       }
       setFilterCoursesList(allCrs);
+    } else {
+      setFilterCoursesList(allCoursesCatalog);
     }
   };
 
   const filtered = resources.filter(r => {
-    const matchStatus = statusFilter === 'all' || r.status === statusFilter;
+    const matchStatus =
+      statusFilter === 'all'
+        ? true
+        : statusFilter === 'telegram_draft'
+        ? r.status === 'draft' && r.createdBy === 'AUTOMATED_TELEGRAM_INGESTION'
+        : r.status === statusFilter;
     const matchType = typeFilter === 'all' || r.resourceType === typeFilter;
     const matchUniv = !userContext.universityId || !r.universityId || r.universityId === userContext.universityId;
-    const matchLevel = filterLevelId === 'all' || !r.studyLevelId || r.studyLevelId === filterLevelId;
+    const matchLevel = filterLevelId === 'all' || !r.studyLevelId || r.studyLevelId === 'pending_review' || r.studyLevelId === filterLevelId;
     const matchPeriod = filterPeriodId === 'all' || r.studyPeriodId === filterPeriodId;
     const matchCourse = filterCourseId === 'all' || r.courseOfferingId === filterCourseId;
-    return matchStatus && matchType && matchUniv && matchLevel && matchPeriod && matchCourse;
+
+    const q = searchQuery.trim().toLowerCase();
+    const matchSearch = !q || [
+      r.title,
+      r.description || '',
+      r.fileName || '',
+      getLevelLabel(r.studyLevelId),
+      getPeriodLabel(r.studyPeriodId),
+      getCourseLabel(r.courseOfferingId)
+    ].some(text => text.toLowerCase().includes(q));
+
+    return matchStatus && matchType && matchUniv && matchLevel && matchPeriod && matchCourse && matchSearch;
   });
 
+  const allFilteredSelected = filtered.length > 0 && filtered.every(r => selectedResourceIds.includes(r.id));
+
+  const toggleSelectAllFiltered = () => {
+    if (allFilteredSelected) {
+      const filteredSet = new Set(filtered.map(r => r.id));
+      setSelectedResourceIds(prev => prev.filter(id => !filteredSet.has(id)));
+    } else {
+      const merged = new Set([...selectedResourceIds, ...filtered.map(r => r.id)]);
+      setSelectedResourceIds(Array.from(merged));
+    }
+  };
+
+  const resetAllFilters = () => {
+    setSearchQuery('');
+    setStatusFilter('all');
+    setTypeFilter('all');
+    if (!isBatchScoped) setFilterLevelId('all');
+    setFilterPeriodId('all');
+    setFilterCourseId('all');
+  };
+
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       
-      {/* Top Banner */}
-      <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-4 sm:p-5 shadow-sm flex flex-wrap items-center justify-between gap-4 overflow-hidden">
-        <div>
-          <div className="flex items-center gap-2 mb-1 text-xs text-teal-400 font-semibold">
+      {/* Unified Header & Primary Actions */}
+      <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-4 sm:p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 text-xs text-teal-400 font-bold">
             <span>إدارة المحتوى والمكتبة الرقمية</span>
+            <span aria-hidden="true">·</span>
+            <span className="font-mono tabular-nums text-[var(--text-muted)]">إجمالي الملفات: {resources.length}</span>
           </div>
-          <h2 className="text-base sm:text-lg font-bold text-[var(--text-primary)]">
-            رفع وتعديل وتصنيف المحاضرات والشرائح والمراجع الطبية
+          <h2 className="text-base sm:text-lg font-black text-[var(--text-primary)]">
+            تنظيم ونشر المحاضرات والشرائح والمراجع الطبية
           </h2>
-          <p className="text-xs text-[var(--text-muted)] mt-0.5">
-            ربط المواد ديناميكياً بالجامعة، المستوى الأكاديمي، البلوك الدراسي، المقرر، والشعبة (نظري / عملي ومختبر).
+          <p className="text-xs text-[var(--text-muted)]">
+            إدارة ملفات السحابة وجوجل درايف ومسودات تيليجرام، وتصنيفها حسب المستوى والبلوك والمقرر.
           </p>
         </div>
 
@@ -630,10 +868,10 @@ export default function EducationalContentManager({
           <button
             type="button"
             onClick={() => setShowBotStudioModal(true)}
-            className="py-2.5 px-3.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 font-bold text-xs flex items-center gap-2 transition-colors cursor-pointer"
+            className="py-2.5 px-3.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 font-bold text-xs flex items-center gap-2 transition-colors cursor-pointer whitespace-nowrap shrink-0"
           >
             <Cloud className="w-4 h-4 shrink-0" />
-            <span>استوديو بوت تيليجرام (TeleDrive MTProto)</span>
+            <span>استوديو السحب التلقائي (TeleDrive)</span>
           </button>
 
           <button
@@ -643,10 +881,10 @@ export default function EducationalContentManager({
               setUploadError(null);
               setShowAddModal(true);
             }}
-            className="py-2.5 px-4 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-teal-600/20 transition-colors"
+            className="py-2.5 px-4 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center gap-2 shadow-sm transition-colors whitespace-nowrap shrink-0"
           >
             <Upload className="w-4 h-4 shrink-0" />
-            <span>رفع ملف (PDF / صورة / صوت) أو إضافة مورد</span>
+            <span>رفع ملف أو إضافة محاضرة</span>
           </button>
 
           <button
@@ -654,8 +892,8 @@ export default function EducationalContentManager({
               loadAcademicHierarchy();
               loadResources();
             }}
-            className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
-            title="تحديث القائمة"
+            className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors shrink-0"
+            title="تحديث المكتبة"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
@@ -664,32 +902,34 @@ export default function EducationalContentManager({
 
       {/* Automated Telegram Draft Ingestion Alert Banner */}
       {telegramDraftCount > 0 && (
-        <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div className="p-3.5 sm:p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-2.5">
-            <span className="px-2.5 py-1 rounded-lg bg-amber-500 text-slate-950 font-black text-xs">
-              📥 {telegramDraftCount} مسودة جديدة من تيليجرام
+            <span className="px-2.5 py-1 rounded-lg bg-amber-500 text-slate-950 font-black text-xs tabular-nums">
+              {telegramDraftCount} مسودة من تيليجرام
             </span>
             <span className="text-[var(--text-primary)] font-semibold">
-              تم سحب ملفات جديدة تلقائياً من مجموعة الدفعة عبر بوت TeleDrive وهي بانتظار مراجعة المستوى/المادة واعتماد النشر للطلاب.
+              ملفات مسحوبة تلقائياً عبر البوت تنتظر تحديد المادة أو الاعتماد الجماعي للنشر.
             </span>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              setStatusFilter('draft');
-              setFilterLevelId('all');
-              setFilterPeriodId('all');
-              setFilterCourseId('all');
-            }}
-            className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs transition-colors cursor-pointer"
-          >
-            عرض مسودات تيليجرام للمراجعة ({telegramDraftCount})
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setStatusFilter('telegram_draft');
+                if (!isBatchScoped) setFilterLevelId('all');
+                setFilterPeriodId('all');
+                setFilterCourseId('all');
+              }}
+              className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs transition-colors cursor-pointer whitespace-nowrap"
+            >
+              عرض مسودات البوت ({telegramDraftCount})
+            </button>
+          </div>
         </div>
       )}
 
       {statusMessage && (
-        <div className={`p-4 rounded-xl border text-xs flex items-center justify-between gap-2 ${
+        <div className={`p-3.5 rounded-xl border text-xs flex items-center justify-between gap-2 ${
           statusMessage.type === 'success' ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-300' : 'bg-rose-950/40 border-rose-800/60 text-rose-300'
         }`}>
           <div className="flex items-center gap-2">
@@ -702,208 +942,485 @@ export default function EducationalContentManager({
         </div>
       )}
 
-      {/* Integrated Academic & Content Filters Bar (replaces static Academic Scope banner) */}
-      <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs overflow-hidden">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap items-center gap-2.5 w-full lg:w-auto">
-          <div className="flex items-center gap-1.5">
-            <span className="text-[var(--text-muted)] font-bold shrink-0">المستوى:</span>
-            <select
-              value={filterLevelId}
-              disabled={isBatchScoped}
-              onChange={(e) => handleFilterLevelChange(e.target.value)}
-              className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-bold text-xs focus:outline-none focus:border-teal-500"
-            >
-              {!isBatchScoped && <option value="all">جميع المستويات</option>}
-              {studyLevels.map(lvl => (
-                <option key={lvl.id} value={lvl.id}>{lvl.titleArabic}</option>
-              ))}
-            </select>
+      {/* Unified Search, Quick Tabs & Academic Filters Workspace Bar */}
+      <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-4 space-y-3.5 text-xs">
+        {/* Row 1: Instant Search + Segmented Status Filter Tabs */}
+        <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="ابحث باسم المحاضرة، اسم المادة، البلوك، أو نوع الملف..."
+              className="w-full pr-10 pl-8 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] text-xs focus:outline-none focus:border-teal-500"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
 
-          <div className="flex items-center gap-1.5">
-            <span className="text-[var(--text-muted)] font-bold shrink-0">البلوك:</span>
-            <select
-              value={filterPeriodId}
-              onChange={(e) => handleFilterPeriodChange(e.target.value)}
-              className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-bold text-xs focus:outline-none focus:border-teal-500"
+          {/* Interactive Status Segmented Tabs */}
+          <div className="flex flex-wrap items-center gap-1 p-1 rounded-xl bg-slate-950/80 border border-slate-800">
+            <button
+              type="button"
+              onClick={() => setStatusFilter('all')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-colors whitespace-nowrap shrink-0 tabular-nums ${
+                statusFilter === 'all' ? 'bg-teal-600 text-white' : 'text-slate-400 hover:text-white'
+              }`}
             >
-              <option value="all">جميع البلوكات</option>
-              {filterPeriodsList.map(p => (
-                <option key={p.id} value={p.id}>{p.titleArabic}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            <span className="text-[var(--text-muted)] font-bold shrink-0">المقرر:</span>
-            <select
-              value={filterCourseId}
-              onChange={(e) => setFilterCourseId(e.target.value)}
-              className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-bold text-xs focus:outline-none focus:border-teal-500"
+              الكل ({resources.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setStatusFilter('published')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-colors whitespace-nowrap shrink-0 tabular-nums ${
+                statusFilter === 'published' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'
+              }`}
             >
-              <option value="all">جميع المقررات</option>
-              {filterCoursesList.map(c => (
-                <option key={c.id} value={c.id}>{c.titleArabic}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            <span className="text-[var(--text-muted)] font-bold shrink-0">الحالة:</span>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as any)}
-              className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-bold text-xs focus:outline-none focus:border-teal-500"
+              منشور ({resources.filter(r => r.status === 'published').length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setStatusFilter('draft')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-colors whitespace-nowrap shrink-0 tabular-nums ${
+                statusFilter === 'draft' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'
+              }`}
             >
-              <option value="all">جميع الحالات ({filtered.length})</option>
-              <option value="published">منشور للطلاب ({resources.filter(r => r.status === 'published').length})</option>
-              <option value="draft">مسودة ({resources.filter(r => r.status === 'draft').length})</option>
-            </select>
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            <span className="text-[var(--text-muted)] font-bold shrink-0">النوع:</span>
-            <select
-              value={typeFilter}
-              onChange={(e) => setTypeFilter(e.target.value as any)}
-              className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-bold text-xs focus:outline-none focus:border-teal-500"
-            >
-              <option value="all">جميع الأنواع</option>
-              <option value="pdf">ملفات PDF</option>
-              <option value="image">شرائح وصور طبية</option>
-              <option value="video">ملفات فيديو مباشرة</option>
-              <option value="audio">تسجيلات ومحاضرات صوتية</option>
-              <option value="link">روابط خارجية</option>
-              <option value="video_link">روابط فيديو</option>
-            </select>
+              مسودات ({resources.filter(r => r.status === 'draft').length})
+            </button>
+            {telegramDraftCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setStatusFilter('telegram_draft')}
+                className={`px-3 py-1.5 rounded-lg font-bold transition-colors whitespace-nowrap shrink-0 tabular-nums ${
+                  statusFilter === 'telegram_draft' ? 'bg-sky-600 text-white' : 'text-sky-400 hover:text-white'
+                }`}
+              >
+                مسودات تيليجرام ({telegramDraftCount})
+              </button>
+            )}
           </div>
         </div>
 
-        <div className="text-[11px] text-[var(--text-muted)]">
-          عدد المواد المعروضة: <strong className="text-[var(--text-primary)]">{filtered.length}</strong>
+        {/* Row 2: Cascading Academic Hierarchy Dropdowns + Select All */}
+        <div className="pt-3 border-t border-[var(--border-color)] flex flex-wrap items-center justify-between gap-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap items-center gap-2 w-full lg:w-auto">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[var(--text-muted)] font-bold shrink-0">المستوى:</span>
+              <select
+                value={filterLevelId}
+                disabled={isBatchScoped}
+                onChange={(e) => handleFilterLevelChange(e.target.value)}
+                className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-bold text-xs focus:outline-none focus:border-teal-500"
+              >
+                {!isBatchScoped && <option value="all">جميع المستويات</option>}
+                {studyLevels.map(lvl => (
+                  <option key={lvl.id} value={lvl.id}>{lvl.titleArabic}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <span className="text-[var(--text-muted)] font-bold shrink-0">البلوك:</span>
+              <select
+                value={filterPeriodId}
+                onChange={(e) => handleFilterPeriodChange(e.target.value)}
+                className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-bold text-xs focus:outline-none focus:border-teal-500"
+              >
+                <option value="all">جميع البلوكات</option>
+                {(filterPeriodsList.length > 0 ? filterPeriodsList : allPeriodsCatalog).map(p => (
+                  <option key={p.id} value={p.id}>{p.titleArabic}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <span className="text-[var(--text-muted)] font-bold shrink-0">المادة:</span>
+              <select
+                value={filterCourseId}
+                onChange={(e) => setFilterCourseId(e.target.value)}
+                className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-bold text-xs focus:outline-none focus:border-teal-500"
+              >
+                <option value="all">جميع المقررات</option>
+                {(filterCoursesList.length > 0 ? filterCoursesList : allCoursesCatalog).map(c => (
+                  <option key={c.id} value={c.id}>{c.titleArabic}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <span className="text-[var(--text-muted)] font-bold shrink-0">النوع:</span>
+              <select
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value as any)}
+                className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-bold text-xs focus:outline-none focus:border-teal-500"
+              >
+                <option value="all">جميع الأنواع</option>
+                <option value="pdf">ملفات PDF</option>
+                <option value="image">شرائح وصور طبية</option>
+                <option value="video">ملفات فيديو</option>
+                <option value="audio">تسجيلات صوتية</option>
+                <option value="link">روابط ومراجع</option>
+              </select>
+            </div>
+
+            {(searchQuery || statusFilter !== 'all' || typeFilter !== 'all' || filterPeriodId !== 'all' || filterCourseId !== 'all') && (
+              <button
+                type="button"
+                onClick={resetAllFilters}
+                className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold flex items-center gap-1 transition-colors whitespace-nowrap shrink-0"
+              >
+                <Filter className="w-3.5 h-3.5" />
+                <span>إعادة ضبط</span>
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-3 w-full lg:w-auto justify-between lg:justify-end">
+            {filtered.length > 0 && (
+              <button
+                type="button"
+                onClick={toggleSelectAllFiltered}
+                className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+              >
+                <CheckSquare className="w-3.5 h-3.5 text-teal-400" />
+                <span>{allFilteredSelected ? 'إلغاء تحديد الكل' : `تحديد الكل (${filtered.length})`}</span>
+              </button>
+            )}
+            <span className="text-[11px] text-[var(--text-muted)] tabular-nums">
+              المعروض: <strong className="text-[var(--text-primary)]">{filtered.length}</strong> من {resources.length}
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* Resources Table / Card List */}
-      <div className="space-y-3">
+      {/* Bulk Action Bar (Appears when 1 or more resources are selected) */}
+      {selectedResourceIds.length > 0 && (
+        <div className="p-3.5 sm:p-4 rounded-2xl bg-indigo-950/80 border border-indigo-500/50 flex flex-wrap items-center justify-between gap-3 text-xs shadow-lg">
+          <div className="flex items-center gap-2">
+            <span className="px-2.5 py-1 rounded-lg bg-indigo-500 text-white font-black tabular-nums">
+              {selectedResourceIds.length} ملفات محددة
+            </span>
+            <span className="text-indigo-200 font-semibold">
+              اختر الإجراء الجماعي لتطبيقه فوراً ومزامنته مع السحابة:
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={bulkBusy}
+              onClick={() => handleBulkStatusChange('published')}
+              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>نشر المحدد للطلاب</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={bulkBusy}
+              onClick={() => {
+                const defaultLvl = filterLevelId !== 'all' ? filterLevelId : (studyLevels[0]?.id || 'lvl-2');
+                setBulkForm({
+                  studyLevelId: defaultLvl,
+                  studyPeriodId: filterPeriodId !== 'all' ? filterPeriodId : '',
+                  courseOfferingId: filterCourseId !== 'all' ? filterCourseId : '',
+                  sectionType: 'theoretical',
+                  publishImmediately: true
+                });
+                setShowBulkCategorizeModal(true);
+              }}
+              className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap"
+            >
+              <FolderInput className="w-3.5 h-3.5" />
+              <span>تعيين المستوى والمادة للمحدد</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={bulkBusy}
+              onClick={() => handleBulkStatusChange('draft')}
+              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-amber-300 border border-slate-700 font-bold transition-colors whitespace-nowrap"
+            >
+              تحويل لمسودة
+            </button>
+
+            <button
+              type="button"
+              disabled={bulkBusy}
+              onClick={handleBulkDelete}
+              className="px-3 py-2 rounded-xl bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-800 font-bold flex items-center gap-1 transition-colors whitespace-nowrap"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>حذف المحدد</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSelectedResourceIds([])}
+              className="p-2 rounded-xl bg-slate-900 text-slate-400 hover:text-white"
+              title="إلغاء التحديد"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Resources Clean Structured List */}
+      <div className="space-y-2.5">
         {filtered.length === 0 ? (
-          <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-10 text-center text-slate-500 text-xs">
-            لا توجد مواد تعليمية مطابقة للفلتر المحدد.
+          <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-10 text-center space-y-3">
+            <p className="text-slate-400 text-xs font-semibold">لا توجد محاضرات أو ملفات مطابقة للبحث أو الفلتر المحدد.</p>
+            <button
+              type="button"
+              onClick={resetAllFilters}
+              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-teal-300 text-xs font-bold transition-colors"
+            >
+              إظهار جميع ملفات المكتبة
+            </button>
           </div>
         ) : (
-          filtered.map((res) => (
-            <div key={res.id} className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 shadow-lg text-xs flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-3 min-w-0">
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold flex-shrink-0 ${
-                  res.resourceType === 'pdf' ? 'bg-rose-500/10 text-rose-400' :
-                  res.resourceType === 'image' ? 'bg-teal-500/10 text-teal-400' :
-                  res.resourceType === 'audio' ? 'bg-amber-500/10 text-amber-400' :
-                  'bg-indigo-500/10 text-indigo-400'
-                }`}>
-                  {res.resourceType === 'pdf' && <FileText className="w-5 h-5" />}
-                  {res.resourceType === 'image' && <ImageIcon className="w-5 h-5" />}
-                  {res.resourceType === 'audio' && <Volume2 className="w-5 h-5" />}
-                  {res.resourceType !== 'pdf' && res.resourceType !== 'image' && res.resourceType !== 'audio' && <ExternalLink className="w-5 h-5" />}
-                </div>
+          filtered.map((res) => {
+            const isSelected = selectedResourceIds.includes(res.id);
+            const needsCategorization = res.studyLevelId === 'pending_review' || res.courseOfferingId === 'pending_review';
 
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-bold text-white text-sm">{res.title}</span>
-                    <span className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800 text-amber-300 font-mono text-[10px]">
-                      {res.fileSizeLabel || '1.8 MB'}
-                    </span>
-                    {res.createdBy === 'AUTOMATED_TELEGRAM_INGESTION' && (
-                      <span className="px-2 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-800 text-[10px] font-bold">
-                        📥 مسحوب تلقائياً من تيليجرام
-                      </span>
-                    )}
-                    {res.url?.includes('drive.google.com') && (
-                      <span className="px-2 py-0.5 rounded bg-teal-950 text-teal-300 border border-teal-800 text-[10px] font-bold">
-                        Google Drive Preview
-                      </span>
-                    )}
-                    {res.url?.startsWith('umed-cloud://') && (
-                      <span className="px-2 py-0.5 rounded bg-teal-950 text-teal-300 border border-teal-800 text-[10px] font-bold">
-                        مرفوع سحابياً (Firestore)
-                      </span>
-                    )}
-                    {(res.studyLevelId === 'pending_review' || res.courseOfferingId === 'pending_review') && (
-                      <span className="px-2 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-800 text-[10px] font-bold">
-                        ⚠️ بانتظار تحديد المستوى/المادة
-                      </span>
-                    )}
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                      res.status === 'published' ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' :
-                      'bg-amber-950 text-amber-300 border border-amber-800'
-                    }`}>
-                      {res.status === 'published' ? 'منشور للطلاب' : res.status === 'archived' ? 'مؤرشف' : 'مسودة'}
-                    </span>
+            return (
+              <div
+                key={res.id}
+                className={`bg-slate-900/90 border rounded-2xl p-4 text-xs flex flex-col lg:flex-row lg:items-center justify-between gap-3.5 transition-colors ${
+                  isSelected
+                    ? 'border-indigo-500 bg-indigo-950/20'
+                    : needsCategorization
+                    ? 'border-amber-500/40 hover:border-amber-500/70'
+                    : 'border-slate-800 hover:border-slate-700'
+                }`}
+              >
+                <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1">
+                  {/* Selection Checkbox */}
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleSelectResource(res.id)}
+                    className="mt-1 sm:mt-0 w-4 h-4 rounded accent-teal-500 cursor-pointer shrink-0"
+                    title="تحديد الملف"
+                  />
+
+                  {/* Resource Type Icon */}
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold flex-shrink-0 ${
+                    res.resourceType === 'pdf' ? 'bg-rose-500/10 text-rose-400' :
+                    res.resourceType === 'image' ? 'bg-teal-500/10 text-teal-400' :
+                    res.resourceType === 'audio' ? 'bg-amber-500/10 text-amber-400' :
+                    'bg-indigo-500/10 text-indigo-400'
+                  }`}>
+                    {res.resourceType === 'pdf' && <FileText className="w-5 h-5" />}
+                    {res.resourceType === 'image' && <ImageIcon className="w-5 h-5" />}
+                    {res.resourceType === 'audio' && <Volume2 className="w-5 h-5" />}
+                    {res.resourceType !== 'pdf' && res.resourceType !== 'image' && res.resourceType !== 'audio' && <ExternalLink className="w-5 h-5" />}
                   </div>
 
-                  <div className="flex items-center gap-2 flex-wrap text-[11px] text-slate-400 mt-1">
-                    <span>المستوى: {getLevelLabel(res.studyLevelId)}</span>
-                    {res.studyPeriodId && (
-                      <>
-                        <span>•</span>
-                        <span>البلوك: {res.studyPeriodId}</span>
-                      </>
-                    )}
-                    {res.courseOfferingId && (
-                      <>
-                        <span>•</span>
-                        <span>المادة: {res.courseOfferingId === 'pending_review' ? 'قيد المراجعة' : res.courseOfferingId}</span>
-                      </>
-                    )}
-                    <span>•</span>
-                    <span>الشعبة: {res.sectionType === 'theoretical' ? 'نظري' : res.sectionType === 'practical' ? 'عملي ومختبر' : 'عام'}</span>
-                    <span>•</span>
-                    <span className="font-mono text-slate-500">{new Date(res.createdAt).toLocaleDateString('ar-YE')}</span>
+                  {/* Title & Clean Arabic Metadata */}
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-white text-sm break-words">{res.title}</span>
+                      <span className={`text-[11px] font-bold ${
+                        res.status === 'published' ? 'text-emerald-400' : 'text-amber-400'
+                      }`}>
+                        · {res.status === 'published' ? 'منشور للطلاب' : res.status === 'archived' ? 'مؤرشف' : 'مسودة'}
+                      </span>
+                      {res.createdBy === 'AUTOMATED_TELEGRAM_INGESTION' && (
+                        <span className="text-[11px] text-sky-400 font-semibold">
+                          · مسحوب من تيليجرام
+                        </span>
+                      )}
+                      {needsCategorization && (
+                        <span className="text-[11px] text-amber-300 font-bold">
+                          · يتطلب تحديد المستوى والمادة
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Clean Unboxed Arabic Hierarchy Path */}
+                    <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-slate-400">
+                      <span className="text-slate-200 font-semibold">{getLevelLabel(res.studyLevelId)}</span>
+                      {res.studyPeriodId && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span className="text-teal-300 font-medium">{getPeriodLabel(res.studyPeriodId)}</span>
+                        </>
+                      )}
+                      {res.courseOfferingId && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span className="text-indigo-300 font-medium">{getCourseLabel(res.courseOfferingId)}</span>
+                        </>
+                      )}
+                      <span aria-hidden="true">·</span>
+                      <span>{res.sectionType === 'theoretical' ? 'شعبة نظري' : res.sectionType === 'practical' ? 'عملي ومختبر' : 'عام'}</span>
+                      <span aria-hidden="true">·</span>
+                      <span className="font-mono tabular-nums text-slate-400">{res.fileSizeLabel || '1.8 MB'}</span>
+                      <span aria-hidden="true">·</span>
+                      <span className="font-mono tabular-nums text-slate-500">{new Date(res.createdAt).toLocaleDateString('ar-YE')}</span>
+                    </div>
                   </div>
                 </div>
+
+                {/* Action Buttons */}
+                <div className="flex items-center gap-2 flex-wrap justify-end shrink-0 pt-2 lg:pt-0 border-t lg:border-t-0 border-slate-800/80">
+                  <button
+                    onClick={() => setPreviewResource(res)}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold flex items-center gap-1.5 transition-colors border border-slate-700 whitespace-nowrap"
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                    <span>معاينة</span>
+                  </button>
+
+                  <button
+                    onClick={() => setEditingResource(res)}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-teal-950/60 text-teal-300 font-semibold flex items-center gap-1.5 transition-colors border border-slate-700 whitespace-nowrap"
+                    title="تعديل بيانات المورد وتصنيفه"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                    <span>تعديل وتصنيف</span>
+                  </button>
+
+                  <button
+                    onClick={() => handleToggleStatus(res.id, res.status)}
+                    className={`px-3 py-1.5 rounded-xl font-bold transition-colors border whitespace-nowrap ${
+                      res.status === 'published'
+                        ? 'bg-amber-950/30 border-amber-800/40 text-amber-300 hover:bg-amber-950/60'
+                        : 'bg-emerald-950/40 border-emerald-700/50 text-emerald-300 hover:bg-emerald-950/70'
+                    }`}
+                  >
+                    {res.status === 'published' ? 'إلغاء النشر' : 'اعتماد ونشر'}
+                  </button>
+
+                  <button
+                    onClick={() => handleDelete(res.id)}
+                    className="p-1.5 rounded-xl bg-slate-800 hover:bg-rose-950/50 text-slate-400 hover:text-rose-300 transition-colors border border-slate-700"
+                    title="حذف المورد نهائياً"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
-
-              {/* Action Buttons: Preview, Edit, Toggle Publish, Delete */}
-              <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  onClick={() => setPreviewResource(res)}
-                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium flex items-center gap-1 transition-colors border border-slate-700"
-                >
-                  <Eye className="w-3.5 h-3.5" />
-                  <span>معاينة</span>
-                </button>
-
-                <button
-                  onClick={() => setEditingResource(res)}
-                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-teal-950/60 text-teal-300 font-medium flex items-center gap-1 transition-colors border border-slate-700"
-                  title="تعديل بيانات المورد التعليمي"
-                >
-                  <Edit2 className="w-3.5 h-3.5" />
-                  <span>تعديل</span>
-                </button>
-
-                <button
-                  onClick={() => handleToggleStatus(res.id, res.status)}
-                  className={`px-3 py-1.5 rounded-lg font-medium transition-colors border ${
-                    res.status === 'published'
-                      ? 'bg-amber-950/30 border-amber-800/40 text-amber-300 hover:bg-amber-950/60'
-                      : 'bg-emerald-950/30 border-emerald-800/40 text-emerald-300 hover:bg-emerald-950/60'
-                  }`}
-                >
-                  {res.status === 'published' ? 'تحويل لمسودة' : 'نشر للطلاب'}
-                </button>
-
-                <button
-                  onClick={() => handleDelete(res.id)}
-                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-950/40 text-slate-400 hover:text-rose-400 transition-colors"
-                  title="حذف المورد"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
+
+      {/* Modal: Bulk Categorize & Publish Selected Resources */}
+      {showBulkCategorizeModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto overscroll-contain">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
+              <div>
+                <h3 className="font-bold text-white text-sm">تصنيف ونقل الملفات المحددة ({selectedResourceIds.length})</h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">تعيين المستوى والبلوك والمادة لجميع الملفات المختارة دفعة واحدة</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowBulkCategorizeModal(false)}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleBulkCategorizeSubmit} className="p-5 space-y-3.5 text-xs">
+              <div>
+                <label className="block text-slate-300 mb-1 font-semibold">المستوى الدراسي:</label>
+                <select
+                  value={bulkForm.studyLevelId}
+                  onChange={(e) => setBulkForm({ ...bulkForm, studyLevelId: e.target.value, studyPeriodId: '', courseOfferingId: '' })}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                  required
+                >
+                  {studyLevels.map(lvl => (
+                    <option key={lvl.id} value={lvl.id}>{lvl.titleArabic}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-300 mb-1 font-semibold">البلوك / الفترة الدراسية:</label>
+                <select
+                  value={bulkForm.studyPeriodId}
+                  onChange={(e) => setBulkForm({ ...bulkForm, studyPeriodId: e.target.value, courseOfferingId: '' })}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                >
+                  <option value="">-- عام للمستوى --</option>
+                  {bulkPeriods.map(blk => (
+                    <option key={blk.id} value={blk.id}>{blk.titleArabic} ({blk.code})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-300 mb-1 font-semibold">المقرر الدراسي:</label>
+                <select
+                  value={bulkForm.courseOfferingId}
+                  onChange={(e) => setBulkForm({ ...bulkForm, courseOfferingId: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                >
+                  <option value="">-- جميع مقررات البلوك --</option>
+                  {bulkCourses.map(c => (
+                    <option key={c.id} value={c.id}>{c.titleArabic} ({c.code})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-300 mb-1 font-semibold">الشعبة الأكاديمية:</label>
+                <select
+                  value={bulkForm.sectionType}
+                  onChange={(e) => setBulkForm({ ...bulkForm, sectionType: e.target.value as any })}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                >
+                  <option value="theoretical">شعبة نظري (Lectures)</option>
+                  <option value="practical">شعبة عملي ومختبر (Practical / Lab)</option>
+                  <option value="general">عام / شامل</option>
+                </select>
+              </div>
+
+              <label className="flex items-center gap-2 pt-1 cursor-pointer text-emerald-300 font-bold">
+                <input
+                  type="checkbox"
+                  checked={bulkForm.publishImmediately}
+                  onChange={(e) => setBulkForm({ ...bulkForm, publishImmediately: e.target.checked })}
+                  className="w-4 h-4 rounded accent-emerald-500"
+                />
+                <span>اعتماد ونشر هذه الملفات للطلاب فوراً بعد التصنيف</span>
+              </label>
+
+              <div className="pt-3 border-t border-slate-800 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowBulkCategorizeModal(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 font-semibold"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  disabled={bulkBusy}
+                  className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold shadow-md"
+                >
+                  {bulkBusy ? 'جاري الحفظ...' : 'تطبيق التصنيف والحفظ'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Modal: Add Educational Resource */}
       {showAddModal && (
