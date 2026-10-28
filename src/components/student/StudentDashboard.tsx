@@ -71,6 +71,8 @@ import {
 import RegisterEnrollment from './RegisterEnrollment.tsx';
 import StudentMedicalLibrary from '../library/StudentMedicalLibrary.tsx';
 import StudentAssessmentList from '../assessment/StudentAssessmentList.tsx';
+import { useAuth } from '../../context/AuthContext.tsx';
+import { YEMEN_UNIVERSITIES_OPTIONS } from '../../lib/firebase.ts';
 
 interface StudentDashboardProps {
   uid: string;
@@ -100,18 +102,20 @@ export default function StudentDashboard({
   previewStudyLevelId,
   assessmentNavTarget
 }: StudentDashboardProps) {
-  const buildDefaultEnrollment = (overrideLevelId?: string): StudentEnrollment => {
+  const { userProfile, updateFullProfile } = useAuth();
+
+  const buildDefaultEnrollment = (overrideLevelId?: string, overrideUnivId?: string): StudentEnrollment => {
     const savedCtx = getUserAcademicContext();
     return {
       id: uid ? `enr-${uid}` : 'enr-visitor-default',
       uid: uid || 'visitor',
-      studentNameArabic: displayNameArabic || 'طالب الطب البشري',
+      studentNameArabic: userProfile?.displayNameArabic || displayNameArabic || 'طالب الطب البشري',
       academicStudentNumber: '',
-      universityId: savedCtx.universityId || previewUniversityId || 'univ-dar-al-salam',
+      universityId: overrideUnivId || userProfile?.universityId || savedCtx.universityId || previewUniversityId || 'univ-dar-al-salam',
       collegeId: savedCtx.collegeId || 'col-med-dar',
       programId: savedCtx.programId || 'prog-mbbs',
       curriculumVersionId: 'cur-dar-2024',
-      currentStudyLevelId: overrideLevelId || previewStudyLevelId || savedCtx.studyLevelId || 'lvl-4',
+      currentStudyLevelId: overrideLevelId || userProfile?.studyLevelId || previewStudyLevelId || savedCtx.studyLevelId || 'lvl-4',
       academicYear: '2025-2026',
       status: 'approved',
       enrolledAt: new Date().toISOString()
@@ -412,11 +416,37 @@ export default function StudentDashboard({
     try {
       localStorage.setItem(`umed_enrollment_${uid || 'visitor'}`, JSON.stringify(updatedEnr));
     } catch (e) {}
+    if (uid && uid !== 'visitor') {
+      updateFullProfile({ studyLevelId: newLevelId }).catch(() => {});
+    }
+    loadStudentData(false, updatedEnr);
+  };
+
+  const handleQuickUniversityChange = (newUniversityId: string) => {
+    const univObj = YEMEN_UNIVERSITIES_OPTIONS.find(u => u.id === newUniversityId);
+    const univNameArabic = univObj?.nameArabic || getUniversityName(newUniversityId);
+    saveUserAcademicContext({ universityId: newUniversityId, universityNameArabic: univNameArabic });
+    const updatedEnr: StudentEnrollment = {
+      ...activeEnrollment,
+      universityId: newUniversityId,
+      status: activeEnrollment.status === 'rejected' ? 'approved' : activeEnrollment.status
+    };
+    setEnrollment(updatedEnr);
+    try {
+      localStorage.setItem(`umed_enrollment_${uid || 'visitor'}`, JSON.stringify(updatedEnr));
+    } catch (e) {}
+    if (uid && uid !== 'visitor') {
+      updateFullProfile({
+        universityId: newUniversityId,
+        universityNameArabic: univNameArabic
+      }).catch(() => {});
+    }
     loadStudentData(false, updatedEnr);
   };
 
   const isInternship = activeEnrollment.currentStudyLevelId === 'lvl-internship';
-  const currentUniversityName = getUniversityName(activeEnrollment.universityId);
+  const currentUniversityName = userProfile?.universityNameArabic || getUniversityName(activeEnrollment.universityId);
+  const currentSpecialtyArabic = userProfile?.specialtyArabic || 'الطب البشري والجراحة العامة (MBBS)';
 
   return (
     <div className="space-y-5">
@@ -426,17 +456,35 @@ export default function StudentDashboard({
         <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-4 sm:p-5 shadow-sm overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center text-white shadow-lg shadow-teal-500/20 font-black text-xl flex-shrink-0">
-                <Stethoscope className="w-5 h-5" />
-              </div>
+              <button
+                type="button"
+                onClick={() => switchSection('profile')}
+                className="w-12 h-12 rounded-2xl bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center text-white shadow-lg shadow-teal-500/20 font-black text-xl flex-shrink-0 overflow-hidden border border-teal-400/40 hover:scale-105 transition-transform"
+                title="تعديل الصورة والملف الأكاديمي"
+              >
+                {userProfile?.avatarUrl ? (
+                  <img
+                    src={userProfile.avatarUrl}
+                    alt={displayNameArabic}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <Stethoscope className="w-5 h-5" />
+                )}
+              </button>
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <h2 className="font-extrabold text-sm sm:text-base text-[var(--text-primary)]">
-                    د. {displayNameArabic}
+                    د. {userProfile?.displayNameArabic || displayNameArabic}
                   </h2>
-                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
-                    وصول كامل ومفتوح ✓
-                  </span>
+                  {userProfile?.username && (
+                    <span
+                      className="px-2 py-0.5 rounded-full bg-teal-500/15 text-teal-300 border border-teal-500/30 text-[11px] font-mono font-bold"
+                      dir="ltr"
+                    >
+                      @{userProfile.username}
+                    </span>
+                  )}
                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
                     isInternship 
                       ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' 
@@ -446,12 +494,23 @@ export default function StudentDashboard({
                   </span>
                 </div>
                 <p className="text-xs text-[var(--text-secondary)] mt-1">
-                  {currentUniversityName} • كلية الطب البشري • نظام البلوكات (MBBS)
+                  {currentUniversityName} • {currentSpecialtyArabic}
                 </p>
               </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={activeEnrollment.universityId}
+                onChange={(e) => handleQuickUniversityChange(e.target.value)}
+                className="px-2.5 py-1.5 rounded-xl bg-slate-950 border border-slate-700 text-slate-200 text-xs font-bold focus:outline-none focus:border-teal-500 max-w-[180px] truncate"
+                title="تغيير الجامعة"
+              >
+                {YEMEN_UNIVERSITIES_OPTIONS.map((u) => (
+                  <option key={u.id} value={u.id}>{u.nameArabic}</option>
+                ))}
+              </select>
+
               <select
                 value={activeEnrollment.currentStudyLevelId}
                 onChange={(e) => handleQuickLevelChange(e.target.value)}
@@ -467,15 +526,13 @@ export default function StudentDashboard({
                 <option value="lvl-internship">سنة الامتياز السريرية</option>
               </select>
 
-              {uid && uid !== 'visitor' && (
-                <button
-                  type="button"
-                  onClick={() => setShowOptionalEnrollmentModal((prev) => !prev)}
-                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold transition-colors"
-                >
-                  {showOptionalEnrollmentModal ? 'إغلاق تخصيص الدفعة' : 'تخصيص الجامعة والدفعة'}
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => switchSection('profile')}
+                className="px-3 py-1.5 rounded-xl bg-teal-600/20 hover:bg-teal-600/30 border border-teal-500/40 text-teal-300 text-xs font-bold transition-colors"
+              >
+                تعديل صورتي وبياناتي
+              </button>
             </div>
           </div>
 

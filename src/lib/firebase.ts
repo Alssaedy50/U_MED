@@ -236,36 +236,108 @@ export function normalizeAcademicId(academicInput: string): string {
     .replace(/-+/g, '-');
 }
 
+/**
+ * Normalizes a username so that Uppercase (Capital) and Lowercase (Small) English letters
+ * have the exact same value (`A-Z` === `a-z`).
+ */
 export function normalizeUsername(usernameInput: string): string {
   return (usernameInput || '')
     .trim()
     .replace(/^@+/, '')
     .replace(/\s+/g, '_')
     .toLowerCase()
-    .replace(/[^a-z0-9._\-\u0600-\u06FF]/gi, '');
+    .replace(/[^a-z0-9_]/g, '');
 }
 
+/**
+ * Computes a canonical anti-similarity skeleton for a username to prevent
+ * similar/confusable usernames (e.g. `Ahmed_Med` vs `ahmedmed` vs `ahmeed_med` vs `ahm3d_m3d`).
+ * - Lowercases all characters (`A-Z` === `a-z`)
+ * - Removes all separators (`_`, `.`, `-`)
+ * - Normalizes lookalike digits (`0` -> `o`, `1` -> `l`)
+ * - Collapses repeated consecutive letters (`aaahmed` -> `ahmed`, `ahmmed` -> `ahmed`)
+ */
+export function getUsernameSimilarityKey(usernameInput: string): string {
+  const norm = normalizeUsername(usernameInput);
+  if (!norm) return '';
+  return norm
+    .replace(/[_.-]+/g, '')
+    .replace(/0/g, 'o')
+    .replace(/1/g, 'l')
+    .replace(/([a-z])\1+/g, '$1');
+}
+
+export function getUsernameSkeletonDocKey(usernameInput: string): string {
+  const skel = getUsernameSimilarityKey(usernameInput);
+  if (!skel) return '';
+  return `skeleton_${skel}`;
+}
+
+/**
+ * Validates that a username:
+ * 1. Uses English characters (`A-Z` or `a-z`, treated identically) with optional digits/underscores.
+ * 2. Contains AT LEAST 4 English letters (`[a-zA-Z]`).
+ * 3. Does not exceed 30 characters.
+ */
 export function validateUsernameFormat(usernameInput: string): {
   valid: boolean;
   normalized: string;
+  similarityKey: string;
+  englishLettersCount: number;
   message?: string;
 } {
-  const normalized = normalizeUsername(usernameInput);
-  if (!normalized || normalized.length < 3) {
+  const rawTrimmed = (usernameInput || '').trim().replace(/^@+/, '');
+  const hasArabicOrInvalidChars = /[^a-zA-Z0-9_\s]/.test(rawTrimmed);
+  const normalized = normalizeUsername(rawTrimmed);
+  const similarityKey = getUsernameSimilarityKey(normalized);
+  const englishLettersCount = (normalized.match(/[a-z]/g) || []).length;
+
+  if (!rawTrimmed) {
+    return {
+      valid: false,
+      normalized: '',
+      similarityKey: '',
+      englishLettersCount: 0,
+      message: 'يرجى إدخال اسم المستخدم (4 أحرف إنجليزية على الأقل).'
+    };
+  }
+
+  if (hasArabicOrInvalidChars) {
     return {
       valid: false,
       normalized,
-      message: 'اسم المستخدم يجب أن يتكون من 3 أحرف أو أرقام على الأقل (مثال: ahmed_med).'
+      similarityKey,
+      englishLettersCount,
+      message: 'اسم المستخدم يجب أن يتكون من أحرف إنجليزية فقط (A-Z) وتُعامل الأحرف الكبيرة والصغيرة بنفس القيمة.'
     };
   }
+
+  if (englishLettersCount < 4 || normalized.length < 4) {
+    return {
+      valid: false,
+      normalized,
+      similarityKey,
+      englishLettersCount,
+      message: `اسم المستخدم يجب أن يحتوي على 4 أحرف إنجليزية على الأقل (أدخلت ${englishLettersCount} أحرف إنجليزية حالياً). الأحرف الكبيرة والصغيرة لها نفس القيمة.`
+    };
+  }
+
   if (normalized.length > 30) {
     return {
       valid: false,
       normalized: normalized.slice(0, 30),
+      similarityKey,
+      englishLettersCount,
       message: 'اسم المستخدم يجب ألا يتجاوز 30 حرفاً.'
     };
   }
-  return { valid: true, normalized };
+
+  return {
+    valid: true,
+    normalized,
+    similarityKey,
+    englishLettersCount
+  };
 }
 
 export function getUsernameDocKey(usernameInput: string): string {
@@ -275,18 +347,16 @@ export function getUsernameDocKey(usernameInput: string): string {
 }
 
 export function usernameToAuthEmail(usernameInput: string): string {
-  const check = validateUsernameFormat(usernameInput);
-  if (!check.valid || !check.normalized) {
-    throw new Error(check.message || 'INVALID_USERNAME');
+  const norm = normalizeUsername(usernameInput);
+  if (!norm || norm.length < 3) {
+    throw new Error('اسم المستخدم يجب أن يتكون من 4 أحرف إنجليزية على الأقل.');
   }
-  const norm = check.normalized;
-  if (/^[a-z0-9._-]+$/.test(norm)) {
-    return `user_${norm}@users.umed.edu.ye`;
-  }
-  const hexEncoded = Array.from(norm)
-    .map((ch) => ch.charCodeAt(0).toString(16))
-    .join('_');
-  return `user_u${hexEncoded}@users.umed.edu.ye`;
+  return `user_${norm}@users.umed.edu.ye`;
+}
+
+export function getDefaultUsernamePassword(usernameInput: string): string {
+  const norm = normalizeUsername(usernameInput);
+  return `Umed_Cloud_${norm}_2026!`;
 }
 
 export function isSyntheticUserEmail(email?: string | null): boolean {
@@ -318,6 +388,343 @@ export function extractUsernameFromAuthEmail(email?: string | null): string {
     }
   }
   return '';
+}
+
+// ---------------------------------------------------------------------------
+// 5A. Device Fingerprint & Single-Account-Per-Phone Verification System
+// ---------------------------------------------------------------------------
+
+const DEVICE_ID_STORAGE_KEY = 'umed_device_id_v1';
+const DEVICE_BOUND_ACCOUNT_KEY = 'umed_device_bound_account_v1';
+
+function readDeviceCookie(): string {
+  try {
+    if (typeof document === 'undefined') return '';
+    const match = document.cookie.match(/(?:^|;\s*)umed_device_id=([^;]+)/);
+    return match ? decodeURIComponent(match[1]) : '';
+  } catch {
+    return '';
+  }
+}
+
+function writeDeviceCookie(deviceId: string): void {
+  try {
+    if (typeof document === 'undefined') return;
+    const maxAge = 60 * 60 * 24 * 365 * 5; // 5 years
+    document.cookie = `umed_device_id=${encodeURIComponent(deviceId)}; path=/; max-age=${maxAge}; SameSite=Lax`;
+  } catch {}
+}
+
+/**
+ * Generates a deterministic hardware signature of the phone/browser + persistent device ID
+ * to prevent opening multiple student accounts from the same phone.
+ */
+export function getDeviceFingerprint(): { deviceId: string; hardwareHash: string } {
+  let hardwareHash = 'hw_default';
+  try {
+    if (typeof window !== 'undefined' && typeof navigator !== 'undefined') {
+      const screenPart = `${window.screen?.width || 0}x${window.screen?.height || 0}x${window.screen?.colorDepth || 24}`;
+      const ratioPart = `${Math.round((window.devicePixelRatio || 1) * 100)}`;
+      const coresPart = `${navigator.hardwareConcurrency || 4}`;
+      const touchPart = `${navigator.maxTouchPoints || 0}`;
+      const platformPart = (navigator.platform || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const tzPart = (Intl.DateTimeFormat().resolvedOptions().timeZone || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const uaClean = (navigator.userAgent || '')
+        .toLowerCase()
+        .replace(/\b(chrome|version|safari|firefox|edg)\/[\d.]+/g, '')
+        .replace(/[^a-z0-9]/g, '')
+        .slice(0, 48);
+      const rawTrait = `${screenPart}_${ratioPart}_${coresPart}_${touchPart}_${platformPart}_${tzPart}_${uaClean}`;
+      let hash = 5381;
+      for (let i = 0; i < rawTrait.length; i++) {
+        hash = (hash * 33) ^ rawTrait.charCodeAt(i);
+      }
+      hardwareHash = `hw_${(hash >>> 0).toString(16)}_${screenPart}_${coresPart}`;
+    }
+  } catch {}
+
+  let deviceId = '';
+  try {
+    deviceId = localStorage.getItem(DEVICE_ID_STORAGE_KEY) || readDeviceCookie() || '';
+    if (!deviceId) {
+      const rand = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+      deviceId = `dev_${rand}`;
+    }
+    localStorage.setItem(DEVICE_ID_STORAGE_KEY, deviceId);
+    writeDeviceCookie(deviceId);
+  } catch {
+    deviceId = `dev_${hardwareHash}`;
+  }
+
+  return { deviceId, hardwareHash };
+}
+
+export function getDeviceDocKey(deviceId: string): string {
+  const clean = (deviceId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '');
+  return clean ? `device_${clean}` : '';
+}
+
+export function getLocalDeviceBoundAccount(): {
+  uid: string;
+  username: string;
+  displayNameArabic?: string;
+} | null {
+  try {
+    const raw = localStorage.getItem(DEVICE_BOUND_ACCOUNT_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.uid && parsed.username) return parsed;
+    }
+  } catch {}
+  return null;
+}
+
+export function saveLocalDeviceBoundAccount(info: {
+  uid: string;
+  username: string;
+  displayNameArabic?: string;
+}): void {
+  try {
+    localStorage.setItem(DEVICE_BOUND_ACCOUNT_KEY, JSON.stringify(info));
+  } catch {}
+}
+
+export function clearLocalDeviceBoundAccount(): void {
+  try {
+    localStorage.removeItem(DEVICE_BOUND_ACCOUNT_KEY);
+  } catch {}
+}
+
+/**
+ * Verifies that this phone/device does not already have another active account registered.
+ * Prevents opening more than one student account from the same phone.
+ */
+export async function checkDeviceSingleAccountPolicy(params?: {
+  excludeUid?: string;
+  candidateUsername?: string;
+  callerEmail?: string;
+}): Promise<{
+  allowed: boolean;
+  existingUid?: string;
+  existingUsername?: string;
+  existingDisplayName?: string;
+  message?: string;
+}> {
+  if (params?.callerEmail && isInitialOwnerEmail(params.callerEmail)) {
+    return { allowed: true };
+  }
+  const excludeUid = params?.excludeUid?.trim() || '';
+  const candidateNorm = params?.candidateUsername ? normalizeUsername(params.candidateUsername) : '';
+  const { deviceId } = getDeviceFingerprint();
+  const deviceDocId = getDeviceDocKey(deviceId);
+
+  // 1. Check Cloud Firestore device reservation (`uniqueIdentifiers/device_<deviceId>`)
+  if (deviceDocId) {
+    try {
+      const snap = await getDoc(doc(db, 'uniqueIdentifiers', deviceDocId));
+      if (snap.exists()) {
+        const rec = snap.data() as UniqueIdentifierRecord;
+        if (rec.uid && rec.uid !== excludeUid) {
+          const isDeleted = await isAccountDeletedInCloud(rec.uid);
+          if (isDeleted) {
+            await releaseIdentifierKeyFromCloud(deviceDocId);
+            clearLocalDeviceBoundAccount();
+          } else {
+            const profSnap = await getDoc(doc(db, 'userProfiles', rec.uid)).catch(() => null);
+            if (!profSnap || !profSnap.exists()) {
+              // Stale device lock where profile was deleted
+              await releaseIdentifierKeyFromCloud(deviceDocId);
+              clearLocalDeviceBoundAccount();
+            } else {
+              const prof = profSnap.data() as UserProfile;
+              const boundUsername = normalizeUsername(prof.username || rec.username || rec.value || '');
+              // If the student typed their own bound username on this phone, allow them so signUpWithUsername can auto-login!
+              if (candidateNorm && boundUsername && candidateNorm === boundUsername) {
+                return {
+                  allowed: true,
+                  existingUid: rec.uid,
+                  existingUsername: boundUsername,
+                  existingDisplayName: prof.displayNameArabic
+                };
+              }
+              saveLocalDeviceBoundAccount({
+                uid: rec.uid,
+                username: boundUsername,
+                displayNameArabic: prof.displayNameArabic
+              });
+              return {
+                allowed: false,
+                existingUid: rec.uid,
+                existingUsername: boundUsername,
+                existingDisplayName: prof.displayNameArabic,
+                message: `نظام التحقق من الجهاز: هذا الهاتف مسجل به حساب مسبقاً باسم المستخدم (@${boundUsername}). لا يُسمح بفتح أكثر من حساب من نفس الهاتف.`
+              };
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // 2. Check local device bound account cache
+  const localBound = getLocalDeviceBoundAccount();
+  if (localBound && localBound.uid && localBound.uid !== excludeUid) {
+    const isDeleted = await isAccountDeletedInCloud(localBound.uid);
+    if (isDeleted) {
+      clearLocalDeviceBoundAccount();
+    } else {
+      const boundUsername = normalizeUsername(localBound.username);
+      if (candidateNorm && boundUsername && candidateNorm === boundUsername) {
+        return {
+          allowed: true,
+          existingUid: localBound.uid,
+          existingUsername: boundUsername,
+          existingDisplayName: localBound.displayNameArabic
+        };
+      }
+      return {
+        allowed: false,
+        existingUid: localBound.uid,
+        existingUsername: boundUsername,
+        existingDisplayName: localBound.displayNameArabic,
+        message: `نظام التحقق من الجهاز: هذا الهاتف مرتبط بحساب مسجل مسبقاً (@${boundUsername}). لا يُسمح بفتح أكثر من حساب من نفس الهاتف.`
+      };
+    }
+  }
+
+  return { allowed: true };
+}
+
+export async function reserveDeviceAccountBinding(uid: string, username: string, displayNameArabic?: string): Promise<void> {
+  if (!uid || !username) return;
+  const normUser = normalizeUsername(username);
+  const { deviceId } = getDeviceFingerprint();
+  const deviceDocId = getDeviceDocKey(deviceId);
+  const nowIso = new Date().toISOString();
+
+  saveLocalDeviceBoundAccount({ uid, username: normUser, displayNameArabic });
+
+  if (deviceDocId) {
+    const rec: UniqueIdentifierRecord = {
+      id: deviceDocId,
+      type: 'device',
+      value: normUser,
+      normalizedValue: deviceId,
+      uid,
+      username: normUser,
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
+    saveLocalUniqueRecord(rec);
+    try {
+      await setDoc(doc(db, 'uniqueIdentifiers', deviceDocId), cleanFirestoreData(rec), { merge: true });
+    } catch {}
+  }
+}
+
+export async function releaseDeviceAccountBinding(deviceId?: string): Promise<void> {
+  clearLocalDeviceBoundAccount();
+  const targetDeviceId = deviceId || getDeviceFingerprint().deviceId;
+  const docKey = getDeviceDocKey(targetDeviceId);
+  if (docKey) {
+    await releaseIdentifierKeyFromCloud(docKey);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 5A-2. Profile Picture Upload/Compression & Academic Options (University / Specialty / Level)
+// ---------------------------------------------------------------------------
+
+export const YEMEN_UNIVERSITIES_OPTIONS: { id: string; nameArabic: string; cityArabic: string }[] = [
+  { id: 'univ-dar-al-salam', nameArabic: 'جامعة دار السلام الدولية للعلوم والتكنولوجيا', cityArabic: 'صنعاء' },
+  { id: 'univ-sanaa', nameArabic: 'جامعة صنعاء', cityArabic: 'صنعاء' },
+  { id: 'univ-aden', nameArabic: 'جامعة عدن', cityArabic: 'عدن' },
+  { id: 'univ-ust', nameArabic: 'جامعة العلوم والتكنولوجيا', cityArabic: 'صنعاء / عدن' },
+  { id: 'univ-21-sep', nameArabic: 'جامعة 21 سبتمبر للعلوم الطبية والتطبيقية', cityArabic: 'صنعاء' },
+  { id: 'univ-al-razi', nameArabic: 'جامعة الرازي', cityArabic: 'صنعاء' },
+  { id: 'univ-taiz', nameArabic: 'جامعة تعز', cityArabic: 'تعز' },
+  { id: 'univ-hadhramout', nameArabic: 'جامعة حضرموت', cityArabic: 'المكلا' },
+  { id: 'univ-ibb', nameArabic: 'جامعة إب', cityArabic: 'إب' },
+  { id: 'univ-thamar', nameArabic: 'جامعة ذمار', cityArabic: 'ذمار' },
+  { id: 'univ-hodeidah', nameArabic: 'جامعة الحديدة', cityArabic: 'الحديدة' },
+  { id: 'univ-al-saeedah', nameArabic: 'جامعة السعيدة', cityArabic: 'صنعاء / ذمار' },
+  { id: 'univ-national', nameArabic: 'الجامعة الوطنية', cityArabic: 'صنعاء / تعز' },
+  { id: 'univ-hikma', nameArabic: 'جامعة الحكمة', cityArabic: 'صنعاء / تعز / ذمار' },
+  { id: 'univ-queen-arwa', nameArabic: 'جامعة الملكة أروى', cityArabic: 'صنعاء' },
+  { id: 'univ-al-jened', nameArabic: 'جامعة الجند للعلوم والتكنولوجيا', cityArabic: 'تعز' }
+];
+
+export const MEDICAL_SPECIALTIES_OPTIONS: { id: string; nameArabic: string }[] = [
+  { id: 'spec-mbbs', nameArabic: 'الطب العام والجراحة (MBBS)' },
+  { id: 'spec-dentistry', nameArabic: 'طب وجراحة الفم والأسنان (BDS)' },
+  { id: 'spec-pharmacy', nameArabic: 'الصيدلة السريرية والدوائية (PharmD)' },
+  { id: 'spec-labs', nameArabic: 'المختبرات الطبية والعلوم التشخيصية' },
+  { id: 'spec-nursing', nameArabic: 'التمريض العالي والرعاية الحرجة' },
+  { id: 'spec-anesthesia', nameArabic: 'التخدير والعناية المركزة' },
+  { id: 'spec-physio', nameArabic: 'العلاج الطبيعي والتأهيل الطبي' },
+  { id: 'spec-radiology', nameArabic: 'الأشعة والتصوير الطبي التشخيصي' },
+  { id: 'spec-nutrition', nameArabic: 'التغذية العلاجية والحميات' }
+];
+
+export const STUDY_LEVELS_OPTIONS: { id: string; nameArabic: string }[] = [
+  { id: 'lvl-1', nameArabic: 'المستوى الأول (Year 1)' },
+  { id: 'lvl-2', nameArabic: 'المستوى الثاني (Year 2)' },
+  { id: 'lvl-3', nameArabic: 'المستوى الثالث (Year 3)' },
+  { id: 'lvl-4', nameArabic: 'المستوى الرابع (Year 4)' },
+  { id: 'lvl-5', nameArabic: 'المستوى الخامس (Year 5)' },
+  { id: 'lvl-6', nameArabic: 'المستوى السادس (Year 6)' },
+  { id: 'lvl-internship', nameArabic: 'سنة الامتياز السريرية (Internship)' }
+];
+
+export const MEDICAL_PRESET_AVATARS: string[] = [
+  `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><defs><linearGradient id="g1" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#0d9488"/><stop offset="100%" stop-color="#047857"/></linearGradient></defs><rect width="120" height="120" rx="60" fill="url(#g1)"/><circle cx="60" cy="44" r="20" fill="#f8fafc"/><path d="M26 104c4-22 20-34 34-34s30 12 34 34" fill="#f8fafc"/><path d="M52 78v14m16-14v14" stroke="#0d9488" stroke-width="4" stroke-linecap="round"/></svg>')}`,
+  `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><defs><linearGradient id="g2" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#0284c7"/><stop offset="100%" stop-color="#1d4ed8"/></linearGradient></defs><rect width="120" height="120" rx="60" fill="url(#g2)"/><circle cx="60" cy="44" r="20" fill="#f8fafc"/><path d="M26 104c4-22 20-34 34-34s30 12 34 34" fill="#f8fafc"/><circle cx="60" cy="86" r="6" fill="#0284c7"/></svg>')}`,
+  `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><defs><linearGradient id="g3" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#7c3aed"/><stop offset="100%" stop-color="#4338ca"/></linearGradient></defs><rect width="120" height="120" rx="60" fill="url(#g3)"/><circle cx="60" cy="44" r="20" fill="#f8fafc"/><path d="M26 104c4-22 20-34 34-34s30 12 34 34" fill="#f8fafc"/><path d="M55 85h10M60 80v10" stroke="#7c3aed" stroke-width="4" stroke-linecap="round"/></svg>')}`,
+  `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><defs><linearGradient id="g4" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#d97706"/><stop offset="100%" stop-color="#b45309"/></linearGradient></defs><rect width="120" height="120" rx="60" fill="url(#g4)"/><circle cx="60" cy="44" r="20" fill="#f8fafc"/><path d="M26 104c4-22 20-34 34-34s30 12 34 34" fill="#f8fafc"/></svg>')}`
+];
+
+/**
+ * Compresses and center-crops an uploaded image file to a fast 240x240 JPEG Data URL (~15-30 KB)
+ * so it can be stored directly in Cloud Firestore (`userProfiles.avatarUrl`) and synced across devices.
+ */
+export function compressAndReadProfileImage(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!file || !file.type.startsWith('image/')) {
+      reject(new Error('يرجى اختيار ملف صورة صالح (JPG أو PNG أو WebP).'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('تعذر قراءة ملف الصورة من الجهاز.'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('صيغة الصورة غير مدعومة.'));
+      img.onload = () => {
+        try {
+          const targetSize = 240;
+          const canvas = document.createElement('canvas');
+          canvas.width = targetSize;
+          canvas.height = targetSize;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(String(reader.result || ''));
+            return;
+          }
+          const minSide = Math.min(img.width, img.height);
+          const sx = Math.max(0, (img.width - minSide) / 2);
+          const sy = Math.max(0, (img.height - minSide) / 2);
+          ctx.fillStyle = '#0f172a';
+          ctx.fillRect(0, 0, targetSize, targetSize);
+          ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, targetSize, targetSize);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+          resolve(dataUrl);
+        } catch (err) {
+          resolve(String(reader.result || ''));
+        }
+      };
+      img.src = String(reader.result || '');
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 export function getAcademicIdDocKey(academicInput: string): string {
@@ -515,8 +922,8 @@ export async function releaseIdentifierKeyFromCloud(docKey?: string): Promise<vo
 }
 
 /**
- * Checks that Username, Email, Phone Number, and Academic Student Number are 100% unique
- * and not registered to any other active user account (`uid !== excludeUid`).
+ * Checks that Username (case-insensitive + anti-similarity), Email, Phone Number, and Academic Student Number
+ * are 100% unique and not registered to any other active user account (`uid !== excludeUid`).
  */
 export async function checkIdentifierUniqueness(params: {
   username?: string;
@@ -534,7 +941,7 @@ export async function checkIdentifierUniqueness(params: {
   const ownerIdentity = await fetchPrimaryOwnerIdentity();
   const isCallerOwnerEmail = Boolean(params.email && isInitialOwnerEmail(params.email));
 
-  // 0. Check Unique Username (`username`) Uniqueness in Cloud Firestore
+  // 0. Check Unique Username (`username`) + Case-Insensitivity + Anti-Similarity in Cloud Firestore
   if (params.username && params.username.trim()) {
     const usernameValidation = validateUsernameFormat(params.username);
     if (!usernameValidation.valid) {
@@ -545,8 +952,11 @@ export async function checkIdentifierUniqueness(params: {
       };
     }
     const normUsername = usernameValidation.normalized;
+    const similarityKey = usernameValidation.similarityKey;
     const usernameDocId = getUsernameDocKey(normUsername);
+    const skeletonDocId = getUsernameSkeletonDocKey(normUsername);
 
+    // 0.1 Exact case-insensitive check in `uniqueIdentifiers/username_<norm>`
     let cloudChecked = false;
     try {
       const snap = await getDoc(doc(db, 'uniqueIdentifiers', usernameDocId));
@@ -562,7 +972,7 @@ export async function checkIdentifierUniqueness(params: {
             return {
               isUnique: false,
               conflictField: 'username',
-              message: `اسم المستخدم (@${normUsername}) محجوز ومستخدم مسبقاً في السحابة. يرجى اختيار اسم مستخدم فريد آخر.`
+              message: `اسم المستخدم (@${normUsername}) محجوز ومستخدم مسبقاً في السحابة (الأحرف الكبيرة والصغيرة لها نفس القيمة). يرجى اختيار اسم مستخدم آخر.`
             };
           }
         }
@@ -571,29 +981,59 @@ export async function checkIdentifierUniqueness(params: {
       }
     } catch (e) {}
 
+    // 0.2 Anti-Similarity check in `uniqueIdentifiers/skeleton_<skel>`
+    if (skeletonDocId) {
+      try {
+        const skelSnap = await getDoc(doc(db, 'uniqueIdentifiers', skeletonDocId));
+        if (skelSnap.exists()) {
+          const skelData = skelSnap.data() as UniqueIdentifierRecord;
+          const isDeleted = skelData.uid ? await isAccountDeletedInCloud(skelData.uid) : false;
+          if (isDeleted) {
+            await releaseIdentifierKeyFromCloud(skeletonDocId);
+          } else if (skelData.uid && skelData.uid !== excludeUid) {
+            const existingName = skelData.username || skelData.value || normUsername;
+            return {
+              isUnique: false,
+              conflictField: 'username',
+              message: `منع تشابه أسماء المستخدمين: اسم المستخدم (@${normUsername}) مشابه جداً أو مطابق لاسم مستخدم مسجل مسبقاً (@${existingName}). يرجى اختيار اسم مستخدم مختلف ومميز.`
+            };
+          }
+        }
+      } catch (e) {}
+    }
+
     if (!cloudChecked) {
       const localCache = getLocalUniqueCache();
-      const cachedRec = localCache[usernameDocId];
+      const cachedRec = localCache[usernameDocId] || (skeletonDocId ? localCache[skeletonDocId] : undefined);
       if (cachedRec && cachedRec.uid && cachedRec.uid !== excludeUid) {
         return {
           isUnique: false,
           conflictField: 'username',
-          message: `اسم المستخدم (@${normUsername}) مستخدم مسبقاً لحساب آخر.`
+          message: `اسم المستخدم (@${normUsername}) مستخدم أو مشابه لاسم مسجل مسبقاً.`
         };
       }
     }
 
-    // Also verify against userProfiles collection in Firestore
+    // 0.3 Verify against all active `userProfiles` in Cloud Firestore for both exact & similarity match
     try {
-      const q = query(collection(db, 'userProfiles'), where('username', '==', normUsername));
-      const snap = await getDocs(q);
+      const snap = await getDocs(collection(db, 'userProfiles'));
       for (const d of snap.docs) {
-        if (d.id !== excludeUid && !(await isAccountDeletedInCloud(d.id))) {
-          return {
-            isUnique: false,
-            conflictField: 'username',
-            message: `اسم المستخدم (@${normUsername}) مرتبط بحساب مستخدم آخر في السحابة.`
-          };
+        if (d.id === excludeUid) continue;
+        const prof = d.data() as UserProfile;
+        if (!prof || !prof.username) continue;
+        const otherNorm = normalizeUsername(prof.username);
+        const otherSkel = getUsernameSimilarityKey(otherNorm);
+        if (otherNorm === normUsername || (similarityKey && otherSkel === similarityKey)) {
+          if (!(await isAccountDeletedInCloud(d.id))) {
+            return {
+              isUnique: false,
+              conflictField: 'username',
+              message:
+                otherNorm === normUsername
+                  ? `اسم المستخدم (@${normUsername}) مرتبط بحساب طالب آخر في السحابة.`
+                  : `منع تشابه أسماء المستخدمين: الاسم (@${normUsername}) يتشابه مع اسم المستخدم المسجل (@${otherNorm}). يرجى اختيار اسم مختلف.`
+            };
+          }
         }
       }
     } catch (e) {}
@@ -608,7 +1048,6 @@ export async function checkIdentifierUniqueness(params: {
     const normEmail = emailValidation.normalized;
     const emailDocId = getEmailDocKey(normEmail);
 
-    // Protect Primary Owner Emails from non-owner claims
     if (isInitialOwnerEmail(normEmail)) {
       if (excludeUid && ownerIdentity.ownerUid && excludeUid !== ownerIdentity.ownerUid) {
         return {
@@ -829,8 +1268,8 @@ export async function checkIdentifierUniqueness(params: {
 }
 
 /**
- * Reserves Username, Email, Phone Number, and Academic Registration Number in Firestore `uniqueIdentifiers`
- * so no other account can claim them.
+ * Reserves Username (and its anti-similarity skeleton), Email, Phone Number, and Academic Registration Number
+ * in Firestore `uniqueIdentifiers` so no other account can claim them.
  */
 export async function reserveUniqueIdentifiers(params: {
   uid: string;
@@ -847,6 +1286,8 @@ export async function reserveUniqueIdentifiers(params: {
   if (params.username && params.username.trim()) {
     const normUser = normalizeUsername(params.username);
     const userKey = getUsernameDocKey(normUser);
+    const skelKey = getUsernameSkeletonDocKey(normUser);
+    const skelVal = getUsernameSimilarityKey(normUser);
     if (normUser && userKey) {
       recordsToWrite.push({
         id: userKey,
@@ -854,6 +1295,19 @@ export async function reserveUniqueIdentifiers(params: {
         value: normUser,
         normalizedValue: normUser,
         uid: params.uid,
+        username: normUser,
+        createdAt: nowIso,
+        updatedAt: nowIso
+      });
+    }
+    if (skelVal && skelKey) {
+      recordsToWrite.push({
+        id: skelKey,
+        type: 'username_skeleton',
+        value: normUser,
+        normalizedValue: skelVal,
+        uid: params.uid,
+        username: normUser,
         createdAt: nowIso,
         updatedAt: nowIso
       });
@@ -923,7 +1377,11 @@ export async function releaseAcademicIdentifier(academicStudentNumber?: string):
 export async function releaseUsernameIdentifier(username?: string): Promise<void> {
   if (!username || !username.trim()) return;
   const userKey = getUsernameDocKey(username);
-  await releaseIdentifierKeyFromCloud(userKey);
+  const skelKey = getUsernameSkeletonDocKey(username);
+  await Promise.all([
+    releaseIdentifierKeyFromCloud(userKey),
+    skelKey ? releaseIdentifierKeyFromCloud(skelKey) : Promise.resolve()
+  ]);
 }
 
 /**
@@ -943,7 +1401,6 @@ export async function syncAndDeduplicatePrimaryOwnerIdentity(params: {
   const nameAr = (params.displayNameArabic || currentConfig.displayNameArabic || DEFAULT_OWNER_NAME_ARABIC).trim();
   const nowIso = new Date().toISOString();
 
-  // If phone changed from old owner phone, release old phone key
   if (currentConfig.phone && currentConfig.phone !== normPhone) {
     await releaseIdentifierKeyFromCloud(getPhoneDocKey(currentConfig.phone));
   }
@@ -953,6 +1410,7 @@ export async function syncAndDeduplicatePrimaryOwnerIdentity(params: {
     secondaryEmail: 'alssaedy500@gmail.com',
     emails: ['alssaedy50@gmail.com', 'alssaedy500@gmail.com'],
     phone: normPhone,
+    username: currentConfig.username || 'umed_owner',
     displayNameArabic: nameAr,
     academicStudentNumber: normAcad,
     ownerUid: params.ownerUid,
@@ -967,17 +1425,16 @@ export async function syncAndDeduplicatePrimaryOwnerIdentity(params: {
     await setDoc(doc(db, 'system', 'owner_identity'), cleanFirestoreData(updatedConfig), { merge: true });
   } catch (e) {}
 
-  // Reserve BOTH official owner emails + official owner phone + official academic number to prevent any duplication
   for (const ownerEmail of INITIAL_OWNER_EMAILS) {
     await reserveUniqueIdentifiers({
       uid: params.ownerUid,
+      username: updatedConfig.username || 'umed_owner',
       email: ownerEmail,
       phone: normPhone,
       academicStudentNumber: normAcad
     });
   }
 
-  // Deduplicate any duplicate owner profiles or roles in Firestore
   try {
     const profilesSnap = await getDocs(collection(db, 'userProfiles'));
     for (const d of profilesSnap.docs) {
@@ -987,7 +1444,6 @@ export async function syncAndDeduplicatePrimaryOwnerIdentity(params: {
         p.isPrimaryOwner ||
         (p.phone && normalizeYemenPhone(p.phone) === normPhone);
       if (isOwnerMatch && d.id !== params.ownerUid) {
-        // Remove duplicate owner profile doc so only the active ownerUid remains
         await deleteDoc(doc(db, 'userProfiles', d.id)).catch(() => {});
       }
     }
@@ -1002,7 +1458,6 @@ export async function syncAndDeduplicatePrimaryOwnerIdentity(params: {
     }
   } catch (e) {}
 
-  // Ensure canonical owner profile and role exist in Firestore
   const activeEmail = auth.currentUser?.email && isInitialOwnerEmail(auth.currentUser.email)
     ? normalizeEmail(auth.currentUser.email)
     : 'alssaedy50@gmail.com';
@@ -1010,6 +1465,8 @@ export async function syncAndDeduplicatePrimaryOwnerIdentity(params: {
   const ownerProfile: UserProfile = {
     uid: params.ownerUid,
     email: activeEmail,
+    username: updatedConfig.username || 'umed_owner',
+    usernameSkeleton: getUsernameSimilarityKey(updatedConfig.username || 'umed_owner'),
     ownerLinkedEmails: ['alssaedy50@gmail.com', 'alssaedy500@gmail.com'],
     phone: normPhone,
     academicStudentNumber: normAcad,
@@ -1032,6 +1489,7 @@ export async function syncAndDeduplicatePrimaryOwnerIdentity(params: {
     uid: params.ownerUid,
     role: 'platform_owner',
     email: activeEmail,
+    username: updatedConfig.username || 'umed_owner',
     displayNameArabic: nameAr,
     phone: normPhone,
     academicStudentNumber: normAcad,
@@ -1108,11 +1566,10 @@ export async function verifyAccountChallenge(
 }
 
 // ---------------------------------------------------------------------------
-// 6. Authentication Service Functions (Username, Email, Phone & Google + Cloud Sync)
+// 6. Authentication Service Functions (Username, Device Guard, Email, Phone & Google)
 // ---------------------------------------------------------------------------
 
 async function enforceCloudAccountIntegrityAfterSignIn(signedInUser: User): Promise<User> {
-  // 1. Check if this account was deleted from the cloud by the Platform Owner or previously self-deleted
   const deletedInCloud = await isAccountDeletedInCloud(signedInUser.uid);
   if (deletedInCloud) {
     try {
@@ -1124,7 +1581,6 @@ async function enforceCloudAccountIntegrityAfterSignIn(signedInUser: User): Prom
     throw new Error('ACCOUNT_DELETED_FROM_CLOUD');
   }
 
-  // 2. Check if this account is archived in userProfiles
   if (!isInitialOwnerEmail(signedInUser.email)) {
     try {
       const profSnap = await getDoc(doc(db, 'userProfiles', signedInUser.uid));
@@ -1132,6 +1588,9 @@ async function enforceCloudAccountIntegrityAfterSignIn(signedInUser: User): Prom
         const prof = profSnap.data() as UserProfile;
         if (prof.isArchived || prof.isActive === false) {
           throw new Error('ACCOUNT_ARCHIVED');
+        }
+        if (prof.username) {
+          await reserveDeviceAccountBinding(signedInUser.uid, prof.username, prof.displayNameArabic);
         }
       }
     } catch (err: any) {
@@ -1150,32 +1609,65 @@ export async function signInWithGoogle(): Promise<User> {
 }
 
 /**
- * Frictionless Account Creation using a Unique Username + Password.
- * Requires NO email verification, NO phone OTP, and NO academic registration number.
- * Reserves the unique username in Cloud Firestore (`uniqueIdentifiers/username_<norm>`)
- * and persists the profile in `userProfiles/{uid}` and `users/{uid}`.
+ * Mandatory First-Time Student Account Creation with:
+ * - Minimum 4 English letters username (case-insensitive `A-Z` === `a-z`)
+ * - Anti-Similarity username check in Cloud Firestore
+ * - Single-Account-Per-Phone Device Verification Guard
+ * - Optional Profile Picture (`avatarUrl`), University, Specialty, and Study Level
  */
 export async function signUpWithUsername(
   usernameInput: string,
-  pass: string,
-  displayNameArabicInput?: string
-): Promise<{ user: User; normalizedUsername: string }> {
+  pass?: string,
+  displayNameArabicInput?: string,
+  extraProfile?: {
+    avatarUrl?: string;
+    universityId?: string;
+    universityNameArabic?: string;
+    specialtyArabic?: string;
+    studyLevelId?: string;
+  }
+): Promise<{ user: User; normalizedUsername: string; profile: UserProfile }> {
   const check = validateUsernameFormat(usernameInput);
   if (!check.valid || !check.normalized) {
     throw new Error(check.message || 'INVALID_USERNAME');
   }
   const normUsername = check.normalized;
+  const effectivePass = pass && pass.trim().length >= 6 ? pass.trim() : getDefaultUsernamePassword(normUsername);
 
+  // 1. Check Device Single-Account Policy (prevents opening multiple accounts from the same phone)
+  const devicePolicy = await checkDeviceSingleAccountPolicy({
+    candidateUsername: normUsername
+  });
+  if (!devicePolicy.allowed) {
+    throw new Error(
+      devicePolicy.message ||
+        `نظام التحقق من الجهاز: هذا الهاتف مسجل به حساب مسبقاً (@${devicePolicy.existingUsername}). لا يُسمح بفتح أكثر من حساب من نفس الهاتف.`
+    );
+  }
+
+  // If the student entered the exact username already bound to THIS phone, sign them right in!
+  if (devicePolicy.existingUsername && devicePolicy.existingUsername === normUsername) {
+    try {
+      const existingUser = await signInWithUsername(normUsername, effectivePass);
+      const existingProf = await fetchUserProfile(existingUser.uid);
+      if (existingProf) {
+        return { user: existingUser, normalizedUsername: normUsername, profile: existingProf };
+      }
+    } catch {}
+  }
+
+  // 2. Check Cloud Uniqueness & Anti-Similarity
   const uniqueness = await checkIdentifierUniqueness({ username: normUsername });
   if (!uniqueness.isUnique) {
-    throw new Error(uniqueness.message || `اسم المستخدم (@${normUsername}) مستخدم مسبقاً.`);
+    throw new Error(uniqueness.message || `اسم المستخدم (@${normUsername}) مستخدم أو مشابه لاسم مسجل مسبقاً.`);
   }
 
   const authEmail = usernameToAuthEmail(normUsername);
+  const { deviceId, hardwareHash } = getDeviceFingerprint();
 
   let createdUser: User;
   try {
-    const result = await createUserWithEmailAndPassword(auth, authEmail, pass);
+    const result = await createUserWithEmailAndPassword(auth, authEmail, effectivePass);
     unmarkUidDeletedLocally(result.user.uid);
     createdUser = result.user;
   } catch (err: any) {
@@ -1186,13 +1678,13 @@ export async function signUpWithUsername(
         const hasActiveIdentifier =
           idSnap && idSnap.exists() && !(await isAccountDeletedInCloud((idSnap.data() as UniqueIdentifierRecord).uid));
         if (!hasActiveIdentifier) {
-          const oldSignIn = await signInWithEmailAndPassword(auth, authEmail, pass);
+          const oldSignIn = await signInWithEmailAndPassword(auth, authEmail, effectivePass);
           const oldUid = oldSignIn.user.uid;
           try {
             await deleteDoc(doc(db, 'deletedAccounts', oldUid));
           } catch {}
           await deleteUser(oldSignIn.user);
-          const freshResult = await createUserWithEmailAndPassword(auth, authEmail, pass);
+          const freshResult = await createUserWithEmailAndPassword(auth, authEmail, effectivePass);
           unmarkUidDeletedLocally(freshResult.user.uid);
           createdUser = freshResult.user;
         } else {
@@ -1208,11 +1700,28 @@ export async function signUpWithUsername(
 
   const nowIso = new Date().toISOString();
   const displayNameArabic = (displayNameArabicInput || '').trim() || normUsername;
-  const profile: UserProfile = {
+  const universityId = extraProfile?.universityId || 'univ-dar-al-salam';
+  const matchedUniv = YEMEN_UNIVERSITIES_OPTIONS.find((u) => u.id === universityId);
+  const universityNameArabic =
+    extraProfile?.universityNameArabic?.trim() ||
+    matchedUniv?.nameArabic ||
+    'جامعة دار السلام الدولية للعلوم والتكنولوجيا';
+  const specialtyArabic = extraProfile?.specialtyArabic?.trim() || 'الطب العام والجراحة (MBBS)';
+  const studyLevelId = extraProfile?.studyLevelId || 'lvl-4';
+
+  const profile: UserProfile = cleanFirestoreData({
     uid: createdUser.uid,
     email: authEmail,
     username: normUsername,
+    usernameSkeleton: check.similarityKey,
     displayNameArabic,
+    ...(extraProfile?.avatarUrl ? { avatarUrl: extraProfile.avatarUrl } : {}),
+    universityId,
+    universityNameArabic,
+    specialtyArabic,
+    studyLevelId,
+    deviceId,
+    deviceHardwareHash: hardwareHash,
     leaderboardNameMode: 'custom_username',
     registrationMethod: 'username',
     isActive: true,
@@ -1223,26 +1732,63 @@ export async function signUpWithUsername(
     verifiedAt: nowIso,
     createdAt: nowIso,
     updatedAt: nowIso
-  };
+  });
 
   await saveUserProfile(profile);
-  return { user: createdUser, normalizedUsername: normUsername };
+  await reserveDeviceAccountBinding(createdUser.uid, normUsername, displayNameArabic);
+
+  // Also create/sync StudentEnrollment record in Cloud Firestore (`studentEnrollments/enr-{uid}`)
+  const enrId = `enr-${createdUser.uid}`;
+  const enrDoc: StudentEnrollment = cleanFirestoreData({
+    id: enrId,
+    uid: createdUser.uid,
+    studentNameArabic: displayNameArabic,
+    academicStudentNumber: normUsername.toUpperCase(),
+    universityId,
+    collegeId: 'col-med-dar',
+    programId: 'prog-mbbs',
+    curriculumVersionId: 'cur-dar-2024',
+    currentStudyLevelId: studyLevelId,
+    academicYear: '2025-2026',
+    status: 'approved',
+    enrolledAt: nowIso,
+    updatedAt: nowIso
+  });
+
+  try {
+    await setDoc(doc(db, 'studentEnrollments', enrId), enrDoc, { merge: true });
+    localStorage.setItem(`umed_enrollment_${createdUser.uid}`, JSON.stringify(enrDoc));
+    localStorage.setItem(
+      'umed_user_academic_context',
+      JSON.stringify({
+        universityId,
+        collegeId: 'col-med-dar',
+        programId: 'prog-mbbs',
+        studyLevelId
+      })
+    );
+  } catch (e) {}
+
+  return { user: createdUser, normalizedUsername: normUsername, profile };
 }
 
 /**
- * Signs in a user using their Unique Username, Email, or Phone Number.
- * Automatically resolves renamed usernames from Cloud Firestore (`uniqueIdentifiers` & `userProfiles`).
+ * Signs in a user using their Unique Username (case-insensitive).
+ * Supports both custom passwords and the device-synced default username credential.
  */
-export async function signInWithUsername(usernameInput: string, pass: string): Promise<User> {
-  const check = validateUsernameFormat(usernameInput);
-  if (!check.valid || !check.normalized) {
-    throw new Error(check.message || 'INVALID_USERNAME');
+export async function signInWithUsername(usernameInput: string, pass?: string): Promise<User> {
+  const normUsername = normalizeUsername(usernameInput);
+  if (!normUsername || normUsername.length < 3) {
+    throw new Error('يرجى إدخال اسم مستخدم صحيح (4 أحرف إنجليزية على الأقل).');
   }
-  const normUsername = check.normalized;
   const directAuthEmail = usernameToAuthEmail(normUsername);
+  const candidatePasswords = Array.from(
+    new Set([
+      ...(pass && pass.trim() ? [pass.trim()] : []),
+      getDefaultUsernamePassword(normUsername)
+    ])
+  );
 
-  // 1. First look up the username in Cloud Firestore `uniqueIdentifiers` or `userProfiles`
-  // in case the user renamed their username or originally registered with Email/Phone
   let resolvedAuthEmails: string[] = [];
   try {
     const userDocId = getUsernameDocKey(normUsername);
@@ -1270,14 +1816,16 @@ export async function signInWithUsername(usernameInput: string, pass: string): P
 
   let lastErr: any = null;
   for (const candidateEmail of resolvedAuthEmails) {
-    try {
-      const result = await signInWithEmailAndPassword(auth, candidateEmail, pass);
-      return await enforceCloudAccountIntegrityAfterSignIn(result.user);
-    } catch (err: any) {
-      if (err?.message === 'ACCOUNT_DELETED_FROM_CLOUD' || err?.message === 'ACCOUNT_ARCHIVED') {
-        throw err;
+    for (const candidatePass of candidatePasswords) {
+      try {
+        const result = await signInWithEmailAndPassword(auth, candidateEmail, candidatePass);
+        return await enforceCloudAccountIntegrityAfterSignIn(result.user);
+      } catch (err: any) {
+        if (err?.message === 'ACCOUNT_DELETED_FROM_CLOUD' || err?.message === 'ACCOUNT_ARCHIVED') {
+          throw err;
+        }
+        lastErr = err;
       }
-      lastErr = err;
     }
   }
 
@@ -1288,8 +1836,14 @@ export async function signInWithUsername(usernameInput: string, pass: string): P
     for (const d of snap.docs) {
       const prof = d.data() as UserProfile;
       if (prof.email && !resolvedAuthEmails.includes(prof.email)) {
-        const result = await signInWithEmailAndPassword(auth, prof.email, pass);
-        return await enforceCloudAccountIntegrityAfterSignIn(result.user);
+        for (const candidatePass of candidatePasswords) {
+          try {
+            const result = await signInWithEmailAndPassword(auth, prof.email, candidatePass);
+            return await enforceCloudAccountIntegrityAfterSignIn(result.user);
+          } catch (innerErr: any) {
+            lastErr = innerErr;
+          }
+        }
       }
     }
   } catch (err: any) {
@@ -1304,31 +1858,33 @@ export async function signInWithUsername(usernameInput: string, pass: string): P
 /**
  * Smart Unified Sign-In: accepts a Unique Username (@username), Email, or Yemen Phone Number.
  */
-export async function signInWithIdentifier(identifierInput: string, pass: string): Promise<User> {
+export async function signInWithIdentifier(identifierInput: string, pass?: string): Promise<User> {
   const raw = (identifierInput || '').trim();
   if (!raw) {
     throw new Error('يرجى إدخال اسم المستخدم أو البريد الإلكتروني أو رقم الهاتف.');
   }
 
-  // If it looks like an email address (contains @ not at index 0 and has a domain dot)
   if (!raw.startsWith('@') && raw.includes('@') && raw.split('@')[1]?.includes('.')) {
+    if (!pass || !pass.trim()) {
+      throw new Error('يرجى إدخال كلمة المرور لتسجيل الدخول بالبريد الإلكتروني.');
+    }
     return signInWithEmail(raw, pass);
   }
 
-  // If it looks like a Yemen phone number
   if (isPhoneIdentifier(raw)) {
+    if (!pass || !pass.trim()) {
+      throw new Error('يرجى إدخال كلمة المرور لتسجيل الدخول برقم الهاتف.');
+    }
     try {
       return await signInWithPhone(raw, pass);
     } catch (phoneErr: any) {
       if (phoneErr?.message === 'ACCOUNT_DELETED_FROM_CLOUD' || phoneErr?.message === 'ACCOUNT_ARCHIVED') {
         throw phoneErr;
       }
-      // Fallback to username if someone chose a numeric username
       return signInWithUsername(raw, pass);
     }
   }
 
-  // Otherwise treat as a Unique Username
   return signInWithUsername(raw, pass);
 }
 
@@ -1343,7 +1899,6 @@ export async function signInWithEmail(emailInput: string, pass: string): Promise
     const result = await signInWithEmailAndPassword(auth, normEmail, pass);
     return await enforceCloudAccountIntegrityAfterSignIn(result.user);
   } catch (err: any) {
-    // Fallback: if the user registered by phone or username and later linked an email in userProfiles
     if (
       err?.code === 'auth/user-not-found' ||
       err?.code === 'auth/invalid-credential'
@@ -1381,6 +1936,13 @@ export async function signUpWithEmail(email: string, pass: string): Promise<User
     throw new Error(emailCheck.message || 'INVALID_EMAIL_FORMAT');
   }
   const normEmail = emailCheck.normalized;
+
+  if (!isInitialOwnerEmail(normEmail)) {
+    const devicePolicy = await checkDeviceSingleAccountPolicy({ callerEmail: normEmail });
+    if (!devicePolicy.allowed) {
+      throw new Error(devicePolicy.message);
+    }
+  }
 
   try {
     const result = await createUserWithEmailAndPassword(auth, normEmail, pass);
@@ -1461,6 +2023,11 @@ export async function signUpWithPhone(phone: string, pass: string): Promise<{ us
   const normPhone = check.normalized;
   const authEmail = phoneToAuthEmail(normPhone);
 
+  const devicePolicy = await checkDeviceSingleAccountPolicy();
+  if (!devicePolicy.allowed) {
+    throw new Error(devicePolicy.message);
+  }
+
   try {
     const result = await createUserWithEmailAndPassword(auth, authEmail, pass);
     unmarkUidDeletedLocally(result.user.uid);
@@ -1522,70 +2089,126 @@ function removeLocalRoleEntry(uid: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// 7. User Profile, Unique Cloud Username Management & Role Helpers
+// 7. User Profile, Unique Cloud Username Management, Avatar & Academic Context
 // ---------------------------------------------------------------------------
 
 /**
- * Atomically creates or updates a user's unique `username` in Cloud Firestore:
- * 1. Validates format and checks uniqueness in `uniqueIdentifiers` & `userProfiles`.
- * 2. Immediately deletes any previous `username_<old>` document from `uniqueIdentifiers` in Cloud Firestore (`deleteDoc`) so old usernames never remain in the cloud.
- * 3. Reserves the new `username_<new>` document in `uniqueIdentifiers`.
- * 4. Updates `userProfiles/{uid}`, `users/{uid}`, `userRoles/{uid}`, and `studentEnrollments/enr-{uid}` in Cloud Firestore.
+ * Updates a student's full profile in Cloud Firestore (`userProfiles/{uid}`, `users/{uid}`,
+ * `uniqueIdentifiers`, `userRoles/{uid}`, and `studentEnrollments/enr-{uid}`):
+ * - Unique Username (`username`, min 4 English letters, case-insensitive, anti-similarity)
+ * - Display Name (`displayNameArabic`)
+ * - Profile Picture (`avatarUrl` — upload/change/remove)
+ * - University (`universityId`, `universityNameArabic`)
+ * - Specialty (`specialtyArabic`)
+ * - Study Level (`studyLevelId`)
  */
-export async function claimOrUpdateUniqueUsername(params: {
+export async function updateStudentFullProfileInCloud(params: {
   uid: string;
-  newUsername: string;
+  newUsername?: string;
   displayNameArabic?: string;
-}): Promise<{ username: string; profile: UserProfile }> {
-  const { uid, newUsername, displayNameArabic } = params;
+  avatarUrl?: string | null;
+  universityId?: string;
+  universityNameArabic?: string;
+  specialtyArabic?: string;
+  studyLevelId?: string;
+}): Promise<{ username: string; profile: UserProfile; enrollment: StudentEnrollment }> {
+  const { uid } = params;
   if (!uid) throw new Error('معرف المستخدم غير صالح.');
-
-  const formatCheck = validateUsernameFormat(newUsername);
-  if (!formatCheck.valid || !formatCheck.normalized) {
-    throw new Error(formatCheck.message || 'صيغة اسم المستخدم غير صالحة.');
-  }
-  const normNew = formatCheck.normalized;
-
-  const uniqueness = await checkIdentifierUniqueness({
-    username: normNew,
-    excludeUid: uid
-  });
-  if (!uniqueness.isUnique) {
-    throw new Error(uniqueness.message || `اسم المستخدم (@${normNew}) محجوز مسبقاً لمستخدم آخر.`);
-  }
 
   const existingProfile = await fetchUserProfile(uid);
   const oldUsername = existingProfile?.username ? normalizeUsername(existingProfile.username) : '';
 
-  // 1. Immediately delete old username key from Cloud Firestore if changed
+  let normNew = oldUsername;
+  let skelNew = getUsernameSimilarityKey(oldUsername);
+
+  if (params.newUsername !== undefined && params.newUsername.trim() !== '') {
+    const formatCheck = validateUsernameFormat(params.newUsername);
+    if (!formatCheck.valid || !formatCheck.normalized) {
+      throw new Error(formatCheck.message || 'صيغة اسم المستخدم غير صالحة.');
+    }
+    normNew = formatCheck.normalized;
+    skelNew = formatCheck.similarityKey;
+
+    const uniqueness = await checkIdentifierUniqueness({
+      username: normNew,
+      excludeUid: uid
+    });
+    if (!uniqueness.isUnique) {
+      throw new Error(uniqueness.message || `اسم المستخدم (@${normNew}) محجوز أو مشابه لاسم مستخدم آخر.`);
+    }
+  } else if (!normNew) {
+    normNew = `umed_${uid.slice(0, 6).toLowerCase()}`;
+    skelNew = getUsernameSimilarityKey(normNew);
+  }
+
+  // 1. Immediately delete old username & old similarity skeleton from Cloud Firestore if changed
   if (oldUsername && oldUsername !== normNew) {
     await releaseUsernameIdentifier(oldUsername);
   }
 
-  // Also clean up any other stale username_* documents owned by this uid in uniqueIdentifiers
+  // Also clean up any stale username_* or skeleton_* documents owned by this uid in uniqueIdentifiers
   try {
     const qIds = query(collection(db, 'uniqueIdentifiers'), where('uid', '==', uid));
     const snapIds = await getDocs(qIds);
     const targetDocId = getUsernameDocKey(normNew);
+    const targetSkelId = getUsernameSkeletonDocKey(normNew);
     for (const d of snapIds.docs) {
       const rec = d.data() as UniqueIdentifierRecord;
-      if ((rec.type === 'username' || d.id.startsWith('username_')) && d.id !== targetDocId) {
+      if (
+        (rec.type === 'username' || d.id.startsWith('username_')) &&
+        d.id !== targetDocId
+      ) {
+        await releaseIdentifierKeyFromCloud(d.id);
+      }
+      if (
+        (rec.type === 'username_skeleton' || d.id.startsWith('skeleton_')) &&
+        d.id !== targetSkelId
+      ) {
         await releaseIdentifierKeyFromCloud(d.id);
       }
     }
   } catch (e) {}
 
   const nowIso = new Date().toISOString();
+  const nextUniversityId = params.universityId || existingProfile?.universityId || 'univ-dar-al-salam';
+  const matchedUniv = YEMEN_UNIVERSITIES_OPTIONS.find((u) => u.id === nextUniversityId);
+  const nextUniversityName =
+    params.universityNameArabic?.trim() ||
+    matchedUniv?.nameArabic ||
+    existingProfile?.universityNameArabic ||
+    'جامعة دار السلام الدولية للعلوم والتكنولوجيا';
+  const nextSpecialty =
+    params.specialtyArabic?.trim() ||
+    existingProfile?.specialtyArabic ||
+    'الطب العام والجراحة (MBBS)';
+  const nextLevelId = params.studyLevelId || existingProfile?.studyLevelId || 'lvl-4';
+  const nextAvatarUrl =
+    params.avatarUrl === null
+      ? ''
+      : params.avatarUrl !== undefined
+      ? params.avatarUrl
+      : existingProfile?.avatarUrl || '';
+
+  const { deviceId, hardwareHash } = getDeviceFingerprint();
+
   const updatedProfile: UserProfile = cleanFirestoreData({
     ...(existingProfile || {}),
     uid,
     email: existingProfile?.email || auth.currentUser?.email || usernameToAuthEmail(normNew),
     username: normNew,
+    usernameSkeleton: skelNew,
     displayNameArabic:
-      (displayNameArabic && displayNameArabic.trim()) ||
+      (params.displayNameArabic && params.displayNameArabic.trim()) ||
       existingProfile?.displayNameArabic ||
       auth.currentUser?.displayName ||
       normNew,
+    avatarUrl: nextAvatarUrl,
+    universityId: nextUniversityId,
+    universityNameArabic: nextUniversityName,
+    specialtyArabic: nextSpecialty,
+    studyLevelId: nextLevelId,
+    deviceId: existingProfile?.deviceId || deviceId,
+    deviceHardwareHash: existingProfile?.deviceHardwareHash || hardwareHash,
     isActive: existingProfile?.isActive ?? true,
     isArchived: existingProfile?.isArchived ?? false,
     isVerified: true,
@@ -1597,8 +2220,9 @@ export async function claimOrUpdateUniqueUsername(params: {
   });
 
   await saveUserProfile(updatedProfile);
+  await reserveDeviceAccountBinding(uid, normNew, updatedProfile.displayNameArabic);
 
-  // Sync username into userRoles if role doc exists
+  // Sync username & displayName into userRoles if role doc exists
   try {
     const roleSnap = await getDoc(doc(db, 'userRoles', uid));
     if (roleSnap.exists()) {
@@ -1612,34 +2236,60 @@ export async function claimOrUpdateUniqueUsername(params: {
     }
   } catch (e) {}
 
-  // Sync displayNameArabic into studentEnrollments if enrollment exists
-  if (displayNameArabic && displayNameArabic.trim()) {
-    try {
-      const enrId = `enr-${uid}`;
-      const enrSnap = await getDoc(doc(db, 'studentEnrollments', enrId));
-      if (enrSnap.exists()) {
-        await setDoc(
-          doc(db, 'studentEnrollments', enrId),
-          cleanFirestoreData({
-            studentNameArabic: displayNameArabic.trim(),
-            updatedAt: nowIso
-          }),
-          { merge: true }
-        );
-      }
-    } catch (e) {}
-  }
+  // Sync enrollment record in Cloud Firestore (`studentEnrollments/enr-{uid}`)
+  const enrId = `enr-${uid}`;
+  const updatedEnrollment: StudentEnrollment = cleanFirestoreData({
+    id: enrId,
+    uid,
+    studentNameArabic: updatedProfile.displayNameArabic,
+    academicStudentNumber: existingProfile?.academicStudentNumber || normNew.toUpperCase(),
+    universityId: nextUniversityId,
+    collegeId: 'col-med-dar',
+    programId: 'prog-mbbs',
+    curriculumVersionId: 'cur-dar-2024',
+    currentStudyLevelId: nextLevelId,
+    academicYear: '2025-2026',
+    status: 'approved',
+    enrolledAt: existingProfile?.createdAt || nowIso,
+    updatedAt: nowIso
+  });
+
+  try {
+    await setDoc(doc(db, 'studentEnrollments', enrId), updatedEnrollment, { merge: true });
+    localStorage.setItem(`umed_enrollment_${uid}`, JSON.stringify(updatedEnrollment));
+    localStorage.setItem(
+      'umed_user_academic_context',
+      JSON.stringify({
+        universityId: nextUniversityId,
+        collegeId: 'col-med-dar',
+        programId: 'prog-mbbs',
+        studyLevelId: nextLevelId
+      })
+    );
+  } catch (e) {}
 
   try {
     localStorage.setItem(`umed_cached_profile_${uid}`, JSON.stringify(updatedProfile));
   } catch (e) {}
 
-  return { username: normNew, profile: updatedProfile };
+  return { username: normNew, profile: updatedProfile, enrollment: updatedEnrollment };
+}
+
+export async function claimOrUpdateUniqueUsername(params: {
+  uid: string;
+  newUsername: string;
+  displayNameArabic?: string;
+}): Promise<{ username: string; profile: UserProfile }> {
+  const res = await updateStudentFullProfileInCloud({
+    uid: params.uid,
+    newUsername: params.newUsername,
+    displayNameArabic: params.displayNameArabic
+  });
+  return { username: res.username, profile: res.profile };
 }
 
 /**
- * Ensures any signed-in user has a unique `username` persisted in Cloud Firestore
- * (`userProfiles/{uid}`, `users/{uid}`, and `uniqueIdentifiers/username_<norm>`).
+ * Ensures any signed-in user has a unique `username` (at least 4 English letters) persisted in Cloud Firestore.
  */
 export async function ensureUserHasUniqueCloudUsername(
   user: User,
@@ -1650,38 +2300,49 @@ export async function ensureUserHasUniqueCloudUsername(
   const nowIso = new Date().toISOString();
   const isOwner = isInitialOwnerEmail(user.email);
 
-  let candidateUsername = normalizeUsername(
+  let rawCandidate =
     preferredUsername ||
-      existingProfile?.username ||
-      extractUsernameFromAuthEmail(user.email) ||
-      (isOwner ? 'umed_owner' : '') ||
-      (user.email && !isSyntheticUserEmail(user.email) ? user.email.split('@')[0] : '') ||
-      `user_${user.uid.slice(0, 6).toLowerCase()}`
-  );
+    existingProfile?.username ||
+    extractUsernameFromAuthEmail(user.email) ||
+    (isOwner ? 'umed_owner' : '') ||
+    (user.email && !isSyntheticUserEmail(user.email) ? user.email.split('@')[0] : '') ||
+    `umed_${user.uid.slice(0, 6).toLowerCase()}`;
 
-  if (candidateUsername.length < 3) {
-    candidateUsername = `user_${user.uid.slice(0, 6).toLowerCase()}`;
+  let candidateUsername = normalizeUsername(rawCandidate);
+  const englishCount = (candidateUsername.match(/[a-z]/g) || []).length;
+  if (englishCount < 4) {
+    candidateUsername = `umed_${candidateUsername || user.uid.slice(0, 6).toLowerCase()}`;
   }
 
-  // Verify uniqueness in Cloud Firestore; if taken by another user, append short uid suffix
   const uniqueness = await checkIdentifierUniqueness({
     username: candidateUsername,
     excludeUid: user.uid
   });
   if (!uniqueness.isUnique) {
-    candidateUsername = `${candidateUsername.slice(0, 22)}_${user.uid.slice(0, 5).toLowerCase()}`;
+    candidateUsername = `umed_${candidateUsername.slice(0, 16)}_${user.uid.slice(0, 4).toLowerCase()}`;
   }
+
+  const { deviceId, hardwareHash } = getDeviceFingerprint();
 
   const profile: UserProfile = cleanFirestoreData({
     ...(existingProfile || {}),
     uid: user.uid,
     email: existingProfile?.email || user.email || usernameToAuthEmail(candidateUsername),
     username: candidateUsername,
+    usernameSkeleton: getUsernameSimilarityKey(candidateUsername),
     displayNameArabic:
       (preferredDisplayNameArabic && preferredDisplayNameArabic.trim()) ||
       existingProfile?.displayNameArabic ||
       user.displayName ||
       candidateUsername,
+    avatarUrl: existingProfile?.avatarUrl || user.photoURL || undefined,
+    universityId: existingProfile?.universityId || 'univ-dar-al-salam',
+    universityNameArabic:
+      existingProfile?.universityNameArabic || 'جامعة دار السلام الدولية للعلوم والتكنولوجيا',
+    specialtyArabic: existingProfile?.specialtyArabic || 'الطب العام والجراحة (MBBS)',
+    studyLevelId: existingProfile?.studyLevelId || 'lvl-4',
+    deviceId: existingProfile?.deviceId || deviceId,
+    deviceHardwareHash: existingProfile?.deviceHardwareHash || hardwareHash,
     registrationMethod:
       existingProfile?.registrationMethod ||
       (user.email?.startsWith('user_')
@@ -1703,6 +2364,9 @@ export async function ensureUserHasUniqueCloudUsername(
   });
 
   await saveUserProfile(profile);
+  if (!isOwner) {
+    await reserveDeviceAccountBinding(user.uid, candidateUsername, profile.displayNameArabic);
+  }
   return profile;
 }
 
@@ -1977,6 +2641,7 @@ export async function deleteUserAccountCompletelyFromCloud(params: {
   let emailToRelease: string | undefined;
   let phoneToRelease: string | undefined;
   let acadToRelease: string | undefined;
+  let deviceIdToRelease: string | undefined;
 
   try {
     const profSnap = await getDoc(doc(db, 'userProfiles', targetUid));
@@ -1986,6 +2651,7 @@ export async function deleteUserAccountCompletelyFromCloud(params: {
       emailToRelease = p.email;
       phoneToRelease = p.phone;
       acadToRelease = p.academicStudentNumber;
+      deviceIdToRelease = p.deviceId;
     }
   } catch (e) {}
 
@@ -2005,7 +2671,12 @@ export async function deleteUserAccountCompletelyFromCloud(params: {
 
   // 2. Immediately delete all reserved uniqueIdentifiers in Firestore & Local Cache
   if (usernameToRelease) {
-    await releaseIdentifierKeyFromCloud(getUsernameDocKey(usernameToRelease));
+    await releaseUsernameIdentifier(usernameToRelease);
+  }
+  if (deviceIdToRelease) {
+    await releaseDeviceAccountBinding(deviceIdToRelease);
+  } else if (isSelfDelete) {
+    await releaseDeviceAccountBinding();
   }
   if (emailToRelease && !isSyntheticUserEmail(emailToRelease)) {
     await releaseIdentifierKeyFromCloud(getEmailDocKey(emailToRelease));

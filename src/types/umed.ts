@@ -46,10 +46,17 @@ export interface UserProfile {
   displayNameArabic: string;
   displayNameEnglish?: string;
   username?: string;
+  usernameSkeleton?: string;
   leaderboardNameMode?: LeaderboardNameMode;
   phone?: string;
   academicStudentNumber?: string;
   avatarUrl?: string;
+  universityId?: string;
+  universityNameArabic?: string;
+  specialtyArabic?: string;
+  studyLevelId?: string;
+  deviceId?: string;
+  deviceHardwareHash?: string;
   registrationMethod?: 'username' | 'email' | 'phone' | 'google';
   isActive: boolean;
   isArchived?: boolean;
@@ -79,11 +86,12 @@ export interface PrimaryOwnerIdentityConfig {
 }
 
 export interface UniqueIdentifierRecord {
-  id: string; // e.g. 'username_...', 'email_...', 'phone_...', 'acad_...'
-  type: 'username' | 'email' | 'phone' | 'academic_id';
+  id: string; // e.g. 'username_...', 'skeleton_...', 'device_...', 'email_...', 'phone_...', 'acad_...'
+  type: 'username' | 'username_skeleton' | 'device' | 'email' | 'phone' | 'academic_id';
   value: string;
   normalizedValue: string;
   uid: string;
+  username?: string;
   universityId?: string;
   createdAt: string;
   updatedAt: string;

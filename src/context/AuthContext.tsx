@@ -22,6 +22,7 @@ import {
   signUpWithUsername,
   signInWithIdentifier,
   claimOrUpdateUniqueUsername,
+  updateStudentFullProfileInCloud,
   ensureUserHasUniqueCloudUsername,
   normalizeUsername,
   validateUsernameFormat,
@@ -43,7 +44,7 @@ import {
   deleteUserAccountCompletelyFromCloud,
   syncAndDeduplicatePrimaryOwnerIdentity
 } from '../lib/firebase.ts';
-import { UserRole, UserRoleDoc, UserProfile, VerificationChallenge } from '../types/umed.ts';
+import { UserRole, UserRoleDoc, UserProfile, VerificationChallenge, StudentEnrollment } from '../types/umed.ts';
 
 interface AuthContextType {
   user: User | null;
@@ -56,16 +57,32 @@ interface AuthContextType {
   firestoreLatency: number | null;
   firestoreError: string | null;
   loginGoogle: () => Promise<void>;
-  loginWithIdentifier: (identifier: string, pass: string) => Promise<void>;
+  loginWithIdentifier: (identifier: string, pass?: string) => Promise<void>;
   registerWithUsername: (
     username: string,
-    pass: string,
-    nameArabic?: string
+    pass?: string,
+    nameArabic?: string,
+    extraProfile?: {
+      avatarUrl?: string;
+      universityId?: string;
+      universityNameArabic?: string;
+      specialtyArabic?: string;
+      studyLevelId?: string;
+    }
   ) => Promise<UserProfile>;
   updateUniqueUsername: (
     newUsername: string,
     displayNameArabic?: string
-  ) => Promise<UserProfile>;
+  ) => Promise<{ username: string; profile: UserProfile; message: string }>;
+  updateFullProfile: (params: {
+    newUsername?: string;
+    displayNameArabic?: string;
+    avatarUrl?: string | null;
+    universityId?: string;
+    universityNameArabic?: string;
+    specialtyArabic?: string;
+    studyLevelId?: string;
+  }) => Promise<{ username: string; profile: UserProfile; enrollment: StudentEnrollment; message: string }>;
   loginEmail: (email: string, pass: string) => Promise<void>;
   registerEmail: (
     email: string,
@@ -342,16 +359,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   /**
-   * Frictionless Instant Account Creation with Unique Username ONLY (zero email/OTP/academic ID complexity)
+   * Mandatory First-Time Student Account Creation with Unique Username (4+ English letters, case-insensitive),
+   * Device Verification Guard, Profile Picture, University, Specialty, and Study Level
    */
   const registerWithUsername = async (
     username: string,
-    pass: string,
-    nameArabic?: string
+    pass?: string,
+    nameArabic?: string,
+    extraProfile?: {
+      avatarUrl?: string;
+      universityId?: string;
+      universityNameArabic?: string;
+      specialtyArabic?: string;
+      studyLevelId?: string;
+    }
   ): Promise<UserProfile> => {
     setLoading(true);
     try {
-      const { user: u, profile } = await signUpWithUsername(username, pass, nameArabic);
+      const { user: u, profile } = await signUpWithUsername(username, pass, nameArabic, extraProfile);
       setUserProfile(profile);
       setPendingVerification(null);
       try {
@@ -367,7 +392,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   /**
    * Unified Sign-In: Accepts Unique Username (@username), Email, or Yemen Phone Number
    */
-  const loginWithIdentifier = async (identifier: string, pass: string) => {
+  const loginWithIdentifier = async (identifier: string, pass?: string) => {
     setLoading(true);
     try {
       const u = await signInWithIdentifier(identifier, pass);
@@ -390,18 +415,50 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const updateUniqueUsername = async (
     newUsername: string,
     displayNameArabic?: string
-  ): Promise<UserProfile> => {
-    if (!user) throw new Error('يجب تسجيل الدخول أو إنشاء حساب أولاً لتعديل اسم المستخدم الفريد.');
+  ): Promise<{ username: string; profile: UserProfile; message: string }> => {
+    if (!user) throw new Error('يجب تسجيل الدخول أولاً لتعديل اسم المستخدم الفريد.');
     const updated = await claimOrUpdateUniqueUsername({
       uid: user.uid,
       newUsername,
       displayNameArabic
     });
-    setUserProfile(updated);
+    setUserProfile(updated.profile);
     try {
-      localStorage.setItem(`umed_cached_profile_${user.uid}`, JSON.stringify(updated));
+      localStorage.setItem(`umed_cached_profile_${user.uid}`, JSON.stringify(updated.profile));
     } catch (e) {}
-    return updated;
+    return {
+      username: updated.username,
+      profile: updated.profile,
+      message: `تم حفظ وتحديث اسم المستخدم الفريد (@${updated.username}) في السحابة بنجاح ✓`
+    };
+  };
+
+  /**
+   * Updates the student's full profile (username, displayNameArabic, avatarUrl, university, specialty, studyLevel)
+   * in Cloud Firestore and syncs local state immediately.
+   */
+  const updateFullProfile = async (params: {
+    newUsername?: string;
+    displayNameArabic?: string;
+    avatarUrl?: string | null;
+    universityId?: string;
+    universityNameArabic?: string;
+    specialtyArabic?: string;
+    studyLevelId?: string;
+  }) => {
+    if (!user) throw new Error('يجب تسجيل الدخول أولاً لتحديث بيانات ملفك الشخصي.');
+    const res = await updateStudentFullProfileInCloud({
+      uid: user.uid,
+      ...params
+    });
+    setUserProfile(res.profile);
+    try {
+      localStorage.setItem(`umed_cached_profile_${user.uid}`, JSON.stringify(res.profile));
+    } catch (e) {}
+    return {
+      ...res,
+      message: `تم حفظ ومزامنة الملف الشخصي (@${res.username}) والبيانات الأكاديمية في السحابة بنجاح ✓`
+    };
   };
 
   const loginEmail = async (email: string, pass: string) => {
@@ -740,6 +797,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         loginWithIdentifier,
         registerWithUsername,
         updateUniqueUsername,
+        updateFullProfile,
         loginEmail,
         registerEmail,
         loginPhone,
