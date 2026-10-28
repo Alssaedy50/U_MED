@@ -526,20 +526,20 @@ export function validateAndAnnotateDrafts(
     let validCorrectId = '';
 
     if (qType === 'essay') {
-      // Essay question validation: no options needed, but should have model answer or rubric
+      // Essay question validation: no options needed, requires model answer or explanation
       normalizedOptions = [];
-      validCorrectId = 'essay';
-      if (!draft.modelAnswerArabic && !draft.explanationArabic) {
+      validCorrectId = 'essay-answer';
+      if ((!draft.modelAnswerArabic || !draft.modelAnswerArabic.trim()) && (!draft.explanationArabic || !draft.explanationArabic.trim())) {
         issues.push({
           code: 'MISSING_MODEL_ANSWER',
-          severity: 'warning',
-          messageArabic: 'يفضل كتابة إجابة نموذجية أو معايير تصحيح للسؤال المقالي'
+          severity: 'error',
+          messageArabic: 'يرجى كتابة الإجابة النموذجية أو معايير التصحيح للسؤال المقالي'
         });
       }
     } else if (qType === 'fill_blank') {
       // Fill-in-the-blank question validation: requires the expected answer in modelAnswerArabic
       normalizedOptions = [];
-      validCorrectId = 'fill_blank';
+      validCorrectId = 'fill-blank-answer';
       if (!draft.modelAnswerArabic || !draft.modelAnswerArabic.trim()) {
         issues.push({
           code: 'MISSING_FILL_BLANK_ANSWER',
@@ -564,8 +564,8 @@ export function validateAndAnnotateDrafts(
         }
       ];
 
-      validCorrectId = draft.correctOptionId === 'opt-b' ? 'opt-b' : 'opt-a';
-      if (!draft.correctOptionId) {
+      validCorrectId = draft.correctOptionId === 'opt-b' ? 'opt-b' : draft.correctOptionId === 'opt-a' ? 'opt-a' : '';
+      if (!validCorrectId) {
         issues.push({
           code: 'MISSING_CORRECT_ANSWER',
           severity: 'error',
@@ -573,33 +573,57 @@ export function validateAndAnnotateDrafts(
         });
       }
     } else {
-      // Multiple Choice Question (MCQ): dynamic options count (2, 3, 4, 5, 6, etc.)
-      const rawNonEmpty = draft.options.filter(
-        o => o && o.textArabic && o.textArabic.trim().length > 0 && o.textArabic !== 'غير محدد'
+      // Multiple Choice Question (MCQ): preserve option slots during interactive editing, only strip legacy 'غير محدد' placeholders
+      const rawFiltered = (draft.options || []).filter(
+        (o) => o && o.textArabic !== 'غير محدد'
       );
+      const sourceOptions =
+        rawFiltered.length >= 2
+          ? rawFiltered
+          : [
+              { id: 'opt-a', textArabic: rawFiltered[0]?.textArabic || '' },
+              { id: 'opt-b', textArabic: rawFiltered[1]?.textArabic || '' },
+              { id: 'opt-c', textArabic: '' },
+              { id: 'opt-d', textArabic: '' }
+            ];
 
-      // Preserve all provided options dynamically, mapping to canonical IDs
-      normalizedOptions = rawNonEmpty.map((opt, optIdx) => ({
-        id: opt.id || getOptionIdByIndex(optIdx),
-        textArabic: opt.textArabic.trim(),
-        ...(opt.textEnglish ? { textEnglish: opt.textEnglish.trim() } : {}),
-        ...(opt.explanationArabic ? { explanationArabic: opt.explanationArabic.trim() } : {}),
-        ...(opt.isCorrect !== undefined ? { isCorrect: opt.isCorrect } : {})
-      }));
+      let mappedCorrectOptionId = '';
+      normalizedOptions = sourceOptions.map((opt, optIdx) => {
+        const canonicalId = getOptionIdByIndex(optIdx);
+        if (draft.correctOptionId && (opt.id === draft.correctOptionId || canonicalId === draft.correctOptionId)) {
+          mappedCorrectOptionId = canonicalId;
+        }
+        return {
+          id: canonicalId,
+          textArabic: (opt.textArabic ?? '').replace(/^\s+/, ''),
+          ...(opt.textEnglish ? { textEnglish: opt.textEnglish.trim() } : {}),
+          ...(opt.explanationArabic !== undefined ? { explanationArabic: opt.explanationArabic } : {}),
+          ...(opt.isCorrect !== undefined ? { isCorrect: opt.isCorrect } : {})
+        };
+      });
 
-      // If user had less than 2 options
-      if (normalizedOptions.length < 2) {
+      const nonEmptyOptions = normalizedOptions.filter((o) => o.textArabic.trim().length > 0);
+      const emptyOptionsCount = normalizedOptions.length - nonEmptyOptions.length;
+
+      // If user has fewer than 2 filled options
+      if (nonEmptyOptions.length < 2) {
         issues.push({
           code: 'INSUFFICIENT_OPTIONS',
           severity: 'error',
-          messageArabic: 'يجب توفير خيارين على الأقل للسؤال (مثال: أ، ب)'
+          messageArabic: 'يجب كتابة خيارين على الأقل للسؤال (مثال: أ، ب)'
+        });
+      } else if (emptyOptionsCount > 0) {
+        issues.push({
+          code: 'EMPTY_OPTION_TEXT',
+          severity: 'error',
+          messageArabic: `يوجد (${emptyOptionsCount}) خيار فارغ بدون نص — يرجى تعبئته أو حذفه بزر (×)`
         });
       }
 
       // Check identical options within the same question
       const optionNormSet = new Set<string>();
       let hasIdenticalOpts = false;
-      for (const o of normalizedOptions) {
+      for (const o of nonEmptyOptions) {
         const n = normalizeMedicalText(o.textArabic);
         if (n && optionNormSet.has(n)) {
           hasIdenticalOpts = true;
@@ -615,15 +639,18 @@ export function validateAndAnnotateDrafts(
         });
       }
 
-      // Check Correct Answer
-      const matchedOpt = normalizedOptions.find(o => o.id === draft.correctOptionId);
-      if (matchedOpt) {
+      // Check Correct Answer exists and has non-empty text
+      const matchedOpt = normalizedOptions.find((o) => o.id === mappedCorrectOptionId);
+      if (matchedOpt && matchedOpt.textArabic.trim().length > 0) {
         validCorrectId = matchedOpt.id;
       } else {
+        validCorrectId = mappedCorrectOptionId || '';
         issues.push({
           code: 'MISSING_CORRECT_ANSWER',
           severity: 'error',
-          messageArabic: `لم يتم تحديد الإجابة الصحيحة من بين الخيارات المتاحة (${normalizedOptions.length} خيارات)`
+          messageArabic: matchedOpt && !matchedOpt.textArabic.trim()
+            ? 'الخيار المحدد كإجابة صحيحة فارغ حالياً — يرجى كتابة نصه أو اختيار إجابة أخرى'
+            : `لم يتم تحديد الإجابة الصحيحة من بين الخيارات المتاحة (${normalizedOptions.length} خيارات)`
         });
       }
     }
@@ -2201,5 +2228,709 @@ export const UMED_AI_UNIVERSAL_PROMPT_BILINGUAL = buildProfessionalAiPrompt({
   includeOptionRationales: true
 });
 
+// ---------------------------------------------------------------------------
+// 7. Pre-Publish Verification, Audit Report, Copy-as-Text & File Export Engine
+// ---------------------------------------------------------------------------
 
+export interface QuizVerificationInput {
+  titleArabic: string;
+  titleEnglish?: string;
+  assessmentType?: 'exam' | 'competition' | 'bank';
+  language?: AssessmentLanguage;
+  universityName?: string;
+  studyLevelName?: string;
+  blockName?: string;
+  durationMinutes?: number;
+  questionDurationSeconds?: number;
+  questions: Array<ParsedQuestionDraft | QuestionItemFull>;
+}
 
+export interface QuizVerificationCheckItem {
+  id: string;
+  titleArabic: string;
+  status: 'pass' | 'warning' | 'error';
+  detailArabic: string;
+}
+
+export interface QuizAnswerKeyVerifyRow {
+  index: number;
+  questionNumber: number;
+  questionType: QuestionType;
+  stemPreview: string;
+  correctLabel: string;
+  correctText: string;
+  correctTextPreview: string;
+  points: number;
+  hasExplanation: boolean;
+  isValid: boolean;
+  issueText?: string;
+}
+
+export interface QuizPrePublishVerificationReport {
+  isReadyToPublish: boolean;
+  blockingErrorsCount: number;
+  errorChecksCount: number;
+  warningsCount: number;
+  warningChecksCount: number;
+  totalQuestions: number;
+  validQuestions: number;
+  totalPoints: number;
+  withExplanationsCount: number;
+  withExplanationCount: number;
+  withOptionRationalesCount: number;
+  typeBreakdown: {
+    mcq: number;
+    true_false: number;
+    fill_blank: number;
+    essay: number;
+  };
+  byType: {
+    mcq: number;
+    true_false: number;
+    fill_blank: number;
+    essay: number;
+  };
+  optionDistribution: Record<string, number>;
+  checks: QuizVerificationCheckItem[];
+  answerKeyRows: QuizAnswerKeyVerifyRow[];
+}
+
+/**
+ * Evaluates a comprehensive pre-publish verification report for a set of questions
+ * so the quiz creator or admin can confirm 100% accuracy before publishing.
+ */
+export function evaluateQuizVerificationReport(
+  input: QuizVerificationInput
+): QuizPrePublishVerificationReport {
+  const questions = input.questions || [];
+  const lang = input.language || 'ar';
+  const isEn = lang === 'en';
+  const LETTERS = isEn ? ALL_EN_OPTION_LETTERS : ALL_AR_OPTION_LETTERS;
+
+  let totalPoints = 0;
+  let withExplanationsCount = 0;
+  let withOptionRationalesCount = 0;
+  let invalidStemCount = 0;
+  let invalidOptionsCount = 0;
+  let missingCorrectKeyCount = 0;
+  let duplicateQuestionsCount = 0;
+
+  const typeBreakdown = {
+    mcq: 0,
+    true_false: 0,
+    fill_blank: 0,
+    essay: 0
+  };
+
+  const optionDistribution: Record<string, number> = {};
+  const answerKeyRows: QuizAnswerKeyVerifyRow[] = [];
+  const seenStems = new Set<string>();
+
+  questions.forEach((q, idx) => {
+    const qType: QuestionType = q.questionType || 'mcq';
+    typeBreakdown[qType] = (typeBreakdown[qType] || 0) + 1;
+
+    const pts = Number(q.points) > 0 ? Number(q.points) : 5;
+    totalPoints += pts;
+
+    const stem = (q.stemArabic || q.stemEnglish || '').trim();
+    const normStem = normalizeMedicalText(stem);
+    if (!stem || stem.length < 4) {
+      invalidStemCount++;
+    } else if (seenStems.has(normStem)) {
+      duplicateQuestionsCount++;
+    } else {
+      seenStems.add(normStem);
+    }
+
+    const hasGeneralExp = Boolean((q.explanationArabic || '').trim());
+    const hasOptExp = Boolean(
+      (q.options || []).some((o) => (o.explanationArabic || '').trim().length > 0) ||
+        (q.optionExplanations && Object.values(q.optionExplanations).some((v) => String(v || '').trim().length > 0))
+    );
+    if (hasGeneralExp || hasOptExp) withExplanationsCount++;
+    if (hasOptExp) withOptionRationalesCount++;
+
+    let correctLabel = '—';
+    let correctText = '';
+    let rowValid = Boolean(stem && stem.length >= 4);
+    const rowIssues: string[] = [];
+
+    if (!stem || stem.length < 4) {
+      rowIssues.push('نص السؤال مفقود أو قصير جداً');
+    }
+
+    if (qType === 'essay') {
+      const modelAns = (q.modelAnswerArabic || q.explanationArabic || '').trim();
+      correctLabel = isEn ? 'Essay' : 'مقالي';
+      correctText = modelAns || 'بدون إجابة نموذجية';
+      if (!modelAns) {
+        missingCorrectKeyCount++;
+        rowValid = false;
+        rowIssues.push('الإجابة النموذجية للسؤال المقالي غير مدخلة');
+      }
+    } else if (qType === 'fill_blank') {
+      const blankAns = (q.modelAnswerArabic || '').trim();
+      correctLabel = isEn ? 'Blank' : 'فراغ';
+      correctText = blankAns || 'غير محدد';
+      if (!blankAns) {
+        missingCorrectKeyCount++;
+        rowValid = false;
+        rowIssues.push('كلمة إكمال الفراغ غير مدخلة');
+      }
+    } else if (qType === 'true_false') {
+      const isFalse = q.correctOptionId === 'opt-b';
+      const isTrue = q.correctOptionId === 'opt-a';
+      if (!isTrue && !isFalse) {
+        missingCorrectKeyCount++;
+        rowValid = false;
+        rowIssues.push('لم يتم تحديد (صح) أو (خطأ)');
+      } else {
+        correctLabel = isTrue ? (isEn ? 'True' : 'صح') : (isEn ? 'False' : 'خطأ');
+        correctText = isTrue
+          ? q.options?.[0]?.textArabic || (isEn ? 'True' : 'صح (صواب)')
+          : q.options?.[1]?.textArabic || (isEn ? 'False' : 'خطأ');
+        optionDistribution[correctLabel] = (optionDistribution[correctLabel] || 0) + 1;
+      }
+    } else {
+      const opts = q.options || [];
+      const nonEmptyOpts = opts.filter((o) => (o.textArabic || '').trim().length > 0 && o.textArabic !== 'غير محدد');
+      const hasEmptySlot = opts.some((o) => !(o.textArabic || '').trim() || o.textArabic === 'غير محدد');
+
+      // Check duplicate option texts within the same question
+      const optSet = new Set<string>();
+      let hasDupOpt = false;
+      for (const o of nonEmptyOpts) {
+        const n = normalizeMedicalText(o.textArabic);
+        if (n && optSet.has(n)) {
+          hasDupOpt = true;
+          break;
+        }
+        if (n) optSet.add(n);
+      }
+
+      if (nonEmptyOpts.length < 2 || hasEmptySlot || hasDupOpt) {
+        invalidOptionsCount++;
+        rowValid = false;
+        if (nonEmptyOpts.length < 2) rowIssues.push('أقل من خيارين');
+        if (hasEmptySlot) rowIssues.push('يوجد خيار فارغ');
+        if (hasDupOpt) rowIssues.push('خياران متطابقان');
+      }
+
+      const cIdx = opts.findIndex((o) => o.id === q.correctOptionId);
+      const cOpt = cIdx >= 0 ? opts[cIdx] : undefined;
+      if (!cOpt || !(cOpt.textArabic || '').trim() || cOpt.textArabic === 'غير محدد') {
+        missingCorrectKeyCount++;
+        rowValid = false;
+        rowIssues.push('الإجابة الصحيحة غير محددة أو فارغة');
+      } else {
+        correctLabel = LETTERS[cIdx] || String(cIdx + 1);
+        correctText = cOpt.textArabic.trim();
+        optionDistribution[correctLabel] = (optionDistribution[correctLabel] || 0) + 1;
+      }
+    }
+
+    const shortCorrectText = correctText.length > 65 ? `${correctText.slice(0, 65)}...` : correctText || '—';
+    answerKeyRows.push({
+      index: idx + 1,
+      questionNumber: idx + 1,
+      questionType: qType,
+      stemPreview: stem.length > 90 ? `${stem.slice(0, 90)}...` : stem || '—',
+      correctLabel,
+      correctText: shortCorrectText,
+      correctTextPreview: shortCorrectText,
+      points: pts,
+      hasExplanation: hasGeneralExp || hasOptExp,
+      isValid: rowValid,
+      issueText: rowIssues.length > 0 ? rowIssues.join(' + ') : undefined
+    });
+  });
+
+  const checks: QuizVerificationCheckItem[] = [];
+
+  // Check 1: Questions Count & Stems
+  if (questions.length === 0) {
+    checks.push({
+      id: 'stems',
+      titleArabic: 'وجود الأسئلة واكتمال صياغتها',
+      status: 'error',
+      detailArabic: 'لا توجد أي أسئلة محددة حالياً في الاختبار.'
+    });
+  } else if (invalidStemCount > 0) {
+    checks.push({
+      id: 'stems',
+      titleArabic: 'سلامة نصوص الأسئلة (Stems)',
+      status: 'error',
+      detailArabic: `يوجد (${invalidStemCount}) سؤال بدون نص واضح أو بنص قصير جداً.`
+    });
+  } else {
+    checks.push({
+      id: 'stems',
+      titleArabic: 'سلامة نصوص الأسئلة (Stems)',
+      status: 'pass',
+      detailArabic: `جميع الأسئلة (${questions.length} سؤال) تحتوي على نصوص مكتملة وواضحة ✓`
+    });
+  }
+
+  // Check 2: Options completeness & uniqueness
+  if (invalidOptionsCount > 0) {
+    checks.push({
+      id: 'options',
+      titleArabic: 'سلامة الخيارات وعدم وجود حقول فارغة أو مكررة',
+      status: 'error',
+      detailArabic: `يوجد (${invalidOptionsCount}) سؤال يحتوي على خيارات فارغة أو مكررة أو أقل من خيارين.`
+    });
+  } else {
+    checks.push({
+      id: 'options',
+      titleArabic: 'سلامة الخيارات وعدم وجود حقول فارغة أو مكررة',
+      status: 'pass',
+      detailArabic: 'جميع خيارات الأسئلة مكتملة وخالية من التكرار أو الحقول الفارغة ✓'
+    });
+  }
+
+  // Check 3: Correct Answer Keys
+  if (missingCorrectKeyCount > 0) {
+    checks.push({
+      id: 'answer_keys',
+      titleArabic: 'تحديد مفاتيح الإجابات الصحيحة المعتمدة',
+      status: 'error',
+      detailArabic: `يوجد (${missingCorrectKeyCount}) سؤال لم يتم تحديد إجابته الصحيحة بشكل سليم.`
+    });
+  } else {
+    checks.push({
+      id: 'answer_keys',
+      titleArabic: 'تحديد مفاتيح الإجابات الصحيحة المعتمدة',
+      status: 'pass',
+      detailArabic: `تم التأكد من ربط جميع الأسئلة (${questions.length}/${questions.length}) بمفتاح إجابة صحيح ومعتمد ✓`
+    });
+  }
+
+  // Check 4: Answer Key Distribution (detect accidental all-'A' keys)
+  const mcqCount = typeBreakdown.mcq;
+  const distEntries = Object.entries(optionDistribution);
+  if (mcqCount >= 4 && distEntries.length === 1) {
+    checks.push({
+      id: 'key_distribution',
+      titleArabic: 'توازن توزيع مفاتيح الإجابات الصحيحة',
+      status: 'warning',
+      detailArabic: `تنبيه: جميع الأسئلة (${mcqCount}) تحمل نفس مفتاح الإجابة (${distEntries[0][0]})! تأكد من أن واضع الاختبار لم ينسَ تحديد الإجابات الصحيحة.`
+    });
+  } else {
+    const distSummary = distEntries.map(([k, v]) => `${k}: ${v}`).join(' ، ');
+    checks.push({
+      id: 'key_distribution',
+      titleArabic: 'توازن توزيع مفاتيح الإجابات الصحيحة',
+      status: 'pass',
+      detailArabic: distSummary
+        ? `توزيع الإجابات متوازن وطبيعي (${distSummary}) ✓`
+        : 'تم فحص تنوع مفاتيح الإجابات بنجاح ✓'
+    });
+  }
+
+  // Check 5: Duplicates & Metadata
+  if (duplicateQuestionsCount > 0) {
+    checks.push({
+      id: 'duplicates',
+      titleArabic: 'فحص عدم تكرار الأسئلة داخل الاختبار',
+      status: 'warning',
+      detailArabic: `يوجد (${duplicateQuestionsCount}) سؤال مكرر النص داخل نفس الدفعة.`
+    });
+  } else {
+    checks.push({
+      id: 'duplicates',
+      titleArabic: 'فحص عدم تكرار الأسئلة داخل الاختبار',
+      status: 'pass',
+      detailArabic: 'لا يوجد أي تكرار بين أسئلة الاختبار ✓'
+    });
+  }
+
+  // Check 6: Metadata & Timers
+  const hasTitle = Boolean((input.titleArabic || '').trim());
+  if (!hasTitle) {
+    checks.push({
+      id: 'metadata',
+      titleArabic: 'اكتمال عنوان الاختبار والبيانات الأكاديمية',
+      status: 'error',
+      detailArabic: 'عنوان الاختبار / البنك فارغ — يرجى كتابة عنوان واضح.'
+    });
+  } else {
+    checks.push({
+      id: 'metadata',
+      titleArabic: 'اكتمال عنوان الاختبار والمؤقتات الزمنية',
+      status: 'pass',
+      detailArabic: `العنوان: "${input.titleArabic.trim()}" · المستوى: ${input.studyLevelName || 'محدد'} · الزمن: ${
+        input.durationMinutes ? `${input.durationMinutes} دقيقة` : 'وقت مفتوح'
+      } · إجمالي الدرجات: ${totalPoints} نقطة ✓`
+    });
+  }
+
+  const blockingErrorsCount = checks.filter((c) => c.status === 'error').length;
+  const warningsCount = checks.filter((c) => c.status === 'warning').length;
+  const validQuestions = answerKeyRows.filter((r) => r.isValid).length;
+
+  return {
+    isReadyToPublish: questions.length > 0 && blockingErrorsCount === 0,
+    blockingErrorsCount,
+    errorChecksCount: blockingErrorsCount,
+    warningsCount,
+    warningChecksCount: warningsCount,
+    totalQuestions: questions.length,
+    validQuestions,
+    totalPoints,
+    withExplanationsCount,
+    withExplanationCount: withExplanationsCount,
+    withOptionRationalesCount,
+    typeBreakdown,
+    byType: typeBreakdown,
+    optionDistribution,
+    checks,
+    answerKeyRows
+  };
+}
+
+/**
+ * Formats the entire quiz with metadata, numbered questions, options, marked correct answers,
+ * explanations, and a bottom quick-verification answer key table into a clean text string.
+ * This text can be copied to clipboard or downloaded as a .txt file, and is also 100% re-importable.
+ */
+export function formatQuizVerificationText(input: QuizVerificationInput): string {
+  const report = evaluateQuizVerificationReport(input);
+  const lang = input.language || 'ar';
+  const isEn = lang === 'en';
+  const LETTERS = isEn ? ALL_EN_OPTION_LETTERS : ALL_AR_OPTION_LETTERS;
+
+  const headerLines: string[] = [
+    '====================================================================',
+    isEn
+      ? 'UMED PRE-PUBLISH EXAM VERIFICATION & ANSWER KEY REVIEW SHEET'
+      : 'وثيقة فحص ومراجعة الاختبار ومفاتيح الإجابات قبل النشر — منصة UMED',
+    '====================================================================',
+    `اللغة: ${lang === 'en' ? 'English' : lang === 'bilingual' ? 'ثنائي اللغة (عربي + إنجليزي)' : 'عربي'}`,
+    `العنوان: ${input.titleArabic || 'بدون عنوان'}`,
+    `النوع: ${
+      input.assessmentType === 'competition'
+        ? 'مسابقة طبية تنافسية'
+        : input.assessmentType === 'bank'
+        ? 'بنك أسئلة معتمد'
+        : 'اختبار أكاديمي'
+    }`,
+    ...(input.studyLevelName ? [`المستوى: ${input.studyLevelName}`] : []),
+    ...(input.blockName ? [`المادة: ${input.blockName}`] : []),
+    ...(input.durationMinutes ? [`المدة: ${input.durationMinutes} دقيقة`] : []),
+    ...(input.questionDurationSeconds ? [`مؤقت السؤال: ${input.questionDurationSeconds} ثانية`] : []),
+    `إجمالي عدد الأسئلة: ${report.totalQuestions} سؤال | إجمالي الدرجات: ${report.totalPoints} نقطة`,
+    `حالة الفحص الآلي: ${
+      report.isReadyToPublish
+        ? 'سليم وجاهز للنشر (خالي من الأخطاء) ✓'
+        : `يوجد (${report.blockingErrorsCount}) ملاحظة تحتاج لمراجعة قبل النشر`
+    }`,
+    '====================================================================',
+    ''
+  ];
+
+  const questionBlocks: string[] = (input.questions || []).map((q, idx) => {
+    const qType: QuestionType = q.questionType || 'mcq';
+    const qLang = q.language || lang;
+    const useEnLetters = qLang === 'en';
+    const optLetters = useEnLetters ? ALL_EN_OPTION_LETTERS : ALL_AR_OPTION_LETTERS;
+    const pts = Number(q.points) > 0 ? Number(q.points) : 5;
+
+    const typeTag =
+      qType === 'true_false'
+        ? useEnLetters
+          ? '[True/False] '
+          : '[صح وخطأ] '
+        : qType === 'fill_blank'
+        ? useEnLetters
+          ? '[Fill in the blank] '
+          : '[إكمال الفراغ] '
+        : qType === 'essay'
+        ? useEnLetters
+          ? '[Essay] '
+          : '[سؤال مقالي] '
+        : '';
+
+    const lines: string[] = [];
+    lines.push(`${idx + 1}. ${typeTag}${(q.stemArabic || '').trim()} (${pts} نقاط)`);
+
+    if (q.stemEnglish && q.stemEnglish.trim() && q.stemEnglish.trim() !== (q.stemArabic || '').trim()) {
+      lines.push(`EN: ${q.stemEnglish.trim()}`);
+    }
+
+    if (qType === 'essay') {
+      lines.push(`الإجابة النموذجية: ${(q.modelAnswerArabic || q.explanationArabic || 'غير محددة').trim()}`);
+    } else if (qType === 'fill_blank') {
+      lines.push(`الإجابة: ${(q.modelAnswerArabic || 'غير محددة').trim()}`);
+    } else {
+      const opts = q.options || [];
+      let correctLetterText = 'غير محدد';
+
+      opts.forEach((opt, oIdx) => {
+        const letter = optLetters[oIdx] || String(oIdx + 1);
+        const isCorrect = opt.id === q.correctOptionId;
+        const optExp =
+          (opt.explanationArabic || '').trim() ||
+          (q.optionExplanations && q.optionExplanations[opt.id] ? q.optionExplanations[opt.id].trim() : '');
+
+        if (isCorrect) {
+          correctLetterText = `${letter} (${(opt.textArabic || '').trim()})`;
+        }
+
+        const markerSuffix = isCorrect ? ' * [✓ الإجابة الصحيحة]' : '';
+        const rationaleSuffix = optExp ? ` (التعليل: ${optExp})` : '';
+        lines.push(`${letter}) ${(opt.textArabic || '').trim()}${markerSuffix}${rationaleSuffix}`);
+      });
+
+      const cIdx = opts.findIndex((o) => o.id === q.correctOptionId);
+      const answerToken = cIdx >= 0 ? optLetters[cIdx] || String(cIdx + 1) : 'غير محدد';
+      lines.push(`الإجابة: ${answerToken} — ${correctLetterText}`);
+    }
+
+    if (q.explanationArabic && q.explanationArabic.trim()) {
+      lines.push(`التعليل: ${q.explanationArabic.trim()}`);
+    }
+
+    return lines.join('\n');
+  });
+
+  const summaryKeyLines: string[] = [
+    '',
+    '====================================================================',
+    'ملخص مفتاح الإجابات السريع (للمراجعة السريعة من قِبل واضع الاختبار):',
+    '====================================================================',
+    report.answerKeyRows
+      .map((r) => `س${r.index}: [${r.correctLabel}] (${r.correctText})${r.isValid ? ' ✓' : ` ⚠️ [${r.issueText}]`}`)
+      .join('\n'),
+    '===================================================================='
+  ];
+
+  return [...headerLines, questionBlocks.join('\n\n'), ...summaryKeyLines].join('\n');
+}
+
+/**
+ * Downloads the pre-publish verification sheet as a .txt, .html (printable PDF sheet), or .json file.
+ */
+export function downloadQuizVerificationFile(
+  input: QuizVerificationInput,
+  format: 'txt' | 'html' | 'json' = 'txt'
+): void {
+  const safeTitle = (input.titleArabic || 'umed_quiz_verification')
+    .replace(/[^\p{L}\p{N}_\-]+/gu, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 50) || 'umed_quiz';
+  const dateStamp = new Date().toISOString().slice(0, 10);
+
+  if (format === 'json') {
+    const report = evaluateQuizVerificationReport(input);
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      platform: 'UMED Medical Education Platform',
+      metadata: {
+        titleArabic: input.titleArabic,
+        assessmentType: input.assessmentType || 'exam',
+        language: input.language || 'ar',
+        studyLevelName: input.studyLevelName,
+        blockName: input.blockName,
+        durationMinutes: input.durationMinutes,
+        questionDurationSeconds: input.questionDurationSeconds
+      },
+      verificationSummary: {
+        isReadyToPublish: report.isReadyToPublish,
+        totalQuestions: report.totalQuestions,
+        totalPoints: report.totalPoints,
+        blockingErrorsCount: report.blockingErrorsCount,
+        warningsCount: report.warningsCount,
+        optionDistribution: report.optionDistribution,
+        checks: report.checks
+      },
+      questions: input.questions
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: 'application/json;charset=utf-8;'
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${safeTitle}_verification_${dateStamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    return;
+  }
+
+  if (format === 'html') {
+    const report = evaluateQuizVerificationReport(input);
+    const lang = input.language || 'ar';
+    const isEn = lang === 'en';
+    const LETTERS = isEn ? ALL_EN_OPTION_LETTERS : ALL_AR_OPTION_LETTERS;
+
+    const escapeHtml = (str?: string) =>
+      String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+
+    const questionsHtml = (input.questions || [])
+      .map((q, idx) => {
+        const qType: QuestionType = q.questionType || 'mcq';
+        const pts = Number(q.points) > 0 ? Number(q.points) : 5;
+        const opts = q.options || [];
+
+        let bodyHtml = '';
+        if (qType === 'essay' || qType === 'fill_blank') {
+          bodyHtml = `<div style="margin-top:10px;padding:10px 14px;background:#f0fdf4;border:1px solid #16a34a;border-radius:10px;color:#14532d;font-weight:700;">
+            ${qType === 'fill_blank' ? 'الكلمة الصحيحة لإكمال الفراغ:' : 'الإجابة النموذجية المعتمدة:'} ${escapeHtml(
+            q.modelAnswerArabic || q.explanationArabic || 'غير محدد'
+          )}
+          </div>`;
+        } else {
+          bodyHtml = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px;margin-top:10px;">
+            ${opts
+              .map((o, oIdx) => {
+                const isCorrect = o.id === q.correctOptionId;
+                const ltr = LETTERS[oIdx] || String(oIdx + 1);
+                const optExp =
+                  (o.explanationArabic || '').trim() ||
+                  (q.optionExplanations && q.optionExplanations[o.id] ? q.optionExplanations[o.id].trim() : '');
+                return `<div style="padding:10px 12px;border-radius:10px;border:${
+                  isCorrect ? '2px solid #0d9488' : '1px solid #cbd5e1'
+                };background:${isCorrect ? '#f0fdfa' : '#ffffff'};">
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-weight:${
+                    isCorrect ? '800' : '600'
+                  };color:${isCorrect ? '#0f766e' : '#1e293b'};">
+                    <span>${escapeHtml(ltr)}) ${escapeHtml(o.textArabic)}</span>
+                    ${
+                      isCorrect
+                        ? '<span style="background:#0d9488;color:#fff;font-size:11px;padding:2px 8px;border-radius:999px;">✓ الإجابة الصحيحة</span>'
+                        : ''
+                    }
+                  </div>
+                  ${
+                    optExp
+                      ? `<div style="margin-top:6px;padding-top:6px;border-top:1px dashed #cbd5e1;font-size:12px;color:#475569;">التعليل: ${escapeHtml(
+                          optExp
+                        )}</div>`
+                      : ''
+                  }
+                </div>`;
+              })
+              .join('')}
+          </div>`;
+        }
+
+        return `<div style="background:#fff;border:1px solid #cbd5e1;border-radius:14px;padding:16px;margin-bottom:14px;page-break-inside:avoid;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-size:12px;color:#0f766e;font-weight:800;">
+            <span>سؤال #${idx + 1} (${
+          qType === 'mcq'
+            ? 'اختيار من متعدد'
+            : qType === 'true_false'
+            ? 'صح وخطأ'
+            : qType === 'fill_blank'
+            ? 'إكمال الفراغ'
+            : 'سؤال مقالي'
+        })</span>
+            <span>الدرجة: ${pts} نقاط</span>
+          </div>
+          <div dir="auto" style="font-size:15px;font-weight:800;color:#0f172a;line-height:1.6;">${escapeHtml(
+            q.stemArabic
+          )}</div>
+          ${
+            q.stemEnglish && q.stemEnglish !== q.stemArabic
+              ? `<div dir="ltr" style="font-size:13px;color:#334155;margin-top:4px;font-family:monospace;">${escapeHtml(
+                  q.stemEnglish
+                )}</div>`
+              : ''
+          }
+          ${bodyHtml}
+          ${
+            q.explanationArabic
+              ? `<div dir="auto" style="margin-top:10px;padding:10px 12px;background:#f8fafc;border-right:4px solid #0d9488;border-radius:8px;font-size:13px;color:#334155;">
+                  <strong style="color:#0f766e;">التعليل العلمي المعتمد:</strong> ${escapeHtml(q.explanationArabic)}
+                </div>`
+              : ''
+          }
+        </div>`;
+      })
+      .join('');
+
+    const htmlDoc = `<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <title>وثيقة تدقيق ومراجعة الاختبار قبل النشر — ${escapeHtml(input.titleArabic)}</title>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: #f1f5f9; color: #0f172a; margin: 0; padding: 24px; }
+    .container { max-width: 960px; margin: 0 auto; }
+    .header-card { background: #0f172a; color: #f8fafc; padding: 24px; border-radius: 16px; margin-bottom: 20px; }
+    .badge { display: inline-block; padding: 4px 10px; border-radius: 8px; background: #1e293b; color: #5eead4; font-size: 12px; font-weight: 700; margin-left: 6px; margin-top: 6px; }
+    .print-btn { background: #0d9488; color: #fff; border: none; padding: 10px 18px; border-radius: 10px; font-weight: 800; cursor: pointer; font-size: 13px; }
+    @media print { .no-print { display: none !important; } body { background: #fff; padding: 0; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header-card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+        <div>
+          <div style="color:#5eead4;font-size:12px;font-weight:800;margin-bottom:4px;">منصة UMED الطبية — وثيقة التأكد من صحة قيم الاختبار قبل النشر</div>
+          <h1 style="margin:0 0 8px 0;font-size:22px;">${escapeHtml(input.titleArabic)}</h1>
+          <div>
+            <span class="badge">عدد الأسئلة: ${report.totalQuestions}</span>
+            <span class="badge">إجمالي الدرجات: ${report.totalPoints}</span>
+            ${input.studyLevelName ? `<span class="badge">المستوى: ${escapeHtml(input.studyLevelName)}</span>` : ''}
+            ${input.blockName ? `<span class="badge">البلوك/المادة: ${escapeHtml(input.blockName)}</span>` : ''}
+            ${input.durationMinutes ? `<span class="badge">المدة: ${input.durationMinutes} دقيقة</span>` : ''}
+          </div>
+        </div>
+        <button class="print-btn no-print" onclick="window.print()">🖨️ طباعة / حفظ كـ PDF</button>
+      </div>
+    </div>
+
+    <div style="background:#fff;border:1px solid #cbd5e1;border-radius:14px;padding:16px;margin-bottom:20px;">
+      <h3 style="margin:0 0 10px 0;font-size:15px;color:#0f766e;">ملخص مفتاح الإجابات السريع (للمطابقة الفورية):</h3>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;">
+        ${report.answerKeyRows
+          .map(
+            (r) =>
+              `<span style="padding:6px 10px;border-radius:8px;background:${
+                r.isValid ? '#f0fdfa' : '#fef2f2'
+              };border:1px solid ${r.isValid ? '#5eead4' : '#fca5a5'};font-size:12px;font-weight:800;color:#0f172a;">
+                س${r.index}: <strong style="color:#0d9488;">${escapeHtml(r.correctLabel)}</strong>
+              </span>`
+          )
+          .join('')}
+      </div>
+    </div>
+
+    ${questionsHtml}
+  </div>
+</body>
+</html>`;
+
+    const blob = new Blob(['\uFEFF' + htmlDoc], { type: 'text/html;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${safeTitle}_review_sheet_${dateStamp}.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    return;
+  }
+
+  // Default: 'txt'
+  const textContent = '\uFEFF' + formatQuizVerificationText(input);
+  const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${safeTitle}_verification_${dateStamp}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}

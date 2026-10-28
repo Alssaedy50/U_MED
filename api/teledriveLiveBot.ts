@@ -141,7 +141,6 @@ function normalizeBotToken(raw?: string): string {
 }
 
 let botConfig: LiveBotConfig = {
-  botToken: normalizeBotToken(process.env.BOT_TOKEN || savedDiskConfig.botToken),
   targetGroupId: process.env.TARGET_GROUP_ID || '-1003664858401',
   targetChannelUsername: savedDiskConfig.targetChannelUsername || '',
   adminTelegramId: process.env.ADMIN_TELEGRAM_ID || '1905553456',
@@ -885,7 +884,7 @@ export async function downloadTelegramFileViaMtproto(
       offset: options?.offsetBytes ? bigInt(options.offsetBytes) : bigInt(0),
       limit: options?.limitBytes || 20 * 1024 * 1024,
       workers: 1
-    });
+    } as any);
 
     if (buf && Buffer.isBuffer(buf) && buf.length > 0) {
       return buf;
@@ -1707,7 +1706,7 @@ async function handleIncomingTelegramMessage(msg: any): Promise<any | null> {
 
     const nowIso = new Date().toISOString();
     // Strictly require admin approval before publishing channel/group posts to students
-    const initialStatus = 'draft';
+    const initialStatus = 'draft' as 'draft' | 'published';
 
     const resourceDoc = {
       id: docId,
@@ -2405,7 +2404,7 @@ export async function startLiveTelegramBot(): Promise<{
   } catch (err: any) {
     isPollingActive = false;
     lastError = err?.message || 'Failed to start Telegram Bot';
-    return { ok: false, botIdentity: null, error: lastError };
+    return { ok: false, botIdentity: null, error: lastError || undefined };
   }
 }
 
@@ -3028,27 +3027,26 @@ export function registerLiveTelegramBotRoutes(app: Express) {
         return;
       }
 
-      const beforeCount = ingestedResources.length;
-      const filtered = ingestedResources.filter((r) => r.id !== resourceId);
-      ingestedResources.length = 0;
-      ingestedResources.push(...filtered);
-      savePersistedState();
+      const existed = Boolean(ingestedResources[resourceId]);
+      delete ingestedResources[resourceId];
+      saveJson(BOT_RESOURCES_FILE, ingestedResources);
 
       // Also delete from Firestore via REST API to guarantee zero residual cloud copies
+      const fbProjectId = botConfig.firebaseProjectId || 'umed-yemen';
       try {
         await fetch(
-          `https://firestore.googleapis.com/v1/projects/${UMED_FIREBASE_PROJECT_ID}/databases/(default)/documents/educationalResources/${encodeURIComponent(resourceId)}`,
+          `https://firestore.googleapis.com/v1/projects/${fbProjectId}/databases/(default)/documents/educationalResources/${encodeURIComponent(resourceId)}`,
           { method: 'DELETE' }
         );
         await fetch(
-          `https://firestore.googleapis.com/v1/projects/${UMED_FIREBASE_PROJECT_ID}/databases/(default)/documents/educational_resources/${encodeURIComponent(resourceId)}`,
+          `https://firestore.googleapis.com/v1/projects/${fbProjectId}/databases/(default)/documents/educational_resources/${encodeURIComponent(resourceId)}`,
           { method: 'DELETE' }
         );
       } catch {}
 
       res.json({
         success: true,
-        removedCount: beforeCount - ingestedResources.length
+        removedCount: existed ? 1 : 0
       });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err?.message || 'Delete failed' });

@@ -29,11 +29,19 @@ import {
   Check,
   Timer,
   Clock,
-  Play
+  Play,
+  Sparkles,
+  Copy,
+  ShieldCheck,
+  Printer,
+  FileText,
+  AlertTriangle
 } from 'lucide-react';
 import { 
   QuestionBank, 
   QuestionItemFull, 
+  QuestionType,
+  QuestionOption,
   Assessment, 
   AssessmentQuestionPublic,
   AssessmentType, 
@@ -83,7 +91,13 @@ import {
   inferAcademicContextFromText
 } from '../../services/academicService.ts';
 import { getRoleLabelArabic } from '../../services/batchGovernanceService.ts';
-import { synchronizeExamTimers } from '../../services/mcqBulkParser.ts';
+import {
+  synchronizeExamTimers,
+  evaluateQuizVerificationReport,
+  formatQuizVerificationText,
+  downloadQuizVerificationFile,
+  QuizVerificationInput
+} from '../../services/mcqBulkParser.ts';
 import BulkQuestionImportModal from './BulkQuestionImportModal.tsx';
 import ExamTakingModal from '../assessment/ExamTakingModal.tsx';
 
@@ -132,6 +146,7 @@ export default function AssessmentManager({
 
   // New Question Form State
   const [showNewQuestionForm, setShowNewQuestionForm] = useState<boolean>(false);
+  const [newQuestionType, setNewQuestionType] = useState<QuestionType>('mcq');
   const [stemArabic, setStemArabic] = useState<string>('');
   const [stemEnglish, setStemEnglish] = useState<string>('');
   const [optA, setOptA] = useState<string>('');
@@ -139,6 +154,7 @@ export default function AssessmentManager({
   const [optC, setOptC] = useState<string>('');
   const [optD, setOptD] = useState<string>('');
   const [correctOpt, setCorrectOpt] = useState<string>('opt-a');
+  const [newModelAnswer, setNewModelAnswer] = useState<string>('');
   const [points, setPoints] = useState<number>(5);
   const [explanation, setExplanation] = useState<string>('');
 
@@ -148,6 +164,17 @@ export default function AssessmentManager({
   const [editOptB, setEditOptB] = useState<string>('');
   const [editOptC, setEditOptC] = useState<string>('');
   const [editOptD, setEditOptD] = useState<string>('');
+
+  // Pre-Publish Quiz Verification & Export Modal State
+  const [verifyModalData, setVerifyModalData] = useState<{
+    input: QuizVerificationInput;
+    pendingAction?: {
+      label: string;
+      onConfirm: () => void;
+    };
+  } | null>(null);
+  const [verifyModalTab, setVerifyModalTab] = useState<'summary' | 'text'>('summary');
+  const [copiedVerifyModalText, setCopiedVerifyModalText] = useState<boolean>(false);
 
   // Assessments State + Standalone Popup Selector Modal
   const [assessments, setAssessments] = useState<Assessment[]>([]);
@@ -432,21 +459,56 @@ export default function AssessmentManager({
 
   const handleCreateQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedBank || !stemArabic.trim() || !optA.trim() || !optB.trim()) return;
+    if (!selectedBank || !stemArabic.trim()) return;
+
+    const qType: QuestionType = newQuestionType || 'mcq';
+    let finalOptions: QuestionOption[] = [];
+    let finalCorrectId = correctOpt;
+    let finalModelAnswer: string | undefined = undefined;
+
+    if (qType === 'fill_blank' || qType === 'essay') {
+      if (!newModelAnswer.trim()) {
+        setStatusMsg({ type: 'error', text: 'يرجى إدخال الإجابة النموذجية المعتمدة للسؤال' });
+        return;
+      }
+      finalOptions = [];
+      finalCorrectId = qType === 'essay' ? 'essay-answer' : 'fill-blank-answer';
+      finalModelAnswer = newModelAnswer.trim();
+    } else if (qType === 'true_false') {
+      const isEn = selectedBank.language === 'en';
+      finalOptions = [
+        { id: 'opt-a', textArabic: optA.trim() || (isEn ? 'True' : 'صح') },
+        { id: 'opt-b', textArabic: optB.trim() || (isEn ? 'False' : 'خطأ') }
+      ];
+      finalCorrectId = correctOpt === 'opt-b' ? 'opt-b' : 'opt-a';
+    } else {
+      if (!optA.trim() || !optB.trim()) {
+        setStatusMsg({ type: 'error', text: 'يرجى إدخال الخيارين (أ) و (ب) على الأقل' });
+        return;
+      }
+      const rawOpts = [
+        { id: 'opt-a', textArabic: optA.trim() },
+        { id: 'opt-b', textArabic: optB.trim() },
+        ...(optC.trim() ? [{ id: 'opt-c', textArabic: optC.trim() }] : []),
+        ...(optD.trim() ? [{ id: 'opt-d', textArabic: optD.trim() }] : [])
+      ];
+      finalOptions = rawOpts;
+      if (!finalOptions.some((o) => o.id === finalCorrectId)) {
+        finalCorrectId = finalOptions[0].id;
+      }
+    }
 
     setStatusMsg(null);
     try {
       const created = await createQuestion({
         bankId: selectedBank.id,
+        questionType: qType,
+        language: selectedBank.language || 'ar',
         stemArabic: stemArabic.trim(),
         stemEnglish: stemEnglish.trim(),
-        options: [
-          { id: 'opt-a', textArabic: optA.trim() },
-          { id: 'opt-b', textArabic: optB.trim() },
-          { id: 'opt-c', textArabic: optC.trim() || 'غير محدد' },
-          { id: 'opt-d', textArabic: optD.trim() || 'غير محدد' }
-        ],
-        correctOptionId: correctOpt,
+        options: finalOptions,
+        correctOptionId: finalCorrectId,
+        modelAnswerArabic: finalModelAnswer,
         explanationArabic: explanation.trim(),
         points: Number(points) || 5,
         createdBy: 'ADMIN'
@@ -459,6 +521,7 @@ export default function AssessmentManager({
       setOptB('');
       setOptC('');
       setOptD('');
+      setNewModelAnswer('');
       setExplanation('');
       setShowNewQuestionForm(false);
       setStatusMsg({ type: 'success', text: 'تمت إضافة السؤال وحفظ مفتاح الإجابة المحمي بنجاح' });
@@ -480,18 +543,44 @@ export default function AssessmentManager({
     if (!editingQuestion || !editingQuestion.stemArabic.trim()) return;
     setStatusMsg(null);
 
+    const qType: QuestionType = editingQuestion.questionType || 'mcq';
+    let updatedOptions: QuestionOption[] = [];
+    let updatedCorrectId = editingQuestion.correctOptionId;
+
+    if (qType === 'fill_blank' || qType === 'essay') {
+      updatedOptions = [];
+      updatedCorrectId = qType === 'essay' ? 'essay-answer' : 'fill-blank-answer';
+    } else if (qType === 'true_false') {
+      updatedOptions = [
+        { id: 'opt-a', textArabic: editOptA.trim() || 'صح' },
+        { id: 'opt-b', textArabic: editOptB.trim() || 'خطأ' }
+      ];
+      updatedCorrectId = updatedCorrectId === 'opt-b' ? 'opt-b' : 'opt-a';
+    } else {
+      const extraOptions = (editingQuestion.options || []).slice(4);
+      const baseOptions: QuestionOption[] = [
+        { id: 'opt-a', textArabic: editOptA.trim() || 'خيار أ' },
+        { id: 'opt-b', textArabic: editOptB.trim() || 'خيار ب' },
+        ...(editOptC.trim() ? [{ id: 'opt-c', textArabic: editOptC.trim() }] : []),
+        ...(editOptD.trim() ? [{ id: 'opt-d', textArabic: editOptD.trim() }] : []),
+        ...extraOptions
+      ];
+      updatedOptions = baseOptions;
+      if (!updatedOptions.some((o) => o.id === updatedCorrectId)) {
+        updatedCorrectId = updatedOptions[0]?.id || 'opt-a';
+      }
+    }
+
     try {
       const updated = await updateQuestion(editingQuestion.id, {
         bankId: editingQuestion.bankId,
+        questionType: qType,
+        language: editingQuestion.language,
         stemArabic: editingQuestion.stemArabic.trim(),
         stemEnglish: editingQuestion.stemEnglish?.trim() || '',
-        options: [
-          { id: 'opt-a', textArabic: editOptA.trim() || 'خيار أ' },
-          { id: 'opt-b', textArabic: editOptB.trim() || 'خيار ب' },
-          { id: 'opt-c', textArabic: editOptC.trim() || 'غير محدد' },
-          { id: 'opt-d', textArabic: editOptD.trim() || 'غير محدد' }
-        ],
-        correctOptionId: editingQuestion.correctOptionId,
+        options: updatedOptions,
+        correctOptionId: updatedCorrectId,
+        modelAnswerArabic: editingQuestion.modelAnswerArabic?.trim(),
         explanationArabic: editingQuestion.explanationArabic?.trim() || '',
         points: Number(editingQuestion.points) || 5
       });
@@ -862,6 +951,108 @@ export default function AssessmentManager({
     return lvlId === 'lvl-internship' ? 'سنة الامتياز' : `المستوى ${lvlId.replace('lvl-', '')}`;
   };
 
+  const buildBankVerificationInput = (
+    bank: QuestionBank,
+    questions: QuestionItemFull[],
+    targetType: 'bank' | 'exam' | 'competition' = 'bank'
+  ): QuizVerificationInput => ({
+    titleArabic: bank.titleArabic,
+    assessmentType: targetType,
+    language: bank.language || 'ar',
+    studyLevelName: bank.studyLevelId ? getLevelLabel(bank.studyLevelId) : undefined,
+    blockName: bank.blockName || bank.titleArabic,
+    durationMinutes: targetType === 'competition' ? 15 : 30,
+    questionDurationSeconds: 45,
+    questions
+  });
+
+  const handleCopyBankAsText = async (bank: QuestionBank, questions: QuestionItemFull[]) => {
+    if (questions.length === 0) {
+      setStatusMsg({ type: 'error', text: 'لا توجد أسئلة في هذا البنك لنسخها.' });
+      return;
+    }
+    const text = formatQuizVerificationText(buildBankVerificationInput(bank, questions));
+    try {
+      await navigator.clipboard.writeText(text);
+      setStatusMsg({
+        type: 'success',
+        text: `تم نسخ جميع أسئلة "${bank.titleArabic}" (${questions.length} سؤال) مع الخيارات ومفتاح الإجابات كنص منسق إلى الحافظة ✓`
+      });
+    } catch {
+      setStatusMsg({ type: 'error', text: 'تعذر النسخ التلقائي، افتح نافذة الفحص وانسخ النص يدوياً.' });
+    }
+  };
+
+  const handleDownloadBankFile = (bank: QuestionBank, questions: QuestionItemFull[], format: 'txt' | 'html' | 'json') => {
+    if (questions.length === 0) {
+      setStatusMsg({ type: 'error', text: 'لا توجد أسئلة في هذا البنك لتحميلها.' });
+      return;
+    }
+    downloadQuizVerificationFile(buildBankVerificationInput(bank, questions), format);
+    setStatusMsg({
+      type: 'success',
+      text: `تم تحميل ملف فحص البنك "${bank.titleArabic}" (${questions.length} سؤال) بصيغة .${format.toUpperCase()} بنجاح ✓`
+    });
+  };
+
+  const handleOpenBankVerificationModal = (
+    bank: QuestionBank,
+    questions: QuestionItemFull[],
+    targetType: 'bank' | 'exam' | 'competition' = 'bank',
+    pendingAction?: { label: string; onConfirm: () => void }
+  ) => {
+    setVerifyModalTab('summary');
+    setVerifyModalData({
+      input: buildBankVerificationInput(bank, questions, targetType),
+      pendingAction
+    });
+  };
+
+  const handleVerifyAssessmentQuestions = async (asmnt: Assessment) => {
+    setStatusMsg(null);
+    try {
+      let fullQuestions: QuestionItemFull[] = [];
+      for (const b of banks) {
+        const bQs = b.id === selectedBank?.id ? bankQuestions : await getBankQuestions(b.id);
+        const matched = bQs.filter((q) => (asmnt.questionIds || []).includes(q.id));
+        if (matched.length > 0) {
+          fullQuestions = [...fullQuestions, ...matched];
+        }
+      }
+      if (fullQuestions.length === 0) {
+        const pubQs = await getQuestionsForAssessmentPreview(asmnt);
+        fullQuestions = pubQs.map((pq) => ({
+          id: pq.id,
+          bankId: asmnt.id,
+          questionType: pq.questionType || 'mcq',
+          language: pq.language || asmnt.language || 'ar',
+          stemArabic: pq.stemArabic,
+          stemEnglish: pq.stemEnglish,
+          options: pq.options || [],
+          correctOptionId: pq.options?.[0]?.id || 'opt-a',
+          points: pq.points || 5,
+          createdBy: 'ADMIN',
+          createdAt: asmnt.createdAt
+        }));
+      }
+      setVerifyModalTab('summary');
+      setVerifyModalData({
+        input: {
+          titleArabic: asmnt.titleArabic,
+          assessmentType: asmnt.assessmentType,
+          language: asmnt.language || 'ar',
+          studyLevelName: getLevelLabel(asmnt.studyLevelId),
+          blockName: asmnt.blockName || asmnt.titleArabic,
+          durationMinutes: asmnt.durationMinutes,
+          questionDurationSeconds: asmnt.questionDurationSeconds,
+          questions: fullQuestions
+        }
+      });
+    } catch {
+      setStatusMsg({ type: 'error', text: 'تعذر تحميل أسئلة الاختبار للفحص.' });
+    }
+  };
+
   const renderBiDiRoleBadge = (role?: UserRole) => {
     switch (role) {
       case 'platform_owner':
@@ -1180,25 +1371,84 @@ export default function AssessmentManager({
               </div>
             </div>
 
-            {/* 1-Click Direct Bank Conversion Bar (Convert Bank -> Exam or Competition) */}
+            {/* 1-Click Direct Bank Conversion & Pre-Publish Verification Bar */}
             {selectedBank && (
-              <div className="pt-3 border-t border-slate-800/90 flex flex-wrap items-center justify-between gap-2.5 text-xs">
-                <span className="text-slate-400 font-semibold">
-                  تحويل فوري لبنك الأسئلة الحالي ({bankQuestions.length} سؤال) إلى تقييم جاهز للنشر للطلاب:
-                </span>
+              <div className="pt-3 border-t border-slate-800/90 flex flex-col xl:flex-row xl:items-center justify-between gap-3 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-slate-300 font-bold flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4 text-teal-400 shrink-0" />
+                    <span>التأكد من الأسئلة والقيم قبل النشر ({bankQuestions.length} سؤال):</span>
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() => handleCopyBankAsText(selectedBank, bankQuestions)}
+                    disabled={bankQuestions.length === 0}
+                    className="px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 text-teal-300 border border-slate-700 font-bold flex items-center gap-1.5 transition-colors disabled:opacity-40 whitespace-nowrap"
+                    title="نسخ جميع الأسئلة والخيارات ومفتاح الإجابات كنص للمراجعة"
+                  >
+                    <Copy className="w-3.5 h-3.5 shrink-0" />
+                    <span>نسخ الاختبار كنص</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadBankFile(selectedBank, bankQuestions, 'txt')}
+                    disabled={bankQuestions.length === 0}
+                    className="px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 text-sky-300 border border-slate-700 font-bold flex items-center gap-1.5 transition-colors disabled:opacity-40 whitespace-nowrap"
+                    title="تحميل ملف نصي (.TXT) يحتوي على الأسئلة ومفتاح الإجابات"
+                  >
+                    <Download className="w-3.5 h-3.5 shrink-0" />
+                    <span>تحميل كملف (.TXT)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadBankFile(selectedBank, bankQuestions, 'html')}
+                    disabled={bankQuestions.length === 0}
+                    className="px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 text-amber-300 border border-slate-700 font-bold flex items-center gap-1.5 transition-colors disabled:opacity-40 whitespace-nowrap"
+                    title="تحميل وثيقة مراجعة وطباعة (.HTML / PDF)"
+                  >
+                    <Printer className="w-3.5 h-3.5 shrink-0" />
+                    <span>وثيقة مراجعة</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleOpenBankVerificationModal(selectedBank, bankQuestions, 'bank')}
+                    disabled={bankQuestions.length === 0}
+                    className="px-3 py-1.5 rounded-xl bg-teal-950/80 hover:bg-teal-900 text-teal-200 border border-teal-500/40 font-bold flex items-center gap-1.5 transition-colors disabled:opacity-40 whitespace-nowrap"
+                  >
+                    <Eye className="w-3.5 h-3.5 shrink-0" />
+                    <span>فحص وتأكيد القيم</span>
+                  </button>
+                </div>
+
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => handleConvertBankToAssessment(selectedBank, 'exam')}
-                    className="px-3.5 py-1.5 rounded-xl bg-teal-500/15 hover:bg-teal-600 text-teal-300 hover:text-white border border-teal-500/30 font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                    disabled={bankQuestions.length === 0}
+                    onClick={() =>
+                      handleOpenBankVerificationModal(selectedBank, bankQuestions, 'exam', {
+                        label: `تأكيد ونشر كاختبار أكاديمي (${bankQuestions.length} سؤال)`,
+                        onConfirm: () => handleConvertBankToAssessment(selectedBank, 'exam')
+                      })
+                    }
+                    className="px-3.5 py-1.5 rounded-xl bg-teal-500/15 hover:bg-teal-600 disabled:opacity-40 text-teal-300 hover:text-white border border-teal-500/30 font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap"
                   >
                     <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
                     <span>تحويل البنك إلى اختبار أكاديمي</span>
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleConvertBankToAssessment(selectedBank, 'competition')}
-                    className="px-3.5 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-600 text-amber-300 hover:text-white border border-amber-500/30 font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                    disabled={bankQuestions.length === 0}
+                    onClick={() =>
+                      handleOpenBankVerificationModal(selectedBank, bankQuestions, 'competition', {
+                        label: `تأكيد ونشر كمسابقة تنافسية (${bankQuestions.length} سؤال)`,
+                        onConfirm: () => handleConvertBankToAssessment(selectedBank, 'competition')
+                      })
+                    }
+                    className="px-3.5 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-600 disabled:opacity-40 text-amber-300 hover:text-white border border-amber-500/30 font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap"
                   >
                     <Trophy className="w-3.5 h-3.5 shrink-0" />
                     <span>تحويل البنك إلى مسابقة تنافسية</span>
@@ -1287,43 +1537,52 @@ export default function AssessmentManager({
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
-                          {q.options.map((o, optIdx) => {
-                            const optionLetters = ['أ', 'ب', 'ج', 'د', 'هـ'];
-                            const isCorrect = o.id === q.correctOptionId;
-                            return (
-                              <div
-                                key={o.id}
-                                className={`p-3 rounded-xl border transition-all ${
-                                  isCorrect 
-                                    ? 'bg-teal-950/70 border-teal-500/80 text-teal-200 font-bold shadow-sm'
-                                    : 'bg-slate-900/60 border-slate-800 text-slate-300'
-                                }`}
-                              >
-                                <div className="flex items-start justify-between gap-2">
-                                  <div className="flex items-start gap-2 min-w-0 flex-1">
-                                    <span className={`w-5 h-5 rounded-full flex items-center justify-center font-bold text-xs shrink-0 mt-0.5 ${
-                                      isCorrect ? 'bg-teal-500 text-slate-950' : 'bg-slate-800 text-slate-400'
-                                    }`}>
-                                      {optionLetters[optIdx] || optIdx + 1}
-                                    </span>
-                                    <span dir="auto" className="leading-relaxed break-words flex-1">{o.textArabic}</span>
+                        {q.questionType === 'fill_blank' || q.questionType === 'essay' ? (
+                          <div className="p-3 rounded-xl bg-teal-950/50 border border-teal-500/40 text-xs text-teal-200">
+                            <span className="font-bold text-teal-400 block mb-1">
+                              {q.questionType === 'essay' ? 'الإجابة النموذجية للسؤال المقالي:' : 'إجابة إكمال الفراغ المعتمدة:'}
+                            </span>
+                            <span dir="auto" className="leading-relaxed break-words">{q.modelAnswerArabic || 'غير محدد'}</span>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+                            {q.options.map((o, optIdx) => {
+                              const optionLetters = ['أ', 'ب', 'ج', 'د', 'هـ', 'و', 'ز', 'ح', 'ط', 'ي'];
+                              const isCorrect = o.id === q.correctOptionId;
+                              return (
+                                <div
+                                  key={o.id}
+                                  className={`p-3 rounded-xl border transition-all ${
+                                    isCorrect 
+                                      ? 'bg-teal-950/70 border-teal-500/80 text-teal-200 font-bold shadow-sm'
+                                      : 'bg-slate-900/60 border-slate-800 text-slate-300'
+                                  }`}
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="flex items-start gap-2 min-w-0 flex-1">
+                                      <span className={`w-5 h-5 rounded-full flex items-center justify-center font-bold text-xs shrink-0 mt-0.5 ${
+                                        isCorrect ? 'bg-teal-500 text-slate-950' : 'bg-slate-800 text-slate-400'
+                                      }`}>
+                                        {optionLetters[optIdx] || optIdx + 1}
+                                      </span>
+                                      <span dir="auto" className="leading-relaxed break-words flex-1">{o.textArabic}</span>
+                                    </div>
+                                    {isCorrect && (
+                                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/40 shrink-0">
+                                        الإجابة الصحيحة ✓
+                                      </span>
+                                    )}
                                   </div>
-                                  {isCorrect && (
-                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/40 shrink-0">
-                                      الإجابة الصحيحة ✓
-                                    </span>
+                                  {q.optionExplanations?.[o.id] && (
+                                    <div dir="auto" className="text-[11px] font-normal text-slate-400 mt-2 pt-1.5 border-t border-slate-800 leading-relaxed">
+                                      {q.optionExplanations[o.id]}
+                                    </div>
                                   )}
                                 </div>
-                                {q.optionExplanations?.[o.id] && (
-                                  <div dir="auto" className="text-[11px] font-normal text-slate-400 mt-2 pt-1.5 border-t border-slate-800 leading-relaxed">
-                                    {q.optionExplanations[o.id]}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
+                              );
+                            })}
+                          </div>
+                        )}
 
                         {q.explanationArabic && (
                           <div dir="auto" className="text-xs text-slate-300 bg-slate-900/70 p-3 rounded-xl border border-slate-800 leading-relaxed">
@@ -1470,6 +1729,40 @@ export default function AssessmentManager({
             </div>
 
             <form onSubmit={handleCreateQuestion} className="flex-1 overflow-y-auto p-5 space-y-4 text-xs overscroll-contain">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] text-slate-300 font-bold block mb-1">نمط السؤال:</label>
+                  <select
+                    value={newQuestionType}
+                    onChange={(e) => {
+                      const nextType = e.target.value as QuestionType;
+                      setNewQuestionType(nextType);
+                      if (nextType === 'true_false') {
+                        setOptA(selectedBank.language === 'en' ? 'True' : 'صح');
+                        setOptB(selectedBank.language === 'en' ? 'False' : 'خطأ');
+                        setCorrectOpt('opt-a');
+                      }
+                    }}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-amber-300 font-bold"
+                  >
+                    <option value="mcq">اختيارات من متعدد (MCQ)</option>
+                    <option value="true_false">صح وخطأ (True / False)</option>
+                    <option value="fill_blank">إكمال الفراغ (Fill in the Blank)</option>
+                    <option value="essay">سؤال مقالي / سريري (Essay)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[11px] text-slate-300 font-semibold block mb-1">درجة / نقاط السؤال</label>
+                  <input
+                    type="number"
+                    value={points}
+                    onChange={(e) => setPoints(Number(e.target.value))}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-mono"
+                    min={1}
+                  />
+                </div>
+              </div>
+
               <div className="space-y-1.5">
                 <label className="text-[11px] text-slate-300 font-bold block">نص السؤال (بالعربية أو الإنجليزية):</label>
                 <textarea
@@ -1494,72 +1787,112 @@ export default function AssessmentManager({
                 />
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[11px] text-slate-300 font-semibold block mb-1">خيار (أ)</label>
-                  <input
-                    type="text"
-                    value={optA}
-                    onChange={(e) => setOptA(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
+              {newQuestionType === 'fill_blank' || newQuestionType === 'essay' ? (
+                <div className="space-y-1.5">
+                  <label className="text-[11px] text-teal-300 font-bold block">
+                    {newQuestionType === 'essay' ? 'الإجابة النموذجية للسؤال المقالي *:' : 'الكلمة أو العبارة الصحيحة لإكمال الفراغ *:'}
+                  </label>
+                  <textarea
+                    value={newModelAnswer}
+                    onChange={(e) => setNewModelAnswer(e.target.value)}
+                    placeholder="اكتب الإجابة النموذجية المعتمدة هنا..."
+                    className="w-full p-3 rounded-xl bg-slate-950 border border-teal-700/60 text-xs text-white focus:border-teal-500 focus:outline-none"
+                    rows={2}
                     required
                   />
                 </div>
-                <div>
-                  <label className="text-[11px] text-slate-300 font-semibold block mb-1">خيار (ب)</label>
-                  <input
-                    type="text"
-                    value={optB}
-                    onChange={(e) => setOptB(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
-                    required
-                  />
+              ) : newQuestionType === 'true_false' ? (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[11px] text-slate-300 font-semibold block mb-1">الخيار الأول (صح)</label>
+                      <input
+                        type="text"
+                        value={optA || 'صح'}
+                        onChange={(e) => setOptA(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-slate-300 font-semibold block mb-1">الخيار الثاني (خطأ)</label>
+                      <input
+                        type="text"
+                        value={optB || 'خطأ'}
+                        onChange={(e) => setOptB(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-slate-300 font-semibold block mb-1">الإجابة الصحيحة المعتمدة:</label>
+                    <select
+                      value={correctOpt === 'opt-b' ? 'opt-b' : 'opt-a'}
+                      onChange={(e) => setCorrectOpt(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-teal-400 font-bold"
+                    >
+                      <option value="opt-a">صح ({optA || 'صح'})</option>
+                      <option value="opt-b">خطأ ({optB || 'خطأ'})</option>
+                    </select>
+                  </div>
                 </div>
-                <div>
-                  <label className="text-[11px] text-slate-300 font-semibold block mb-1">خيار (ج)</label>
-                  <input
-                    type="text"
-                    value={optC}
-                    onChange={(e) => setOptC(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
-                  />
-                </div>
-                <div>
-                  <label className="text-[11px] text-slate-300 font-semibold block mb-1">خيار (د)</label>
-                  <input
-                    type="text"
-                    value={optD}
-                    onChange={(e) => setOptD(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
-                  />
-                </div>
-              </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[11px] text-slate-300 font-semibold block mb-1">خيار (أ) *</label>
+                      <input
+                        type="text"
+                        value={optA}
+                        onChange={(e) => setOptA(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-slate-300 font-semibold block mb-1">خيار (ب) *</label>
+                      <input
+                        type="text"
+                        value={optB}
+                        onChange={(e) => setOptB(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-slate-300 font-semibold block mb-1">خيار (ج) (اختياري)</label>
+                      <input
+                        type="text"
+                        value={optC}
+                        onChange={(e) => setOptC(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-slate-300 font-semibold block mb-1">خيار (د) (اختياري)</label>
+                      <input
+                        type="text"
+                        value={optD}
+                        onChange={(e) => setOptD(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
+                      />
+                    </div>
+                  </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-                <div>
-                  <label className="text-[11px] text-slate-300 font-semibold block mb-1">الإجابة الصحيحة المعتمدة (محمية خادمياً)</label>
-                  <select
-                    value={correctOpt}
-                    onChange={(e) => setCorrectOpt(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-teal-400 font-bold"
-                  >
-                    <option value="opt-a">خيار (أ)</option>
-                    <option value="opt-b">خيار (ب)</option>
-                    <option value="opt-c">خيار (ج)</option>
-                    <option value="opt-d">خيار (د)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-[11px] text-slate-300 font-semibold block mb-1">درجة / نقاط السؤال</label>
-                  <input
-                    type="number"
-                    value={points}
-                    onChange={(e) => setPoints(Number(e.target.value))}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-mono"
-                    min={1}
-                  />
-                </div>
-              </div>
+                  <div>
+                    <label className="text-[11px] text-slate-300 font-semibold block mb-1">الإجابة الصحيحة المعتمدة (محمية خادمياً)</label>
+                    <select
+                      value={correctOpt}
+                      onChange={(e) => setCorrectOpt(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-teal-400 font-bold"
+                    >
+                      <option value="opt-a">خيار (أ)</option>
+                      <option value="opt-b">خيار (ب)</option>
+                      {optC.trim() && <option value="opt-c">خيار (ج)</option>}
+                      {optD.trim() && <option value="opt-d">خيار (د)</option>}
+                    </select>
+                  </div>
+                </>
+              )}
 
               <div>
                 <label className="text-[11px] text-slate-300 font-semibold block mb-1">التفسير العلمي للإجابة (اختياري)</label>
@@ -1755,16 +2088,28 @@ export default function AssessmentManager({
 
                 {/* Two-Tier Spacious Action Toolbar */}
                 <div className="pt-3 border-t border-slate-800 space-y-2">
-                  {/* Primary Action Button: Test & Preview */}
-                  <button
-                    type="button"
-                    onClick={() => handlePreviewAndTestAssessment(a)}
-                    className="w-full py-2.5 px-4 min-h-[42px] rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-extrabold flex items-center justify-center gap-2 transition-all shadow-md shadow-teal-900/20"
-                    title="فحص وتجربة حل الاختبار الآن (يعمل أونلاين وأوفلاين)"
-                  >
-                    <Play className="w-4 h-4 fill-current shrink-0" />
-                    <span>فحص وتجربة حل الاختبار</span>
-                  </button>
+                  {/* Primary Action Row: Test & Preview + Verify/Export Text */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handlePreviewAndTestAssessment(a)}
+                      className="w-full py-2.5 px-3 min-h-[42px] rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-extrabold flex items-center justify-center gap-2 transition-all shadow-md shadow-teal-900/20"
+                      title="فحص وتجربة حل الاختبار الآن (يعمل أونلاين وأوفلاين)"
+                    >
+                      <Play className="w-4 h-4 fill-current shrink-0" />
+                      <span>تجربة حل الاختبار</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleVerifyAssessmentQuestions(a)}
+                      className="w-full py-2.5 px-3 min-h-[42px] rounded-xl bg-slate-800 hover:bg-teal-950 border border-teal-500/40 text-teal-300 hover:text-white text-xs font-extrabold flex items-center justify-center gap-2 transition-all"
+                      title="فحص القيم ونسخ الاختبار كنص أو تحميله كملف للمراجعة"
+                    >
+                      <ShieldCheck className="w-4 h-4 text-teal-400 shrink-0" />
+                      <span>فحص القيم / نسخ وتحميل</span>
+                    </button>
+                  </div>
 
                   {/* Secondary 3-Column Equal Buttons */}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -1876,7 +2221,7 @@ export default function AssessmentManager({
                 <label className="block text-xs text-slate-400 mb-1">لغة التقييم</label>
                 <select
                   value={assessmentLanguage}
-                  onChange={(e) => setAssessmentLanguage(e.target.value as ContentLanguage)}
+                  onChange={(e) => setAssessmentLanguage(e.target.value as AssessmentLanguage)}
                   className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white"
                 >
                   <option value="ar">العربية (RTL)</option>
@@ -1916,9 +2261,14 @@ export default function AssessmentManager({
                   className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white"
                 >
                   <option value="">-- اختر بنك الأسئلة --</option>
-                  {banks.map(b => (
-                    <option key={b.id} value={b.id}>{b.titleArabic} ({b.questionIds.length} سؤال)</option>
-                  ))}
+                  {banks.map(b => {
+                    const qCount = b.id === selectedBank?.id ? bankQuestions.length : b.questionCount;
+                    return (
+                      <option key={b.id} value={b.id}>
+                        {b.titleArabic}{typeof qCount === 'number' ? ` (${qCount} سؤال)` : ''}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
               <div>
@@ -2468,72 +2818,102 @@ export default function AssessmentManager({
                 />
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {editingQuestion.questionType === 'fill_blank' || editingQuestion.questionType === 'essay' ? (
                 <div>
-                  <label className="text-slate-400 block mb-1">خيار (أ)</label>
-                  <input
-                    type="text"
-                    value={editOptA}
-                    onChange={(e) => setEditOptA(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                  <label className="text-teal-300 font-bold block mb-1">
+                    {editingQuestion.questionType === 'essay' ? 'الإجابة النموذجية للسؤال المقالي:' : 'الإجابة الصحيحة لإكمال الفراغ:'}
+                  </label>
+                  <textarea
+                    value={editingQuestion.modelAnswerArabic || ''}
+                    onChange={(e) => setEditingQuestion({ ...editingQuestion, modelAnswerArabic: e.target.value })}
+                    className="w-full p-3 rounded-xl bg-slate-950 border border-teal-700/60 text-white"
+                    rows={2}
                     required
                   />
                 </div>
-                <div>
-                  <label className="text-slate-400 block mb-1">خيار (ب)</label>
-                  <input
-                    type="text"
-                    value={editOptB}
-                    onChange={(e) => setEditOptB(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="text-slate-400 block mb-1">خيار (ج)</label>
-                  <input
-                    type="text"
-                    value={editOptC}
-                    onChange={(e) => setEditOptC(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
-                  />
-                </div>
-                <div>
-                  <label className="text-slate-400 block mb-1">خيار (د)</label>
-                  <input
-                    type="text"
-                    value={editOptD}
-                    onChange={(e) => setEditOptD(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
-                  />
-                </div>
-              </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-slate-400 block mb-1">خيار (أ)</label>
+                      <input
+                        type="text"
+                        value={editOptA}
+                        onChange={(e) => setEditOptA(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="text-slate-400 block mb-1">خيار (ب)</label>
+                      <input
+                        type="text"
+                        value={editOptB}
+                        onChange={(e) => setEditOptB(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                        required
+                      />
+                    </div>
+                    {editingQuestion.questionType !== 'true_false' && (
+                      <>
+                        <div>
+                          <label className="text-slate-400 block mb-1">خيار (ج) (اختياري)</label>
+                          <input
+                            type="text"
+                            value={editOptC}
+                            onChange={(e) => setEditOptC(e.target.value)}
+                            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-slate-400 block mb-1">خيار (د) (اختياري)</label>
+                          <input
+                            type="text"
+                            value={editOptD}
+                            onChange={(e) => setEditOptD(e.target.value)}
+                            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <label className="text-slate-400 block mb-1">الإجابة الصحيحة المعتمدة</label>
-                  <select
-                    value={editingQuestion.correctOptionId}
-                    onChange={(e) => setEditingQuestion({ ...editingQuestion, correctOptionId: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-teal-400 font-bold"
-                  >
-                    <option value="opt-a">خيار (أ)</option>
-                    <option value="opt-b">خيار (ب)</option>
-                    <option value="opt-c">خيار (ج)</option>
-                    <option value="opt-d">خيار (د)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-slate-400 block mb-1">درجة السؤال</label>
-                  <input
-                    type="number"
-                    value={editingQuestion.points}
-                    onChange={(e) => setEditingQuestion({ ...editingQuestion, points: Number(e.target.value) })}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
-                    min={1}
-                  />
-                </div>
-              </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-slate-400 block mb-1">الإجابة الصحيحة المعتمدة</label>
+                      <select
+                        value={editingQuestion.correctOptionId}
+                        onChange={(e) => setEditingQuestion({ ...editingQuestion, correctOptionId: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-teal-400 font-bold"
+                      >
+                        <option value="opt-a">خيار (أ)</option>
+                        <option value="opt-b">خيار (ب)</option>
+                        {editingQuestion.questionType !== 'true_false' && editOptC.trim() && (
+                          <option value="opt-c">خيار (ج)</option>
+                        )}
+                        {editingQuestion.questionType !== 'true_false' && editOptD.trim() && (
+                          <option value="opt-d">خيار (د)</option>
+                        )}
+                        {(editingQuestion.options || []).slice(4).map((extraOpt, idx) => (
+                          <option key={extraOpt.id} value={extraOpt.id}>
+                            خيار إضافي ({idx + 5})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-slate-400 block mb-1">درجة السؤال</label>
+                      <input
+                        type="number"
+                        value={editingQuestion.points}
+                        onChange={(e) => setEditingQuestion({ ...editingQuestion, points: Number(e.target.value) })}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                        min={1}
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
 
               <div>
                 <label className="text-slate-400 block mb-1">التعليل العلمي للإجابة الصحيحة</label>
@@ -2870,6 +3250,240 @@ export default function AssessmentManager({
           }}
         />
       )}
+
+      {/* MODAL: PRE-PUBLISH VERIFICATION, COPY AS TEXT & FILE DOWNLOAD */}
+      {verifyModalData && (() => {
+        const report = evaluateQuizVerificationReport(verifyModalData.input);
+        const formattedText = formatQuizVerificationText(verifyModalData.input);
+        return (
+          <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4" dir="rtl">
+            <div className="bg-slate-900 border border-teal-500/40 rounded-2xl max-w-4xl w-full max-h-[92dvh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+              <div className="px-4 py-3.5 sm:px-5 border-b border-slate-800 flex items-center justify-between bg-slate-950">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center">
+                    <ShieldCheck className="w-5 h-5 text-teal-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm sm:text-base font-black text-white">
+                      فحص القيم والتأكد من الاختبار: {verifyModalData.input.titleArabic}
+                    </h3>
+                    <p className="text-[11px] text-slate-400">
+                      تحقق من صحة جميع الأسئلة والخيارات ومفتاح الإجابات، أو انسخ الاختبار كنص وحمّله كملف
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setVerifyModalData(null)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="px-4 py-2.5 bg-slate-950/70 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 bg-slate-900 p-1 rounded-xl border border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setVerifyModalTab('summary')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                      verifyModalTab === 'summary' ? 'bg-teal-600 text-white' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    تقرير الفحص ومفتاح الإجابات
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setVerifyModalTab('text')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                      verifyModalTab === 'text' ? 'bg-teal-600 text-white' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    معاينة النص الكامل للاختبار
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(formattedText);
+                        setCopiedVerifyModalText(true);
+                        setStatusMsg({ type: 'success', text: 'تم نسخ النص الكامل للاختبار ومفتاح الإجابات إلى الحافظة ✓' });
+                        setTimeout(() => setCopiedVerifyModalText(false), 3000);
+                      } catch {}
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-teal-950/80 hover:bg-teal-900 border border-teal-600/50 text-teal-200 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                  >
+                    {copiedVerifyModalText ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedVerifyModalText ? 'تم النسخ!' : 'نسخ الاختبار كنص'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => downloadQuizVerificationFile(verifyModalData.input, 'txt')}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sky-300 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>ملف نصي (.TXT)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => downloadQuizVerificationFile(verifyModalData.input, 'html')}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-amber-300 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>وثيقة مراجعة (.HTML)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => downloadQuizVerificationFile(verifyModalData.input, 'json')}
+                    className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-purple-300 text-xs font-bold flex items-center gap-1 transition-colors"
+                  >
+                    <FileJson className="w-3.5 h-3.5" />
+                    <span>JSON</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1 text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                    <span className="text-[10px] text-slate-400 block">إجمالي الأسئلة</span>
+                    <span className="text-sm font-black text-emerald-400 font-mono mt-0.5 block">
+                      {report.validQuestions} / {report.totalQuestions} صالح
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                    <span className="text-[10px] text-slate-400 block">إجمالي الدرجات</span>
+                    <span className="text-sm font-black text-amber-300 font-mono mt-0.5 block">
+                      {report.totalPoints} درجة
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                    <span className="text-[10px] text-slate-400 block">الأسئلة المعللة علمياً</span>
+                    <span className="text-sm font-black text-indigo-300 font-mono mt-0.5 block">
+                      {report.withExplanationCount} / {report.totalQuestions}
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                    <span className="text-[10px] text-slate-400 block">حالة الفحص الآلي</span>
+                    <span className={`text-xs font-black mt-0.5 block ${report.isReadyToPublish ? 'text-teal-300' : 'text-rose-400'}`}>
+                      {report.isReadyToPublish ? 'جاهز ومكتمل القيم ✓' : `يوجد ${report.errorChecksCount} خطأ`}
+                    </span>
+                  </div>
+                </div>
+
+                {verifyModalTab === 'summary' ? (
+                  <>
+                    <div className="rounded-xl bg-slate-950 border border-slate-800 p-3.5 space-y-2.5">
+                      <h4 className="text-xs font-black text-white flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-teal-400" />
+                        <span>نتائج الفحص الآلي لسلامة القيم ({report.checks.length} فحوصات):</span>
+                      </h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {report.checks.map((chk) => (
+                          <div
+                            key={chk.id}
+                            className={`p-2.5 rounded-xl border flex items-start gap-2.5 ${
+                              chk.status === 'pass'
+                                ? 'bg-emerald-950/20 border-emerald-800/40 text-emerald-200'
+                                : chk.status === 'warning'
+                                ? 'bg-amber-950/25 border-amber-700/50 text-amber-200'
+                                : 'bg-rose-950/30 border-rose-700/60 text-rose-200'
+                            }`}
+                          >
+                            {chk.status === 'pass' ? (
+                              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                            ) : chk.status === 'warning' ? (
+                              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                            ) : (
+                              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <div className="font-bold text-[11px]">{chk.titleArabic}</div>
+                              <div className="text-[10px] opacity-85 leading-relaxed mt-0.5">{chk.detailArabic}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl bg-slate-950 border border-slate-800 p-3.5 space-y-2.5">
+                      <h4 className="text-xs font-black text-teal-300">
+                        جدول التحقق السريع من مفتاح الإجابات الصحيحة ({report.answerKeyRows.length} سؤال):
+                      </h4>
+                      <div className="max-h-64 overflow-y-auto rounded-lg border border-slate-800 divide-y divide-slate-800/70">
+                        {report.answerKeyRows.map((row) => (
+                          <div
+                            key={row.questionNumber}
+                            className={`px-3 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] ${
+                              row.isValid ? 'bg-slate-900/60 hover:bg-slate-900' : 'bg-rose-950/30'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0 flex-1">
+                              <span className="px-2 py-0.5 rounded bg-slate-800 text-teal-300 font-mono font-bold shrink-0">
+                                س{row.questionNumber}
+                              </span>
+                              <span className="text-slate-200 truncate font-medium" title={row.stemPreview}>
+                                {row.stemPreview}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className="px-2.5 py-0.5 rounded-lg bg-emerald-950/90 border border-emerald-700/60 text-emerald-300 font-bold">
+                                الإجابة: [{row.correctLabel}] {row.correctTextPreview}
+                              </span>
+                              <span className="text-[10px] font-mono text-slate-400">
+                                ({row.points} د)
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <pre
+                    dir={verifyModalData.input.language === 'en' ? 'ltr' : 'rtl'}
+                    className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 font-mono text-xs leading-relaxed overflow-x-auto max-h-[52dvh] whitespace-pre-wrap select-all"
+                  >
+                    {formattedText}
+                  </pre>
+                )}
+              </div>
+
+              <div className="p-3.5 sm:p-4 border-t border-slate-800 bg-slate-950 flex flex-wrap items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => setVerifyModalData(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold"
+                >
+                  إغلاق نافذة الفحص
+                </button>
+
+                {verifyModalData.pendingAction && (
+                  <button
+                    type="button"
+                    disabled={!report.isReadyToPublish}
+                    onClick={() => {
+                      const act = verifyModalData.pendingAction;
+                      setVerifyModalData(null);
+                      if (act) act.onConfirm();
+                    }}
+                    className="px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-40 text-white text-xs font-black shadow-lg flex items-center gap-2 transition-colors"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>{verifyModalData.pendingAction.label}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
     </div>
   );

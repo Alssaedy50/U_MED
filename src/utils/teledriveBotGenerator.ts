@@ -1469,7 +1469,7 @@ export function buildTeleDriveZipBlob(files: { filename: string; content: string
   writeUint32LE(eocd, 16, currentOffset);
   writeUint16LE(eocd, 20, 0);
 
-  return new Blob([...localChunks, ...centralChunks, eocd], {
+  return new Blob([...localChunks, ...centralChunks, eocd] as unknown as BlobPart[], {
     type: 'application/zip'
   });
 }

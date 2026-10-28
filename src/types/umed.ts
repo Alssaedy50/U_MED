@@ -414,6 +414,7 @@ export interface QuestionBank {
   studyPeriodId?: string;
   blockName?: string;
   courseOfferingId?: string;
+  questionCount?: number;
   createdBy: string;
   createdAt: string;
   updatedAt?: string;
@@ -598,6 +599,7 @@ export interface Assessment {
   shuffleQuestions?: boolean;
   createdBy: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export type AttemptStatus = 'in_progress' | 'submitted' | 'expired' | 'scored';

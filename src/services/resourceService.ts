@@ -456,7 +456,7 @@ export async function resolveResourceFileUrl(
       }
 
       if (byteChunks.length > 0) {
-        const finalBlob = new Blob(byteChunks, { type: trueMime });
+        const finalBlob = new Blob(byteChunks as unknown as BlobPart[], { type: trueMime });
         if (finalBlob.size <= 15 * 1024 * 1024) {
           readBlobAsDataUrl(finalBlob)
             .then((dUrl) => saveFileToIDB(cacheKey, dUrl))
@@ -480,7 +480,7 @@ export async function resolveResourceFileUrl(
   if (rawUrl.includes('1sample_') || rawUrl.includes('1x9K_umed_drive_sample')) {
     onProgress?.(100);
     const samplePdfBytes = buildSampleMedicalPdfBytes(resource);
-    const sampleBlob = new Blob([samplePdfBytes], { type: 'application/pdf' });
+    const sampleBlob = new Blob([samplePdfBytes as unknown as BlobPart], { type: 'application/pdf' });
     const sampleBlobUrl = URL.createObjectURL(sampleBlob);
     return { viewUrl: sampleBlobUrl, downloadUrl: sampleBlobUrl, isCloudFile: true };
   }

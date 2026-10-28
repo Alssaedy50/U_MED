@@ -32,7 +32,12 @@ import {
   Trophy,
   BookOpen,
   Globe,
-  Wand2
+  Wand2,
+  ShieldCheck,
+  FileJson,
+  Printer,
+  Eye,
+  Check
 } from 'lucide-react';
 import {
   QuestionBank,
@@ -55,7 +60,11 @@ import {
   getSampleTemplateByLanguage,
   SAMPLE_BULK_CSV_TEMPLATE,
   buildProfessionalAiPrompt,
-  synchronizeExamTimers
+  synchronizeExamTimers,
+  evaluateQuizVerificationReport,
+  formatQuizVerificationText,
+  downloadQuizVerificationFile,
+  getOptionIdByIndex
 } from '../../services/mcqBulkParser.ts';
 import {
   saveBulkImportDraftSession,
@@ -154,6 +163,9 @@ export default function BulkQuestionImportModal({
   const [showFormatOptions, setShowFormatOptions] = useState<boolean>(false);
   const [showAiPromptStudio, setShowAiPromptStudio] = useState<boolean>(false);
   const [showAcademicPopup, setShowAcademicPopup] = useState<boolean>(false);
+  const [showPrePublishVerifyModal, setShowPrePublishVerifyModal] = useState<boolean>(false);
+  const [verifyViewTab, setVerifyViewTab] = useState<'summary' | 'text'>('summary');
+  const [copiedVerifyText, setCopiedVerifyText] = useState<boolean>(false);
   const [isOnline, setIsOnline] = useState<boolean>(
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
@@ -777,14 +789,20 @@ export default function BulkQuestionImportModal({
   const handleAddOption = (tempId: string) => {
     updateDraftItem(tempId, (d) => {
       if (d.options.length >= 10) return d;
-      const nextIdx = d.options.length;
-      const optId = `opt-${String.fromCharCode(97 + nextIdx)}`;
+      const reindexed = d.options.map((opt, idx) => ({
+        ...opt,
+        id: getOptionIdByIndex(idx)
+      }));
+      const oldCorrectIdx = d.options.findIndex((o) => o.id === d.correctOptionId);
+      const nextIdx = reindexed.length;
+      const optId = getOptionIdByIndex(nextIdx);
       return {
         ...d,
         options: [
-          ...d.options,
+          ...reindexed,
           { id: optId, textArabic: '', explanationArabic: '' }
-        ]
+        ],
+        correctOptionId: oldCorrectIdx >= 0 ? getOptionIdByIndex(oldCorrectIdx) : (reindexed[0]?.id || 'opt-a')
       };
     });
   };
@@ -792,11 +810,20 @@ export default function BulkQuestionImportModal({
   const handleRemoveOption = (tempId: string, optId: string) => {
     updateDraftItem(tempId, (d) => {
       if (d.options.length <= 2) return d;
-      const filtered = d.options.filter((o) => o.id !== optId);
-      const correctId = d.correctOptionId === optId ? (filtered[0]?.id || 'opt-a') : d.correctOptionId;
+      const filteredRaw = d.options.filter((o) => o.id !== optId);
+      const oldCorrectWasRemoved = d.correctOptionId === optId;
+      const oldCorrectRemainingIdx = filteredRaw.findIndex((o) => o.id === d.correctOptionId);
+      const reindexed = filteredRaw.map((opt, idx) => ({
+        ...opt,
+        id: getOptionIdByIndex(idx)
+      }));
+      const correctId =
+        oldCorrectWasRemoved || oldCorrectRemainingIdx < 0
+          ? (reindexed[0]?.id || 'opt-a')
+          : getOptionIdByIndex(oldCorrectRemainingIdx);
       return {
         ...d,
-        options: filtered,
+        options: reindexed,
         correctOptionId: correctId
       };
     });
@@ -953,6 +980,62 @@ export default function BulkQuestionImportModal({
     const selectedValid = drafts.filter((d) => d.selectedForImport && d.isValid).length;
     return { total, valid, withErrors, duplicates, selectedValid };
   }, [drafts]);
+
+  // Verification input & automated pre-publish report
+  const verificationInput = useMemo(() => {
+    const selectedDrafts = drafts.filter((d) => d.selectedForImport);
+    const itemsToVerify = selectedDrafts.length > 0 ? selectedDrafts : drafts;
+    return {
+      titleArabic: publishMode === 'bank_only' ? bank.titleArabic : (publishTitle || bank.titleArabic),
+      assessmentType: publishMode === 'competition_only' ? ('competition' as const) : publishMode === 'exam_only' ? ('exam' as const) : ('bank' as const),
+      language: examLanguage,
+      studyLevelName: currentStudyLevelTitle,
+      blockName: publishBlockName || bank.blockName || bank.titleArabic,
+      durationMinutes: publishDurationMinutes,
+      questionDurationSeconds: publishQuestionSeconds,
+      questions: itemsToVerify
+    };
+  }, [drafts, publishMode, publishTitle, bank.titleArabic, bank.blockName, examLanguage, currentStudyLevelTitle, publishBlockName, publishDurationMinutes, publishQuestionSeconds]);
+
+  const verificationReport = useMemo(
+    () => evaluateQuizVerificationReport(verificationInput),
+    [verificationInput]
+  );
+
+  const verificationFormattedText = useMemo(
+    () => formatQuizVerificationText(verificationInput),
+    [verificationInput]
+  );
+
+  const handleCopyQuizAsText = async () => {
+    try {
+      await navigator.clipboard.writeText(verificationFormattedText);
+      setCopiedVerifyText(true);
+      setFeedback({
+        type: 'success',
+        text: 'تم نسخ الاختبار بالكامل كنص منسق (مع مفتاح الإجابات والتعليلات) إلى الحافظة للمراجعة.'
+      });
+      setTimeout(() => setCopiedVerifyText(false), 3000);
+    } catch {
+      setFeedback({
+        type: 'error',
+        text: 'تعذر النسخ التلقائي، يمكنك فتح نافذة الفحص ونسخ النص يدوياً.'
+      });
+    }
+  };
+
+  const handleDownloadVerificationSheet = (format: 'txt' | 'html' | 'json') => {
+    downloadQuizVerificationFile(verificationInput, format);
+    setFeedback({
+      type: 'success',
+      text:
+        format === 'txt'
+          ? 'تم تحميل ملف فحص الاختبار النصي (.TXT) بنجاح.'
+          : format === 'html'
+          ? 'تم تحميل وثيقة المراجعة والطباعة (.HTML) بنجاح.'
+          : 'تم تحميل نسخة احتياطية من الاختبار (.JSON) بنجاح.'
+    });
+  };
 
   const filteredDrafts = useMemo(() => {
     return drafts.filter((d) => {
@@ -1669,6 +1752,86 @@ export default function BulkQuestionImportModal({
                 </div>
               </div>
 
+              {/* PRE-PUBLISH VERIFICATION, COPY AS TEXT & FILE EXPORT BAR */}
+              <div className="p-2.5 rounded-xl bg-gradient-to-r from-teal-950/50 via-slate-900 to-indigo-950/40 border border-teal-500/30 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-teal-500/15 border border-teal-500/30 flex items-center justify-center shrink-0">
+                    <ShieldCheck className="w-4 h-4 text-teal-400" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-xs font-black text-white">أدوات التأكد وفحص الاختبار قبل النشر</span>
+                      <span
+                        className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${
+                          verificationReport.isReadyToPublish && verificationReport.warningChecksCount === 0
+                            ? 'bg-emerald-950/80 text-emerald-300 border-emerald-700/60'
+                            : verificationReport.isReadyToPublish
+                            ? 'bg-amber-950/80 text-amber-300 border-amber-700/60'
+                            : 'bg-rose-950/80 text-rose-300 border-rose-700/60'
+                        }`}
+                      >
+                        {verificationReport.isReadyToPublish && verificationReport.warningChecksCount === 0
+                          ? 'مفحوص بالكامل وجاهز للنشر'
+                          : verificationReport.isReadyToPublish
+                          ? `جاهز للنشر (${verificationReport.warningChecksCount} تنبيه مراجعة)`
+                          : `يوجد ${verificationReport.errorChecksCount} خطأ يحتاج تصحيح`}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-400">
+                      انسخ الاختبار كنص أو حمّله كملف للتأكد من صحة إدخال جميع الأسئلة والخيارات ومفتاح الإجابات قبل النشر
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handleCopyQuizAsText}
+                    disabled={drafts.length === 0}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[11px] font-bold text-teal-300 flex items-center gap-1.5 transition-colors disabled:opacity-40"
+                    title="نسخ الاختبار بالكامل مع الخيارات والإجابات الصحيحة كنص للمراجعة"
+                  >
+                    {copiedVerifyText ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedVerifyText ? 'تم نسخ النص!' : 'نسخ الاختبار كنص'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadVerificationSheet('txt')}
+                    disabled={drafts.length === 0}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[11px] font-bold text-sky-300 flex items-center gap-1.5 transition-colors disabled:opacity-40"
+                    title="تحميل ملف نصي (.TXT) يحتوي على كافة الأسئلة ومفتاح الحل"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>تحميل نص (.TXT)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadVerificationSheet('html')}
+                    disabled={drafts.length === 0}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[11px] font-bold text-amber-300 flex items-center gap-1.5 transition-colors disabled:opacity-40"
+                    title="تحميل وثيقة مراجعة وطباعة منسقة (.HTML / PDF)"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>تحميل وثيقة مراجعة</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVerifyViewTab('summary');
+                      setShowPrePublishVerifyModal(true);
+                    }}
+                    disabled={drafts.length === 0}
+                    className="px-3 py-1.5 rounded-lg bg-teal-600/25 hover:bg-teal-600/40 border border-teal-500/50 text-[11px] font-black text-teal-200 flex items-center gap-1.5 transition-colors disabled:opacity-40"
+                  >
+                    <Eye className="w-3.5 h-3.5 text-teal-300" />
+                    <span>فحص وتأكيد القيم ({stats.selectedValid})</span>
+                  </button>
+                </div>
+              </div>
+
               {/* Clean, Compact Question Cards */}
               <div className="space-y-3">
                 {filteredDrafts.length === 0 ? (
@@ -2349,7 +2512,7 @@ export default function BulkQuestionImportModal({
               </div>
 
               {/* Final Action Row */}
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <button
                   type="button"
                   onClick={() => setStep('content')}
@@ -2358,27 +2521,43 @@ export default function BulkQuestionImportModal({
                   رجوع لتعديل المحتوى
                 </button>
 
-                <button
-                  type="button"
-                  onClick={handleSaveSelected}
-                  disabled={saving || stats.selectedValid === 0}
-                  className={`flex-1 py-2.5 px-4 rounded-xl disabled:opacity-40 text-white text-xs font-bold shadow-lg flex items-center justify-center gap-2 transition-colors ${
-                    publishMode === 'competition_only'
-                      ? 'bg-amber-600 hover:bg-amber-500'
-                      : 'bg-teal-600 hover:bg-teal-500'
-                  }`}
-                >
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
-                  <span className="truncate">
-                    {saving
-                      ? 'جاري الاعتماد والحفظ...'
-                      : publishMode === 'exam_only'
-                      ? `اعتماد ونشر كاختبار (${stats.selectedValid})`
-                      : publishMode === 'competition_only'
-                      ? `اعتماد ونشر كمسابقة (${stats.selectedValid})`
-                      : `اعتماد وحفظ (${stats.selectedValid})`}
-                  </span>
-                </button>
+                <div className="flex items-center gap-2 flex-1 justify-end">
+                  <button
+                    type="button"
+                    onClick={handleCopyQuizAsText}
+                    disabled={drafts.length === 0}
+                    className="hidden sm:flex px-3 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-teal-300 text-xs font-bold items-center gap-1.5 shrink-0"
+                    title="نسخ الاختبار كنص للمراجعة السريعة"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>نسخ كنص</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVerifyViewTab('summary');
+                      setShowPrePublishVerifyModal(true);
+                    }}
+                    disabled={saving || stats.selectedValid === 0}
+                    className={`flex-1 sm:flex-initial sm:min-w-[260px] py-2.5 px-5 rounded-xl disabled:opacity-40 text-white text-xs font-bold shadow-lg flex items-center justify-center gap-2 transition-colors ${
+                      publishMode === 'competition_only'
+                        ? 'bg-amber-600 hover:bg-amber-500'
+                        : 'bg-teal-600 hover:bg-teal-500'
+                    }`}
+                  >
+                    <ShieldCheck className="w-4 h-4 shrink-0" />
+                    <span className="truncate">
+                      {saving
+                        ? 'جاري الاعتماد والحفظ...'
+                        : publishMode === 'exam_only'
+                        ? `فحص وتأكيد نشر الاختبار (${stats.selectedValid})`
+                        : publishMode === 'competition_only'
+                        ? `فحص وتأكيد نشر المسابقة (${stats.selectedValid})`
+                        : `فحص وتأكيد حفظ البنك (${stats.selectedValid})`}
+                    </span>
+                  </button>
+                </div>
               </div>
             </>
           )}
@@ -2867,6 +3046,281 @@ export default function BulkQuestionImportModal({
                 className="px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs transition-colors"
               >
                 إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. Pre-Publish Verification, Export & Confirmation Modal (نافذة التأكد الشامل قبل النشر) */}
+      {showPrePublishVerifyModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4" dir="rtl">
+          <div className="bg-slate-900 border border-teal-500/40 rounded-2xl max-w-4xl w-full max-h-[92dvh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="px-4 py-3.5 sm:px-5 border-b border-slate-800 flex items-center justify-between bg-slate-950">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center">
+                  <ShieldCheck className="w-5 h-5 text-teal-400" />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-black text-white">
+                    التأكد النهائي وفحص القيم قبل النشر
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    مراجعة شاملة لصحة الأسئلة ومفتاح الإجابات مع إمكانية نسخ الاختبار كنص أو تحميله كملف
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPrePublishVerifyModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Sub-header Toolbar: Tabs + Copy/Download Buttons */}
+            <div className="px-4 py-2.5 bg-slate-950/70 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 bg-slate-900 p-1 rounded-xl border border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setVerifyViewTab('summary')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                    verifyViewTab === 'summary'
+                      ? 'bg-teal-600 text-white'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  تقرير الفحص ومفتاح الإجابات
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVerifyViewTab('text')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                    verifyViewTab === 'text'
+                      ? 'bg-teal-600 text-white'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  معاينة النص الكامل للاختبار
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={handleCopyQuizAsText}
+                  className="px-3 py-1.5 rounded-xl bg-teal-950/80 hover:bg-teal-900 border border-teal-600/50 text-teal-200 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                >
+                  {copiedVerifyText ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedVerifyText ? 'تم النسخ للحافظة!' : 'نسخ الاختبار كنص'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleDownloadVerificationSheet('txt')}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sky-300 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>ملف نصي (.TXT)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleDownloadVerificationSheet('html')}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-amber-300 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>وثيقة مراجعة (.HTML)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleDownloadVerificationSheet('json')}
+                  className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-purple-300 text-xs font-bold flex items-center gap-1 transition-colors"
+                  title="تحميل نسخة احتياطية بصيغة JSON"
+                >
+                  <FileJson className="w-3.5 h-3.5" />
+                  <span>JSON</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1 text-xs">
+              {/* Summary Metrics Strip */}
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                  <span className="text-[10px] text-slate-400 block">وجهة النشر</span>
+                  <span className="text-xs font-black text-teal-300 mt-0.5 block">
+                    {publishMode === 'competition_only'
+                      ? 'مسابقة طبية تنافسية'
+                      : publishMode === 'exam_only'
+                      ? 'اختبار أكاديمي'
+                      : 'بنك الأسئلة فقط'}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                  <span className="text-[10px] text-slate-400 block">الأسئلة الجاهزة للنشر</span>
+                  <span className="text-sm font-black text-emerald-400 font-mono mt-0.5 block">
+                    {stats.selectedValid} / {verificationReport.totalQuestions}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                  <span className="text-[10px] text-slate-400 block">إجمالي الدرجات</span>
+                  <span className="text-sm font-black text-amber-300 font-mono mt-0.5 block">
+                    {verificationReport.totalPoints} درجة
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                  <span className="text-[10px] text-slate-400 block">تغطية التعليل العلمي</span>
+                  <span className="text-sm font-black text-indigo-300 font-mono mt-0.5 block">
+                    {verificationReport.withExplanationCount} / {verificationReport.totalQuestions}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 col-span-2 sm:col-span-1">
+                  <span className="text-[10px] text-slate-400 block">توزيع أنماط الأسئلة</span>
+                  <span className="text-[11px] font-bold text-slate-200 mt-0.5 block">
+                    MCQ: {verificationReport.byType.mcq} | صح/خطأ: {verificationReport.byType.true_false} | مقالي/فراغ: {verificationReport.byType.fill_blank + verificationReport.byType.essay}
+                  </span>
+                </div>
+              </div>
+
+              {verifyViewTab === 'summary' ? (
+                <>
+                  {/* Automated Diagnostic Checklist */}
+                  <div className="rounded-xl bg-slate-950 border border-slate-800 p-3.5 space-y-2.5">
+                    <h4 className="text-xs font-black text-white flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4 text-teal-400" />
+                      <span>نتائج الفحص الآلي لسلامة القيم والبرمجة ({verificationReport.checks.length} فحوصات):</span>
+                    </h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {verificationReport.checks.map((chk) => (
+                        <div
+                          key={chk.id}
+                          className={`p-2.5 rounded-xl border flex items-start gap-2.5 ${
+                            chk.status === 'pass'
+                              ? 'bg-emerald-950/20 border-emerald-800/40 text-emerald-200'
+                              : chk.status === 'warning'
+                              ? 'bg-amber-950/25 border-amber-700/50 text-amber-200'
+                              : 'bg-rose-950/30 border-rose-700/60 text-rose-200'
+                          }`}
+                        >
+                          {chk.status === 'pass' ? (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                          ) : chk.status === 'warning' ? (
+                            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                          ) : (
+                            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <div className="font-bold text-[11px]">{chk.titleArabic}</div>
+                            <div className="text-[10px] opacity-85 leading-relaxed mt-0.5">{chk.detailArabic}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Quick Answer Key Verification Table */}
+                  <div className="rounded-xl bg-slate-950 border border-slate-800 p-3.5 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-black text-teal-300">
+                        جدول التحقق السريع من مفتاح الإجابات الصحيحة ({verificationReport.answerKeyRows.length} سؤال):
+                      </h4>
+                      <span className="text-[10px] text-slate-400">
+                        تأكد من مطابقة الإجابة المعتمدة لكل سؤال قبل النشر للطلاب
+                      </span>
+                    </div>
+
+                    <div className="max-h-64 overflow-y-auto rounded-lg border border-slate-800 divide-y divide-slate-800/70">
+                      {verificationReport.answerKeyRows.map((row) => (
+                        <div
+                          key={row.questionNumber}
+                          className={`px-3 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] ${
+                            row.isValid ? 'bg-slate-900/60 hover:bg-slate-900' : 'bg-rose-950/30'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <span className="px-2 py-0.5 rounded bg-slate-800 text-teal-300 font-mono font-bold shrink-0">
+                              س{row.questionNumber}
+                            </span>
+                            <span className="text-slate-200 truncate font-medium" title={row.stemPreview}>
+                              {row.stemPreview}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="px-2.5 py-0.5 rounded-lg bg-emerald-950/90 border border-emerald-700/60 text-emerald-300 font-bold">
+                              الإجابة: [{row.correctLabel}] {row.correctTextPreview}
+                            </span>
+                            <span className="text-[10px] font-mono text-slate-400">
+                              ({row.points} د)
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-teal-300">
+                      النص الكامل للاختبار ومفتاح الإجابات (جاهز للنسخ أو الطباعة):
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCopyQuizAsText}
+                      className="px-3 py-1 rounded-lg bg-teal-600/20 hover:bg-teal-600/30 border border-teal-500/40 text-teal-200 text-[11px] font-bold flex items-center gap-1"
+                    >
+                      <Copy className="w-3 h-3" />
+                      <span>نسخ النص بالكامل</span>
+                    </button>
+                  </div>
+                  <pre
+                    dir={examLanguage === 'en' ? 'ltr' : 'rtl'}
+                    className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 font-mono text-xs leading-relaxed overflow-x-auto max-h-[50dvh] whitespace-pre-wrap select-all"
+                  >
+                    {verificationFormattedText}
+                  </pre>
+                </div>
+              )}
+            </div>
+
+            {/* Footer with Final Confirmation */}
+            <div className="p-3.5 sm:p-4 border-t border-slate-800 bg-slate-950 flex flex-wrap items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => setShowPrePublishVerifyModal(false)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold"
+              >
+                العودة لمراجعة وتعديل الأسئلة
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPrePublishVerifyModal(false);
+                  handleSaveSelected();
+                }}
+                disabled={saving || stats.selectedValid === 0}
+                className={`px-6 py-2.5 rounded-xl disabled:opacity-40 text-white text-xs font-black shadow-lg flex items-center gap-2 transition-colors ${
+                  publishMode === 'competition_only'
+                    ? 'bg-amber-600 hover:bg-amber-500'
+                    : 'bg-teal-600 hover:bg-teal-500'
+                }`}
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span>
+                  {saving
+                    ? 'جاري الاعتماد والنشر...'
+                    : publishMode === 'exam_only'
+                    ? `تأكيد نهائي ونشر الاختبار (${stats.selectedValid} سؤال)`
+                    : publishMode === 'competition_only'
+                    ? `تأكيد نهائي ونشر المسابقة (${stats.selectedValid} سؤال)`
+                    : `تأكيد نهائي وحفظ في البنك (${stats.selectedValid} سؤال)`}
+                </span>
               </button>
             </div>
           </div>
