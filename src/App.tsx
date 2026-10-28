@@ -862,7 +862,7 @@ export default function App() {
       const univNameArabic = univObj?.nameArabic || 'جامعة دار السلام الدولية للعلوم والتكنولوجيا';
 
       const res = await updateFullProfile({
-        username: profileUsernameEdit.trim(),
+        newUsername: profileUsernameEdit.trim(),
         displayNameArabic: profileDisplayNameEdit.trim() || undefined,
         avatarUrl: profileAvatarEdit,
         universityId: profileUniversityEdit,
@@ -1604,19 +1604,19 @@ export default function App() {
                       </label>
 
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        {MEDICAL_PRESET_AVATARS.map((preset) => (
+                        {MEDICAL_PRESET_AVATARS.map((presetUrl, idx) => (
                           <button
-                            key={preset.id}
+                            key={idx}
                             type="button"
-                            onClick={() => setRegAvatarUrl(preset.url)}
-                            title={preset.label}
+                            onClick={() => setRegAvatarUrl(presetUrl)}
+                            title={`رمزية طبية ${idx + 1}`}
                             className={`w-9 h-9 rounded-xl overflow-hidden border-2 transition-all ${
-                              regAvatarUrl === preset.url
+                              regAvatarUrl === presetUrl
                                 ? 'border-teal-400 scale-105 shadow-md'
                                 : 'border-slate-800 opacity-75 hover:opacity-100'
                             }`}
                           >
-                            <img src={preset.url} alt={preset.label} className="w-full h-full object-cover" />
+                            <img src={presetUrl} alt={`Avatar ${idx + 1}`} className="w-full h-full object-cover" />
                           </button>
                         ))}
                       </div>
@@ -3083,19 +3083,19 @@ export default function App() {
                             </label>
 
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              {MEDICAL_PRESET_AVATARS.map((preset) => (
+                              {MEDICAL_PRESET_AVATARS.map((presetUrl, idx) => (
                                 <button
-                                  key={preset.id}
+                                  key={idx}
                                   type="button"
-                                  onClick={() => setProfileAvatarEdit(preset.url)}
-                                  title={preset.label}
+                                  onClick={() => setProfileAvatarEdit(presetUrl)}
+                                  title={`رمزية طبية ${idx + 1}`}
                                   className={`w-9 h-9 rounded-xl overflow-hidden border-2 transition-all ${
-                                    profileAvatarEdit === preset.url
+                                    profileAvatarEdit === presetUrl
                                       ? 'border-teal-400 scale-105 shadow-md'
                                       : 'border-slate-800 opacity-75 hover:opacity-100'
                                   }`}
                                 >
-                                  <img src={preset.url} alt={preset.label} className="w-full h-full object-cover" />
+                                  <img src={presetUrl} alt={`Avatar ${idx + 1}`} className="w-full h-full object-cover" />
                                 </button>
                               ))}
                             </div>

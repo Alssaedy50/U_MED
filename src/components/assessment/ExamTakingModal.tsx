@@ -61,11 +61,14 @@ import {
   downloadExamBookletFile
 } from '../../services/assessmentService.ts';
 
+import { useAuth } from '../../context/AuthContext.tsx';
+
 interface ExamTakingModalProps {
   assessment: Assessment;
   attempt: AssessmentAttempt;
   questions: AssessmentQuestionPublic[];
   studentNameArabic?: string;
+  studentUsername?: string;
   uid?: string;
   isGuestMode?: boolean;
   initialResult?: AssessmentResult | null;
@@ -79,6 +82,7 @@ export default function ExamTakingModal({
   attempt,
   questions,
   studentNameArabic,
+  studentUsername,
   uid,
   isGuestMode = false,
   initialResult = null,
@@ -86,6 +90,7 @@ export default function ExamTakingModal({
   onClose,
   onSubmitted
 }: ExamTakingModalProps) {
+  const { userProfile } = useAuth();
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
   const [answers, setAnswers] = useState<Record<string, string>>(attempt.answers || {});
   const [hasStartedSolving, setHasStartedSolving] = useState<boolean>(() => {
@@ -101,12 +106,12 @@ export default function ExamTakingModal({
   const [downloadingMode, setDownloadingMode] = useState<'solved' | 'blank' | null>(null);
   const [downloadedToast, setDownloadedToast] = useState<string | null>(null);
 
-  // Student Leaderboard Display Name Preferences
+  // Automatic Student Leaderboard Identity from registered account
   const initialIdentity = getStudentLeaderboardIdentity(uid);
-  const [nameMode, setNameMode] = useState<LeaderboardNameMode>(initialIdentity.leaderboardNameMode);
-  const [customUsername, setCustomUsername] = useState<string>(initialIdentity.username);
-  const [savingIdentity, setSavingIdentity] = useState<boolean>(false);
-  const [identitySavedToast, setIdentitySavedToast] = useState<boolean>(false);
+  const effectiveUsername = studentUsername || userProfile?.username || initialIdentity.username || '';
+  const effectiveFullName = userProfile?.displayNameArabic || studentNameArabic || 'طالب طب بشري';
+  const nameMode: LeaderboardNameMode = 'full_name';
+  const customUsername = effectiveUsername;
 
   // Leaderboard state
   const [leaderboard, setLeaderboard] = useState<AssessmentResult[]>([]);
@@ -374,20 +379,20 @@ export default function ExamTakingModal({
 
       const publicDisplayName = await saveStudentLeaderboardIdentity(
         uid,
-        { username: customUsername, leaderboardNameMode: nameMode },
-        studentNameArabic
+        { username: customUsername, leaderboardNameMode: 'full_name' },
+        effectiveFullName
       );
 
       const res = await submitAttemptServer(
         attempt.id,
         answers,
         assessment,
-        studentNameArabic,
+        effectiveFullName,
         {
           durationSeconds: elapsedSeconds,
           studentDisplayNamePublic: publicDisplayName,
           studentUsername: customUsername,
-          leaderboardNameMode: nameMode
+          leaderboardNameMode: 'full_name'
         }
       );
       setQueuedOfflineSubmit(Boolean(res.queuedOffline));
@@ -399,68 +404,6 @@ export default function ExamTakingModal({
     } finally {
       setSubmitting(false);
       setShowConfirmSubmit(false);
-    }
-  };
-
-  const handleUpdateDisplayNameOnResult = async (newMode: LeaderboardNameMode, newUsername: string) => {
-    setNameMode(newMode);
-    setCustomUsername(newUsername);
-    setSavingIdentity(true);
-    try {
-      if (isGuestMode) {
-        const updatedGuestName = formatStudentLeaderboardName({
-          uid: 'guest',
-          fullNameArabic: studentNameArabic || 'طالب طب بشري',
-          username: newUsername,
-          mode: newMode
-        });
-        const updatedResult = result
-          ? {
-              ...result,
-              studentDisplayNamePublic: updatedGuestName,
-              studentUsername: newUsername,
-              leaderboardNameMode: newMode
-            }
-          : null;
-        if (updatedResult) {
-          setResult(updatedResult);
-        }
-        const elapsedSeconds = Math.max(1, Math.floor((Date.now() - startedAtTimestampRef.current) / 1000));
-        savePendingGuestExamSubmission({
-          assessmentId: assessment.id,
-          assessment,
-          answers,
-          startedAt: new Date(startedAtTimestampRef.current).toISOString(),
-          submittedAt: new Date().toISOString(),
-          durationSeconds: elapsedSeconds,
-          preferredUsername: newUsername,
-          preferredNameMode: newMode,
-          scoredResult: updatedResult || undefined
-        });
-        setIdentitySavedToast(true);
-        setTimeout(() => setIdentitySavedToast(false), 2500);
-        return;
-      }
-
-      const updatedPublicName = await saveStudentLeaderboardIdentity(
-        uid,
-        { username: newUsername, leaderboardNameMode: newMode },
-        studentNameArabic
-      );
-      if (result) {
-        setResult({
-          ...result,
-          studentDisplayNamePublic: updatedPublicName,
-          studentUsername: newUsername,
-          leaderboardNameMode: newMode
-        });
-      }
-      const refreshedLb = await getAssessmentLeaderboard(assessment.id);
-      setLeaderboard(refreshedLb);
-      setIdentitySavedToast(true);
-      setTimeout(() => setIdentitySavedToast(false), 2500);
-    } finally {
-      setSavingIdentity(false);
     }
   };
 
@@ -508,9 +451,9 @@ export default function ExamTakingModal({
   const isCurrentlyOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
   const previewDisplayName = formatStudentLeaderboardName({
     uid,
-    fullNameArabic: studentNameArabic || 'طالب طب بشري',
+    fullNameArabic: effectiveFullName,
     username: customUsername,
-    mode: nameMode
+    mode: 'full_name'
   });
 
   const myRankIndex = result
@@ -728,44 +671,6 @@ export default function ExamTakingModal({
                     </div>
                   </div>
 
-                  {/* Choose Display Name before registering */}
-                  <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-3.5 space-y-2.5">
-                    <div className="text-xs font-bold text-teal-300 flex items-center gap-1.5">
-                      <UserCheck className="w-4 h-4 text-teal-400" />
-                      <span>اختر كيف سيظهر اسمك في المنافسة فور إنشاء الحساب: <strong className="text-white">{previewDisplayName}</strong></span>
-                    </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                      {[
-                        { id: 'full_name', label: 'الاسم الكامل' },
-                        { id: 'custom_username', label: 'اسم مستخدم @' },
-                        { id: 'abbreviated', label: 'اسم مختصر' },
-                        { id: 'anonymous_code', label: 'لقب مشفر' }
-                      ].map((m) => (
-                        <button
-                          key={m.id}
-                          type="button"
-                          onClick={() => handleUpdateDisplayNameOnResult(m.id as LeaderboardNameMode, customUsername)}
-                          className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-all ${
-                            nameMode === m.id
-                              ? 'bg-teal-600 text-white border-teal-500'
-                              : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
-                          }`}
-                        >
-                          {m.label}
-                        </button>
-                      ))}
-                    </div>
-                    {nameMode === 'custom_username' && (
-                      <input
-                        type="text"
-                        value={customUsername}
-                        onChange={(e) => setCustomUsername(e.target.value)}
-                        placeholder="اكتب اسم المستخدم أو اللقب التنافسي (مثال: Dr_Ahmed)"
-                        className="w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:border-teal-500 focus:outline-none"
-                      />
-                    )}
-                  </div>
-
                   <button
                     type="button"
                     onClick={handleProceedToGuestRegistration}
@@ -777,60 +682,17 @@ export default function ExamTakingModal({
                 </div>
               )}
 
-              {/* Student Display Name Customization Card for Logged-in Users */}
+              {/* Student Registered Identity Badge for Logged-in Users */}
               {!isGuestMode && (
-                <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-4 text-right max-w-xl mx-auto space-y-3">
-                  <div className="flex items-center justify-between flex-wrap gap-2">
-                    <div className="text-xs font-bold text-teal-300 flex items-center gap-1.5">
-                      <Sparkles className="w-4 h-4 text-amber-400" />
-                      <span>اسمك الظاهر أمام الطلاب في لوحة الشرف: <strong className="text-white">{previewDisplayName}</strong></span>
-                    </div>
-                    {identitySavedToast && (
-                      <span className="text-[11px] text-emerald-400 font-bold">تم تحديث اسمك في الترتيب ✓</span>
-                    )}
+                <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-3.5 text-right max-w-xl mx-auto flex items-center justify-between flex-wrap gap-2">
+                  <div className="text-xs font-bold text-teal-300 flex items-center gap-1.5">
+                    <UserCheck className="w-4 h-4 text-teal-400" />
+                    <span>هويتك المسجلة في لوحة الشرف: <strong className="text-white" dir="auto">{previewDisplayName}</strong></span>
                   </div>
-
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    {[
-                      { id: 'full_name', label: 'الاسم الكامل' },
-                      { id: 'custom_username', label: 'اسم مستخدم @' },
-                      { id: 'abbreviated', label: 'اسم مختصر' },
-                      { id: 'anonymous_code', label: 'لقب مشفر' }
-                    ].map((m) => (
-                      <button
-                        key={m.id}
-                        type="button"
-                        disabled={savingIdentity}
-                        onClick={() => handleUpdateDisplayNameOnResult(m.id as LeaderboardNameMode, customUsername)}
-                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-all ${
-                          nameMode === m.id
-                            ? 'bg-teal-600 text-white border-teal-500'
-                            : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
-                        }`}
-                      >
-                        {m.label}
-                      </button>
-                    ))}
-                  </div>
-
-                  {nameMode === 'custom_username' && (
-                    <div className="flex items-center gap-2 pt-1">
-                      <input
-                        type="text"
-                        value={customUsername}
-                        onChange={(e) => setCustomUsername(e.target.value)}
-                        placeholder="اكتب اسم المستخدم المفضل (مثال: Dr_Osama)"
-                        className="flex-1 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:border-teal-500 focus:outline-none"
-                      />
-                      <button
-                        type="button"
-                        disabled={savingIdentity}
-                        onClick={() => handleUpdateDisplayNameOnResult('custom_username', customUsername)}
-                        className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold"
-                      >
-                        حفظ الاسم
-                      </button>
-                    </div>
+                  {customUsername && (
+                    <span className="text-[11px] font-mono text-slate-400 bg-slate-900 border border-slate-800 px-2.5 py-0.5 rounded-lg" dir="ltr">
+                      @{customUsername.replace(/^@+/, '')}
+                    </span>
                   )}
                 </div>
               )}

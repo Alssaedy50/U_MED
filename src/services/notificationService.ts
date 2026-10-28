@@ -46,14 +46,15 @@ export interface NotificationSettings {
 }
 
 const SETTINGS_STORAGE_KEY = 'umed_notification_settings_v1';
-const NOTIFICATIONS_STORAGE_PREFIX = 'umed_inapp_notifications_v2_';
-const SEEN_EVENTS_STORAGE_PREFIX = 'umed_seen_notif_events_v2_';
-const CLEARED_EVENTS_STORAGE_PREFIX = 'umed_cleared_notif_events_v2_';
-const LAST_ENR_STATUS_PREFIX = 'umed_last_enr_status_v2_';
-const LAST_ROLE_STATUS_PREFIX = 'umed_last_role_status_v2_';
+const NOTIFICATIONS_STORAGE_PREFIX = 'umed_inapp_notifications_v3_';
+const SEEN_EVENTS_STORAGE_PREFIX = 'umed_seen_notif_events_v3_';
+const CLEARED_EVENTS_STORAGE_PREFIX = 'umed_cleared_notif_events_v3_';
+const BASELINE_TS_STORAGE_PREFIX = 'umed_notif_baseline_ts_v3_';
+const LAST_ENR_STATUS_PREFIX = 'umed_last_enr_status_v3_';
+const LAST_ROLE_STATUS_PREFIX = 'umed_last_role_status_v3_';
 const MAX_NOTIFICATIONS_STORED = 60;
 
-// Built-in default seed IDs that should not trigger popup alerts
+// Built-in default seed IDs that should never trigger notifications
 const SEED_ASSESSMENT_IDS = new Set(['asmnt-cvs-midterm', 'comp-clinical-cardio']);
 const SEED_POST_IDS = new Set(['notif-dar-lvl4-1']);
 const SEED_RESOURCE_IDS = new Set([
@@ -96,6 +97,56 @@ function getClearedKeyForUser(uid?: string): string {
   return `${CLEARED_EVENTS_STORAGE_PREFIX}${uid || activeNotificationUserId || 'guest'}`;
 }
 
+function getBaselineKeyForUser(uid?: string): string {
+  return `${BASELINE_TS_STORAGE_PREFIX}${uid || activeNotificationUserId || 'guest'}`;
+}
+
+/**
+ * Returns the baseline timestamp (ms) for a user so that any historical content
+ * published before the user created their account (or first initialized their account)
+ * never floods their notification center.
+ */
+export function getOrInitUserBaselineTimestamp(uid?: string, accountCreatedAt?: string | null): number {
+  const targetUid = uid || activeNotificationUserId || 'guest';
+  const key = getBaselineKeyForUser(targetUid);
+  let accountCreatedMs = 0;
+  if (accountCreatedAt) {
+    const parsed = new Date(accountCreatedAt).getTime();
+    if (!Number.isNaN(parsed) && parsed > 0) {
+      accountCreatedMs = parsed;
+    }
+  }
+
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const storedMs = Number(raw);
+      if (!Number.isNaN(storedMs) && storedMs > 0) {
+        if (accountCreatedMs > storedMs) {
+          localStorage.setItem(key, String(accountCreatedMs));
+          return accountCreatedMs;
+        }
+        return storedMs;
+      }
+    }
+  } catch (e) {}
+
+  const initialBaseline = accountCreatedMs > 0 ? accountCreatedMs : Date.now();
+  try {
+    localStorage.setItem(key, String(initialBaseline));
+  } catch (e) {}
+  return initialBaseline;
+}
+
+function isEventPublishedAfterUserBaseline(uid: string, eventTimestampIso?: string): boolean {
+  if (!eventTimestampIso) return false;
+  const eventMs = new Date(eventTimestampIso).getTime();
+  if (Number.isNaN(eventMs) || eventMs <= 0) return false;
+  const baselineMs = getOrInitUserBaselineTimestamp(uid);
+  // Only allow notifications for events published strictly after the account's creation baseline
+  return eventMs > baselineMs;
+}
+
 function getSeenEventSet(uid?: string): Set<string> {
   try {
     const raw = localStorage.getItem(getSeenKeyForUser(uid));
@@ -131,10 +182,18 @@ function saveClearedEventSet(set: Set<string>, uid?: string): void {
 }
 
 /**
- * Sets the active user UID so notifications, unread badges, and seen states are strictly per-user.
+ * Sets the active user UID and records their account creation baseline timestamp
+ * so notifications, unread badges, and seen states are strictly per-user and only
+ * show items published after account creation.
  */
-export function setActiveNotificationUser(uid: string | null | undefined): void {
+export function setActiveNotificationUser(
+  uid: string | null | undefined,
+  accountCreatedAt?: string | null
+): void {
   const nextId = uid || 'guest';
+  if (nextId !== 'guest') {
+    getOrInitUserBaselineTimestamp(nextId, accountCreatedAt);
+  }
   if (activeNotificationUserId !== nextId) {
     activeNotificationUserId = nextId;
     notifyAllListeners();
@@ -564,6 +623,9 @@ export function syncNotificationsForAssessments(
 ): void {
   if (!uid || !Array.isArray(assessments)) return;
 
+  const seenSet = getSeenEventSet(uid);
+  let seenModified = false;
+
   for (const data of assessments) {
     if (!data || !data.id || data.status !== 'published') continue;
     if (data.createdBy === 'SYSTEM_SEED' || SEED_ASSESSMENT_IDS.has(data.id)) continue;
@@ -582,6 +644,15 @@ export function syncNotificationsForAssessments(
 
     const isCompetition = data.assessmentType === 'competition';
     const eventKey = `asm_${data.id}_${isCompetition ? 'competition' : 'exam'}`;
+    const eventTs = data.updatedAt || data.createdAt;
+
+    if (!isEventPublishedAfterUserBaseline(uid, eventTs)) {
+      if (!seenSet.has(eventKey)) {
+        seenSet.add(eventKey);
+        seenModified = true;
+      }
+      continue;
+    }
 
     syncCloudEventNotification({
       uid,
@@ -594,7 +665,7 @@ export function syncNotificationsForAssessments(
         ? `مسابقة تنافسية متاحة الآن! المدة: ${data.durationMinutes} دقيقة - إجمالي النقاط: ${data.totalPoints}`
         : `اختبار أكاديمي جديد متاح للمحاولة - المدة: ${data.durationMinutes} دقيقة.`,
       category: isCompetition ? 'competition' : 'exam',
-      createdAt: data.createdAt,
+      createdAt: eventTs,
       actionTab: 'student_assessments',
       actionPayload: {
         assessmentId: data.id,
@@ -604,6 +675,10 @@ export function syncNotificationsForAssessments(
       },
       authorName: isCompetition ? 'قسم المسابقات الطبية' : 'كنترول الاختبارات الأكاديمية'
     });
+  }
+
+  if (seenModified) {
+    saveSeenEventSet(seenSet, uid);
   }
 }
 
@@ -617,6 +692,9 @@ export function syncNotificationsForBatchPosts(
   studentStudyLevelId?: string
 ): void {
   if (!uid || !Array.isArray(posts)) return;
+
+  const seenSet = getSeenEventSet(uid);
+  let seenModified = false;
 
   for (const data of posts) {
     if (!data || !data.id) continue;
@@ -635,6 +713,16 @@ export function syncNotificationsForBatchPosts(
     }
 
     const eventKey = `post_${data.id}`;
+    const eventTs = data.createdAt;
+
+    if (!isEventPublishedAfterUserBaseline(uid, eventTs)) {
+      if (!seenSet.has(eventKey)) {
+        seenSet.add(eventKey);
+        seenModified = true;
+      }
+      continue;
+    }
+
     syncCloudEventNotification({
       uid,
       eventKey,
@@ -642,7 +730,7 @@ export function syncNotificationsForBatchPosts(
       title: `📢 منشور دفعة جديد: ${data.title || 'إعلان أكاديمي'}`,
       body: `${data.authorNameArabic || 'ممثل الدفعة'}: ${(data.message || '').slice(0, 110)}${(data.message || '').length > 110 ? '...' : ''}`,
       category: 'post',
-      createdAt: data.createdAt,
+      createdAt: eventTs,
       actionTab: 'student_dashboard',
       actionPayload: {
         postId: data.id,
@@ -651,6 +739,10 @@ export function syncNotificationsForBatchPosts(
       },
       authorName: data.authorNameArabic || 'إدارة الدفعة'
     });
+  }
+
+  if (seenModified) {
+    saveSeenEventSet(seenSet, uid);
   }
 }
 
@@ -664,6 +756,9 @@ export function syncNotificationsForResources(
   studentStudyLevelId?: string
 ): void {
   if (!uid || !Array.isArray(resources)) return;
+
+  const seenSet = getSeenEventSet(uid);
+  let seenModified = false;
 
   for (const data of resources) {
     if (!data || !data.id || data.status !== 'published') continue;
@@ -697,6 +792,16 @@ export function syncNotificationsForResources(
         : 'رابط ومصدر طبي';
 
     const eventKey = `res_${data.id}`;
+    const eventTs = data.updatedAt || data.createdAt;
+
+    if (!isEventPublishedAfterUserBaseline(uid, eventTs)) {
+      if (!seenSet.has(eventKey)) {
+        seenSet.add(eventKey);
+        seenModified = true;
+      }
+      continue;
+    }
+
     syncCloudEventNotification({
       uid,
       eventKey,
@@ -704,7 +809,7 @@ export function syncNotificationsForResources(
       title: `📚 داتا ومحاضرة طبية جديدة: ${data.title}`,
       body: `تم نشر ${typeLabel} جديد في المكتبة السريرية والأكاديمية.`,
       category: 'data',
-      createdAt: data.createdAt,
+      createdAt: eventTs,
       actionTab: 'student_library',
       actionPayload: {
         resourceId: data.id,
@@ -713,6 +818,10 @@ export function syncNotificationsForResources(
       },
       authorName: 'المكتبة السريرية'
     });
+  }
+
+  if (seenModified) {
+    saveSeenEventSet(seenSet, uid);
   }
 }
 

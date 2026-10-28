@@ -79,22 +79,7 @@ export const DEFAULT_COURSE_INSTRUCTORS: CourseInstructor[] = [
   }
 ];
 
-export const DEFAULT_BATCH_NOTIFICATIONS: BatchNotification[] = [
-  {
-    id: 'notif-dar-lvl4-1',
-    universityId: 'univ-dar-al-salam',
-    studyLevelId: 'lvl-4',
-    courseOfferingId: 'crs-anat-cvs',
-    title: 'موعد المحاضرة النظرية والعملية لبلوك القلب والأوعية الدموية (CVS-401)',
-    message: 'تنويه لطلاب الدفعة (المستوى الرابع): تم رفع ملف محاضرة تشريح القلب والشرائح العملية في المكتبة الطبية، وسيكون التطبيق العملي في المشرحة يوم الإثنين القادم الساعة 9 صباحاً.',
-    category: 'lecture',
-    authorUid: 'SYSTEM_SEED',
-    authorNameArabic: 'مندوب دفعة المستوى الرابع',
-    authorRole: 'batch_rep',
-    isPinned: true,
-    createdAt: '2025-02-10T08:00:00Z'
-  }
-];
+export const DEFAULT_BATCH_NOTIFICATIONS: BatchNotification[] = [];
 
 function getDeletedIds(storageKey: string): Set<string> {
   try {
@@ -571,12 +556,18 @@ function mergeNotificationsWithDefaults(items: BatchNotification[]): BatchNotifi
   const deleted = getDeletedIds(NOTIFICATIONS_DELETED_KEY);
   const map = new Map<string, BatchNotification>();
   for (const def of DEFAULT_BATCH_NOTIFICATIONS) {
-    if (!deleted.has(def.id)) {
+    if (!deleted.has(def.id) && def.authorUid !== 'SYSTEM_SEED' && def.id !== 'notif-dar-lvl4-1') {
       map.set(def.id, def);
     }
   }
   for (const item of items) {
-    if (item && item.id && !deleted.has(item.id)) {
+    if (
+      item &&
+      item.id &&
+      !deleted.has(item.id) &&
+      item.authorUid !== 'SYSTEM_SEED' &&
+      item.id !== 'notif-dar-lvl4-1'
+    ) {
       map.set(item.id, item);
     }
   }

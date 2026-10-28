@@ -62,6 +62,7 @@ import {
   getQuestionsForAssessmentPreview
 } from '../../services/assessmentService.ts';
 import { syncNotificationsForAssessments } from '../../services/notificationService.ts';
+import { useAuth } from '../../context/AuthContext.tsx';
 import ExamTakingModal from './ExamTakingModal.tsx';
 
 interface StudentAssessmentListProps {
@@ -93,13 +94,10 @@ export default function StudentAssessmentList({
   const [pendingOfflineCount, setPendingOfflineCount] = useState<number>(0);
   const [statusMsg, setStatusMsg] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
 
-  // Student Leaderboard Identity Preferences
+  const { userProfile } = useAuth();
   const initialIdentity = getStudentLeaderboardIdentity(uid);
-  const [nameMode, setNameMode] = useState<LeaderboardNameMode>(initialIdentity.leaderboardNameMode);
-  const [customUsername, setCustomUsername] = useState<string>(initialIdentity.username);
-  const [savingIdentity, setSavingIdentity] = useState<boolean>(false);
-  const [identitySavedBanner, setIdentitySavedBanner] = useState<boolean>(false);
-  const [showIdentityEditor, setShowIdentityEditor] = useState<boolean>(false);
+  const effectiveUsername = userProfile?.username || initialIdentity.username || '';
+  const effectiveFullName = userProfile?.displayNameArabic || studentNameArabic || 'طالب طب بشري';
 
   // Active Exam Session Modal States
   const [activeAssessment, setActiveAssessment] = useState<Assessment | null>(null);
@@ -114,9 +112,6 @@ export default function StudentAssessmentList({
     assessment: Assessment;
     result?: AssessmentResult;
   } | null>(null);
-
-  // Dedicated Identity Preference Modal State
-  const [showIdentityModal, setShowIdentityModal] = useState<boolean>(false);
 
   // Share Trial Exam Modal State
   const [sharingAssessment, setSharingAssessment] = useState<Assessment | null>(null);
@@ -289,27 +284,6 @@ export default function StudentAssessmentList({
     }
   };
 
-  const handleSaveIdentityPreference = async (newMode: LeaderboardNameMode, newUsername: string) => {
-    setNameMode(newMode);
-    setCustomUsername(newUsername);
-    setSavingIdentity(true);
-    try {
-      await saveStudentLeaderboardIdentity(
-        uid,
-        { username: newUsername, leaderboardNameMode: newMode },
-        studentNameArabic
-      );
-      setIdentitySavedBanner(true);
-      setTimeout(() => setIdentitySavedBanner(false), 3000);
-      if (leaderboardAssessment) {
-        const refreshed = await getAssessmentLeaderboard(leaderboardAssessment.id);
-        setLeaderboardItems(refreshed);
-      }
-    } finally {
-      setSavingIdentity(false);
-    }
-  };
-
   const handleCopyShareLink = async (assessment: Assessment) => {
     const url = buildShareableAssessmentUrl(assessment);
     try {
@@ -342,9 +316,9 @@ export default function StudentAssessmentList({
 
   const previewPublicName = formatStudentLeaderboardName({
     uid,
-    fullNameArabic: studentNameArabic || 'طالب طب بشري',
-    username: customUsername,
-    mode: nameMode
+    fullNameArabic: effectiveFullName,
+    username: effectiveUsername,
+    mode: 'full_name'
   });
 
   const filteredAssessments = assessments
@@ -400,30 +374,20 @@ export default function StudentAssessmentList({
           </div>
         </div>
 
-        {/* Compact Student Display Name / Leaderboard Identity Strip */}
+        {/* Automatic Student Leaderboard Identity Strip */}
         <div className="bg-slate-950/90 border border-slate-800/90 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2.5">
           <div className="flex items-center gap-2 text-xs flex-wrap">
             <UserCheck className="w-4 h-4 text-teal-400 shrink-0" />
-            <span className="text-slate-400">اسمك في لوحة الشرف:</span>
-            <span className="px-2.5 py-0.5 rounded-lg bg-teal-500/20 border border-teal-500/40 text-teal-300 font-bold">
+            <span className="text-slate-400">هويتك المسجلة في لوحة الشرف والترتيب التنافسي:</span>
+            <span className="px-2.5 py-0.5 rounded-lg bg-teal-500/20 border border-teal-500/40 text-teal-300 font-bold" dir="auto">
               {previewPublicName}
             </span>
-            {identitySavedBanner && (
-              <span className="text-[11px] text-emerald-400 font-bold flex items-center gap-1">
-                <Check className="w-3.5 h-3.5" />
-                تم التحديث ✓
-              </span>
-            )}
           </div>
-
-          <button
-            type="button"
-            onClick={() => setShowIdentityModal(true)}
-            className="text-xs font-bold text-amber-400 hover:text-amber-300 flex items-center gap-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 px-3 py-1.5 rounded-xl transition-all"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-            <span>تخصيص اللقب أو اسم العرض</span>
-          </button>
+          {effectiveUsername && (
+            <span className="text-[11px] font-mono text-slate-400 bg-slate-900 border border-slate-800 px-2.5 py-1 rounded-lg" dir="ltr">
+              @{effectiveUsername.replace(/^@+/, '')}
+            </span>
+          )}
         </div>
       </div>
 
@@ -1004,97 +968,13 @@ export default function StudentAssessmentList({
         </div>
       )}
 
-      {/* Dedicated Identity Preference Modal Sheet */}
-      {showIdentityModal && (
-        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto" dir="rtl">
-          <div className="bg-slate-900 border border-teal-500/40 rounded-2xl p-5 sm:p-6 max-w-lg w-full my-auto space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-amber-400" />
-                <h3 className="text-sm font-extrabold text-white">تخصيص اسم العرض في لوحة الترتيب والمنافسة</h3>
-              </div>
-              <button
-                onClick={() => setShowIdentityModal(false)}
-                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-3.5 rounded-xl bg-teal-950/40 border border-teal-500/30 text-xs text-center space-y-1">
-              <span className="text-[11px] text-slate-400 block">معاينة ظهور اسمك أمام زملائك في قائمة المتصدرين:</span>
-              <div className="text-base font-black text-teal-300 font-mono pt-0.5">{previewPublicName}</div>
-            </div>
-
-            <div className="space-y-2">
-              <span className="text-xs font-bold text-slate-300 block">اختر نمط الاسم المفضل:</span>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {[
-                  { id: 'full_name', label: 'الاسم الكامل الرسمي', hint: 'يظهر اسمك الحقيقي المسجل في الكلية كاملاً' },
-                  { id: 'custom_username', label: 'اسم مستخدم مخصص (@)', hint: 'اختر لقباً طبياً تنافسياً مميزاً' },
-                  { id: 'abbreviated', label: 'الاسم المختصر', hint: 'الاسم الأول مع الحرف الأول من اللقب' },
-                  { id: 'anonymous_code', label: 'لقب طبي مشفر', hint: 'مشاركة ومنافسة بخصوصية وسرية تامة' }
-                ].map((opt) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    disabled={savingIdentity}
-                    onClick={() => handleSaveIdentityPreference(opt.id as LeaderboardNameMode, customUsername)}
-                    className={`p-3 rounded-xl border text-right transition-all flex flex-col justify-between ${
-                      nameMode === opt.id
-                        ? 'bg-teal-950/80 border-teal-500 text-teal-200 ring-1 ring-teal-500/40 shadow-sm'
-                        : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="text-xs font-bold">{opt.label}</div>
-                    <div className="text-[10px] text-slate-400 mt-1 leading-normal">{opt.hint}</div>
-                  </button>
-                ))}
-              </div>
-
-              {nameMode === 'custom_username' && (
-                <div className="pt-2 space-y-2">
-                  <label className="block text-xs font-bold text-slate-300">اكتب اسم المستخدم أو اللقب التنافسي:</label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={customUsername}
-                      onChange={(e) => setCustomUsername(e.target.value)}
-                      placeholder="مثال: Dr_Cardio_Yemen"
-                      className="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white focus:border-teal-500 focus:outline-none"
-                    />
-                    <button
-                      type="button"
-                      disabled={savingIdentity}
-                      onClick={() => handleSaveIdentityPreference('custom_username', customUsername)}
-                      className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold transition-colors shrink-0"
-                    >
-                      {savingIdentity ? 'جاري الحفظ...' : 'اعتماد'}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="pt-3 border-t border-slate-800 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setShowIdentityModal(false)}
-                className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold"
-              >
-                تم واعتماد
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {activeAssessment && activeAttempt && (
         <ExamTakingModal
           assessment={activeAssessment}
           attempt={activeAttempt}
           questions={activeQuestions}
-          studentNameArabic={studentNameArabic}
+          studentNameArabic={effectiveFullName}
+          studentUsername={effectiveUsername}
           uid={uid}
           initialResult={activeInitialResult}
           onClose={() => {

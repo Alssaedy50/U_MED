@@ -2253,41 +2253,36 @@ export function formatStudentLeaderboardName(params: {
   mode?: LeaderboardNameMode;
 }): string {
   const rawFull = (params.fullNameArabic || 'طالب طب بشري').replace(/^د\.\s*/, '').trim() || 'طالب طب بشري';
-  const rawUser = (params.username || '').trim();
-  const mode: LeaderboardNameMode = params.mode || 'full_name';
+  const cleanUser = (params.username || '').replace(/^@+/, '').trim();
 
-  if (mode === 'custom_username') {
-    if (rawUser) {
-      return rawUser.startsWith('@') ? rawUser : `@${rawUser}`;
+  if (cleanUser) {
+    if (
+      !rawFull ||
+      rawFull === 'طالب طب بشري' ||
+      rawFull === 'زائر' ||
+      rawFull.toLowerCase() === cleanUser.toLowerCase() ||
+      rawFull === `@${cleanUser}`
+    ) {
+      return `د. @${cleanUser}`;
     }
-    return `د. ${rawFull}`;
+    if (rawFull.includes(`@${cleanUser}`)) {
+      return rawFull.startsWith('د.') ? rawFull : `د. ${rawFull}`;
+    }
+    return `د. ${rawFull} (@${cleanUser})`;
   }
 
-  if (mode === 'abbreviated') {
-    const parts = rawFull.split(/\s+/).filter(Boolean);
-    if (parts.length >= 2) {
-      const first = parts[0];
-      const last = parts[parts.length - 1];
-      return `د. ${first} ${last.charAt(0)}.`;
-    }
-    return `د. ${rawFull}`;
-  }
-
-  if (mode === 'anonymous_code') {
-    const seed = params.uid || rawFull || 'UMED';
-    let hash = 0;
-    for (let i = 0; i < seed.length; i++) {
-      hash = (hash * 31 + seed.charCodeAt(i)) & 0xffff;
-    }
-    const code = hash.toString(16).toUpperCase().padStart(4, '0').slice(-4);
-    return `طبيب متميز #${code}`;
-  }
-
-  // Default: 'full_name'
   return `د. ${rawFull}`;
 }
 
 export function resolveResultPublicDisplayName(result: AssessmentResult): string {
+  if (result.studentUsername && result.studentUsername.trim()) {
+    return formatStudentLeaderboardName({
+      uid: result.uid,
+      fullNameArabic: result.studentNameArabic,
+      username: result.studentUsername,
+      mode: 'full_name'
+    });
+  }
   if (result.studentDisplayNamePublic && result.studentDisplayNamePublic.trim()) {
     return result.studentDisplayNamePublic.trim();
   }

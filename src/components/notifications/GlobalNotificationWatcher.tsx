@@ -48,13 +48,16 @@ export default function GlobalNotificationWatcher({
   studentUniversityId,
   studentStudyLevelId
 }: GlobalNotificationWatcherProps) {
-  const { user, roleDoc } = useAuth();
+  const { user, userProfile, roleDoc } = useAuth();
   const [liveToast, setLiveToast] = useState<AppNotification | null>(null);
 
-  // 0. Bind active notification inbox to the logged-in user's UID
+  // 0. Bind active notification inbox to the logged-in user's UID and account creation baseline
   useEffect(() => {
-    setActiveNotificationUser(user?.uid || null);
-  }, [user?.uid]);
+    setActiveNotificationUser(
+      user?.uid || null,
+      userProfile?.createdAt || user?.metadata?.creationTime || null
+    );
+  }, [user?.uid, userProfile?.createdAt, user?.metadata?.creationTime]);
 
   // Subscribe to live floating toast alerts
   useEffect(() => {
