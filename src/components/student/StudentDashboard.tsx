@@ -69,10 +69,12 @@ import {
   syncNotificationForEnrollment
 } from '../../services/notificationService.ts';
 import RegisterEnrollment from './RegisterEnrollment.tsx';
-import StudentMedicalLibrary from '../library/StudentMedicalLibrary.tsx';
-import StudentAssessmentList from '../assessment/StudentAssessmentList.tsx';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { YEMEN_UNIVERSITIES_OPTIONS } from '../../lib/firebase.ts';
+
+// Lazy-load secondary student views for faster initial dashboard TTI
+const StudentMedicalLibrary = React.lazy(() => import('../library/StudentMedicalLibrary.tsx'));
+const StudentAssessmentList = React.lazy(() => import('../assessment/StudentAssessmentList.tsx'));
 
 interface StudentDashboardProps {
   uid: string;
@@ -240,7 +242,9 @@ export default function StudentDashboard({
             studyLevelId: effectiveEnrollment.currentStudyLevelId,
             status: 'published'
           }),
-          getPublishedAssessmentsForStudent(effectiveEnrollment.universityId, effectiveEnrollment.currentStudyLevelId)
+          internalTab === 'assessments'
+            ? getPublishedAssessmentsForStudent(effectiveEnrollment.universityId, effectiveEnrollment.currentStudyLevelId)
+            : Promise.resolve(getCachedPublishedAssessments(effectiveEnrollment.universityId, effectiveEnrollment.currentStudyLevelId))
         ]);
         setStudyPeriods(periods);
         setInstructors(instList);
@@ -281,6 +285,15 @@ export default function StudentDashboard({
     });
     return () => unsubEnrollment();
   }, [uid]);
+
+  // Background preload secondary student tabs 1.5s after initial dashboard render
+  useEffect(() => {
+    const preloadTimer = setTimeout(() => {
+      import('../library/StudentMedicalLibrary.tsx').catch(() => {});
+      import('../assessment/StudentAssessmentList.tsx').catch(() => {});
+    }, 1500);
+    return () => clearTimeout(preloadTimer);
+  }, []);
 
   // Subscribe in real-time to Batch Notifications, Course Instructors, and Academic Structure
   useEffect(() => {
@@ -552,30 +565,59 @@ export default function StudentDashboard({
         </div>
       )}
 
-      {/* SECTION: MEDICAL LIBRARY */}
+      {/* SECTION: MEDICAL LIBRARY (Lazy Loaded with RTL Skeleton) */}
       {internalTab === 'library' && (
-        <StudentMedicalLibrary
-          universityId={activeEnrollment.universityId}
-          programId={activeEnrollment.programId}
-          studyLevelId={activeEnrollment.currentStudyLevelId}
-          studentNameArabic={displayNameArabic}
-          initialCourseId={selectedCourseFilter?.id}
-          initialCourseTitle={selectedCourseFilter?.title}
-          onClearCourseFilter={() => setSelectedCourseFilter(null)}
-        />
+        <React.Suspense
+          fallback={
+            <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-6 space-y-4 animate-pulse" dir="rtl">
+              <div className="h-5 w-48 bg-slate-800 rounded-lg" />
+              <div className="flex gap-2 overflow-hidden">
+                <div className="h-9 w-28 bg-slate-800 rounded-xl shrink-0" />
+                <div className="h-9 w-28 bg-slate-800 rounded-xl shrink-0" />
+                <div className="h-9 w-28 bg-slate-800 rounded-xl shrink-0" />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="h-28 bg-slate-800/70 rounded-xl" />
+                <div className="h-28 bg-slate-800/70 rounded-xl" />
+              </div>
+            </div>
+          }
+        >
+          <StudentMedicalLibrary
+            universityId={activeEnrollment.universityId}
+            programId={activeEnrollment.programId}
+            studyLevelId={activeEnrollment.currentStudyLevelId}
+            studentNameArabic={displayNameArabic}
+            initialCourseId={selectedCourseFilter?.id}
+            initialCourseTitle={selectedCourseFilter?.title}
+            onClearCourseFilter={() => setSelectedCourseFilter(null)}
+          />
+        </React.Suspense>
       )}
 
-      {/* SECTION: ASSESSMENTS & COMPETITIONS */}
+      {/* SECTION: ASSESSMENTS & COMPETITIONS (Lazy Loaded with RTL Skeleton) */}
       {internalTab === 'assessments' && (
-        <StudentAssessmentList
-          universityId={activeEnrollment.universityId}
-          studyLevelId={activeEnrollment.currentStudyLevelId}
-          uid={uid || 'visitor'}
-          studentNameArabic={displayNameArabic}
-          initialAssessmentType={assessmentNavTarget?.assessmentType}
-          highlightedAssessmentId={assessmentNavTarget?.assessmentId}
-          navigationTimestamp={assessmentNavTarget?.timestamp}
-        />
+        <React.Suspense
+          fallback={
+            <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-6 space-y-4 animate-pulse" dir="rtl">
+              <div className="h-5 w-52 bg-slate-800 rounded-lg" />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="h-32 bg-slate-800/70 rounded-xl" />
+                <div className="h-32 bg-slate-800/70 rounded-xl" />
+              </div>
+            </div>
+          }
+        >
+          <StudentAssessmentList
+            universityId={activeEnrollment.universityId}
+            studyLevelId={activeEnrollment.currentStudyLevelId}
+            uid={uid || 'visitor'}
+            studentNameArabic={displayNameArabic}
+            initialAssessmentType={assessmentNavTarget?.assessmentType}
+            highlightedAssessmentId={assessmentNavTarget?.assessmentId}
+            navigationTimestamp={assessmentNavTarget?.timestamp}
+          />
+        </React.Suspense>
       )}
 
       {/* SECTION: STUDY DASHBOARD (Batch Notifications, Blocks, Courses & Doctors) */}

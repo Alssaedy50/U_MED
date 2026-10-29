@@ -3034,7 +3034,7 @@ export function buildShareableAssessmentUrl(
         : syncData.publicQuestions;
     publishSharedAssessmentSnapshot(assessmentObj, allQuestions).catch(() => {});
 
-    // Embed compact self-contained URL snapshot ONLY if the entire exam fits within URL length limits
+    // Embed compact self-contained URL snapshot ONLY if the entire exam fits within URL length limits (WITHOUT answer keys)
     const compactPayload = {
       a: {
         id: assessmentObj.id,
@@ -3059,8 +3059,7 @@ export function buildShareableAssessmentUrl(
         e: item.stemEnglish || '',
         p: item.points || 5,
         o: (item.options || []).map((opt) => ({ i: opt.id, t: opt.textArabic }))
-      })),
-      k: syncData.answerKeyMap
+      }))
     };
     const candidate = encodeBase64Utf8(JSON.stringify(compactPayload));
     if (candidate && candidate.length <= 6000) {

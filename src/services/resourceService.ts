@@ -319,18 +319,11 @@ export async function resolveResourceFileUrl(
       ? resource.mimeType
       : 'application/pdf';
 
-    // Strip any legacy `.html` or `mime=text/html` from video/audio/pdf stream URLs
-    let cleanStreamUrl = rawUrl
+    // Strip any legacy `.html`, `mime=text/html`, or exposed `token=` query params from video/audio/pdf stream URLs
+    const cleanStreamUrl = rawUrl
       .replace(/\.html(&|$)/gi, '$1')
       .replace(/mime=text%2Fhtml/gi, `mime=${encodeURIComponent(trueMime)}`)
-      .replace(/8787910034:AAF_TcpLPwj1m74jtY9XFaeeNv7bADOaiD8/g, '8787910034:AAF_TcpLPwj1m74jtY9XFaeeNv7bAD0aiD8');
-
-    if (!cleanStreamUrl.includes('token=')) {
-      const joiner = cleanStreamUrl.includes('?') ? '&' : '?';
-      cleanStreamUrl = `${cleanStreamUrl}${joiner}token=${encodeURIComponent(
-        '8787910034:AAF_TcpLPwj1m74jtY9XFaeeNv7bAD0aiD8'
-      )}`;
-    }
+      .replace(/([?&])token=[^&]+(&|$)/gi, (_m, p1, p2) => (p2 === '&' ? p1 : ''));
 
     // 3a. For Video & Audio files: Stream directly via HTTP Range requests (206 Partial Content) without waiting to download 160 chunks into RAM!
     if (isVideoFile || isAudioFile) {

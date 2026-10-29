@@ -82,13 +82,18 @@ export default function GlobalNotificationWatcher({
     syncNotificationForRoleChange(user.uid, roleDoc);
   }, [user?.uid, roleDoc?.role, roleDoc?.assignedAt]);
 
-  // 1. Real-time Firestore listener for Batch Announcements & Posts (منشورات)
+  const effectiveUnivId = studentUniversityId || userProfile?.universityId || 'univ-dar-al-salam';
+
+  // 1. Real-time Firestore listener for Batch Announcements & Posts (منشورات) scoped to student university
   useEffect(() => {
     if (!db || !user?.uid) return;
     const currentUid = user.uid;
 
     try {
-      const q = query(collection(db, 'batchNotifications'));
+      const q = query(
+        collection(db, 'batchNotifications'),
+        where('universityId', '==', effectiveUnivId)
+      );
       const unsub = onSnapshot(
         q,
         (snapshot) => {
@@ -96,16 +101,16 @@ export default function GlobalNotificationWatcher({
           snapshot.docs.forEach((d) => {
             items.push({ ...(d.data() as BatchNotification), id: d.id });
           });
-          syncNotificationsForBatchPosts(currentUid, items, studentUniversityId, studentStudyLevelId);
+          syncNotificationsForBatchPosts(currentUid, items, effectiveUnivId, studentStudyLevelId);
         },
         () => {}
       );
 
       return () => unsub();
     } catch (e) {}
-  }, [user?.uid, studentUniversityId, studentStudyLevelId]);
+  }, [user?.uid, effectiveUnivId, studentStudyLevelId]);
 
-  // 2. Real-time Firestore listener for Educational Resources & Clinical Data (داتا ومحاضرات)
+  // 2. Real-time Firestore listener for Educational Resources & Clinical Data (داتا ومحاضرات) scoped to student university
   useEffect(() => {
     if (!db || !user?.uid) return;
     const currentUid = user.uid;
@@ -113,6 +118,7 @@ export default function GlobalNotificationWatcher({
     try {
       const q = query(
         collection(db, 'educationalResources'),
+        where('universityId', '==', effectiveUnivId),
         where('status', '==', 'published')
       );
 
@@ -123,16 +129,16 @@ export default function GlobalNotificationWatcher({
           snapshot.docs.forEach((d) => {
             items.push({ ...(d.data() as EducationalResource), id: d.id });
           });
-          syncNotificationsForResources(currentUid, items, studentUniversityId, studentStudyLevelId);
+          syncNotificationsForResources(currentUid, items, effectiveUnivId, studentStudyLevelId);
         },
         () => {}
       );
 
       return () => unsub();
     } catch (e) {}
-  }, [user?.uid, studentUniversityId, studentStudyLevelId]);
+  }, [user?.uid, effectiveUnivId, studentStudyLevelId]);
 
-  // 3. Real-time Firestore listener for Exams & Competitions (اختبارات ومسابقات)
+  // 3. Real-time Firestore listener for Exams & Competitions (اختبارات ومسابقات) scoped to student university
   useEffect(() => {
     if (!db || !user?.uid) return;
     const currentUid = user.uid;
@@ -140,6 +146,7 @@ export default function GlobalNotificationWatcher({
     try {
       const q = query(
         collection(db, 'assessments'),
+        where('universityId', '==', effectiveUnivId),
         where('status', '==', 'published')
       );
 
@@ -150,14 +157,14 @@ export default function GlobalNotificationWatcher({
           snapshot.docs.forEach((d) => {
             items.push({ ...(d.data() as Assessment), id: d.id });
           });
-          syncNotificationsForAssessments(currentUid, items, studentUniversityId, studentStudyLevelId);
+          syncNotificationsForAssessments(currentUid, items, effectiveUnivId, studentStudyLevelId);
         },
         () => {}
       );
 
       return () => unsub();
     } catch (e) {}
-  }, [user?.uid, studentUniversityId, studentStudyLevelId]);
+  }, [user?.uid, effectiveUnivId, studentStudyLevelId]);
 
   // 4. Real-time Firestore listener for Student Enrollment status updates (تحديثات القيد والاعتماد)
   useEffect(() => {
@@ -180,29 +187,28 @@ export default function GlobalNotificationWatcher({
     } catch (e) {}
   }, [user?.uid]);
 
-  // 5. Active Fallback Cloud Polling (ensures 100% delivery even if WebSocket streams lag on mobile networks)
+  // 5. One-time initial sync pass on mount/change (no recurring setInterval polling)
   useEffect(() => {
     if (!user?.uid) return;
     const currentUid = user.uid;
-    const univId = studentUniversityId || 'univ-dar-al-salam';
 
     const runSyncPass = async () => {
       try {
         const [publishedAssessments, batchPosts, publishedResources, enrollment] = await Promise.all([
-          getAssessments(univId, undefined, 'published').catch(() => []),
-          fetchBatchNotifications({ universityId: studentUniversityId, studyLevelId: studentStudyLevelId }).catch(() => []),
-          fetchEducationalResources({ universityId: studentUniversityId, studyLevelId: studentStudyLevelId, status: 'published' }).catch(() => []),
+          getAssessments(effectiveUnivId, undefined, 'published').catch(() => []),
+          fetchBatchNotifications({ universityId: effectiveUnivId, studyLevelId: studentStudyLevelId }).catch(() => []),
+          fetchEducationalResources({ universityId: effectiveUnivId, studyLevelId: studentStudyLevelId, status: 'published' }).catch(() => []),
           fetchStudentEnrollment(currentUid).catch(() => null)
         ]);
 
         if (publishedAssessments.length > 0) {
-          syncNotificationsForAssessments(currentUid, publishedAssessments, studentUniversityId, studentStudyLevelId);
+          syncNotificationsForAssessments(currentUid, publishedAssessments, effectiveUnivId, studentStudyLevelId);
         }
         if (batchPosts.length > 0) {
-          syncNotificationsForBatchPosts(currentUid, batchPosts, studentUniversityId, studentStudyLevelId);
+          syncNotificationsForBatchPosts(currentUid, batchPosts, effectiveUnivId, studentStudyLevelId);
         }
         if (publishedResources.length > 0) {
-          syncNotificationsForResources(currentUid, publishedResources, studentUniversityId, studentStudyLevelId);
+          syncNotificationsForResources(currentUid, publishedResources, effectiveUnivId, studentStudyLevelId);
         }
         if (enrollment) {
           syncNotificationForEnrollment(currentUid, enrollment);
@@ -211,9 +217,7 @@ export default function GlobalNotificationWatcher({
     };
 
     runSyncPass();
-    const interval = setInterval(runSyncPass, 12000);
-    return () => clearInterval(interval);
-  }, [user?.uid, studentUniversityId, studentStudyLevelId]);
+  }, [user?.uid, effectiveUnivId, studentStudyLevelId]);
 
   if (!liveToast || !user) return null;
 

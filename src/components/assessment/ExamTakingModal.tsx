@@ -57,6 +57,7 @@ import {
   resolveResultPublicDisplayName,
   buildShareableAssessmentUrl,
   savePendingGuestExamSubmission,
+  claimAndGradePendingGuestSubmission,
   PendingGuestExamSubmission,
   downloadExamBookletFile
 } from '../../services/assessmentService.ts';
@@ -64,8 +65,25 @@ import {
   extractOptionAndExplanation,
   sanitizeOptionTextForDisplay
 } from '../../services/mcqBulkParser.ts';
+import {
+  YEMEN_UNIVERSITIES_OPTIONS,
+  MEDICAL_SPECIALTIES_OPTIONS,
+  STUDY_LEVELS_OPTIONS,
+  validateUsernameFormat,
+  normalizeUsername,
+  checkIdentifierUniqueness
+} from '../../lib/firebase.ts';
+import { saveUserAcademicContext } from '../../services/academicService.ts';
 
 import { useAuth } from '../../context/AuthContext.tsx';
+
+const COLLEGES_OPTIONS = [
+  'كلية الطب البشري والعلوم الصحية',
+  'كلية الطب والعلوم الصحية',
+  'كلية طب الأسنان',
+  'كلية الصيدلة السريرية',
+  'كلية المختبرات والعلوم الطبية'
+];
 
 interface ExamTakingModalProps {
   assessment: Assessment;
@@ -94,7 +112,7 @@ export default function ExamTakingModal({
   onClose,
   onSubmitted
 }: ExamTakingModalProps) {
-  const { userProfile } = useAuth();
+  const { user, userProfile, registerWithUsername, loginWithIdentifier } = useAuth();
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
   const [answers, setAnswers] = useState<Record<string, string>>(attempt.answers || {});
   const [hasStartedSolving, setHasStartedSolving] = useState<boolean>(() => {
@@ -104,16 +122,33 @@ export default function ExamTakingModal({
   const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('saved');
   const [showConfirmSubmit, setShowConfirmSubmit] = useState<boolean>(false);
   const [showMandatoryGuestGate, setShowMandatoryGuestGate] = useState<boolean>(false);
+  const [pendingGuestScoredResult, setPendingGuestScoredResult] = useState<AssessmentResult | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copiedShareLink, setCopiedShareLink] = useState<boolean>(false);
   const [downloadingMode, setDownloadingMode] = useState<'solved' | 'blank' | null>(null);
   const [downloadedToast, setDownloadedToast] = useState<string | null>(null);
 
+  // Mandatory Academic Gate State for Guests finishing a Shared Exam
+  const [guestGateMode, setGuestGateMode] = useState<'register' | 'login'>('register');
+  const [guestFullName, setGuestFullName] = useState<string>('');
+  const [guestUsername, setGuestUsername] = useState<string>('');
+  const [guestUniversityId, setGuestUniversityId] = useState<string>(assessment.universityId || 'univ-dar-al-salam');
+  const [guestCollegeArabic, setGuestCollegeArabic] = useState<string>(COLLEGES_OPTIONS[0]);
+  const [guestSpecialtyArabic, setGuestSpecialtyArabic] = useState<string>(MEDICAL_SPECIALTIES_OPTIONS[0].nameArabic);
+  const [guestStudyLevelId, setGuestStudyLevelId] = useState<string>(assessment.studyLevelId || 'lvl-4');
+  const [guestLoginId, setGuestLoginId] = useState<string>('');
+  const [guestLoginPassword, setGuestLoginPassword] = useState<string>('');
+  const [guestGateSubmitting, setGuestGateSubmitting] = useState<boolean>(false);
+  const [guestGateError, setGuestGateError] = useState<string | null>(null);
+
+  // Effective guest status (false once the visitor completes inline account creation)
+  const effectiveIsGuest = isGuestMode && !user;
+
   // Automatic Student Leaderboard Identity from registered account
-  const initialIdentity = getStudentLeaderboardIdentity(uid);
-  const effectiveUsername = studentUsername || userProfile?.username || initialIdentity.username || '';
-  const effectiveFullName = userProfile?.displayNameArabic || studentNameArabic || 'طالب طب بشري';
+  const initialIdentity = getStudentLeaderboardIdentity(user?.uid || uid);
+  const effectiveUsername = studentUsername || userProfile?.username || initialIdentity.username || guestUsername || '';
+  const effectiveFullName = userProfile?.displayNameArabic || studentNameArabic || guestFullName || 'طالب طب بشري';
   const nameMode: LeaderboardNameMode = 'full_name';
   const customUsername = effectiveUsername;
 
@@ -359,7 +394,7 @@ export default function ExamTakingModal({
     try {
       const elapsedSeconds = Math.max(1, Math.floor((Date.now() - startedAtTimestampRef.current) / 1000));
 
-      if (isGuestMode) {
+      if (effectiveIsGuest) {
         const guestDisplayName = formatStudentLeaderboardName({
           uid: 'guest',
           fullNameArabic: studentNameArabic || 'زائر',
@@ -393,13 +428,16 @@ export default function ExamTakingModal({
           scoredResult: res.result
         };
         savePendingGuestExamSubmission(pendingPayload);
+        setPendingGuestScoredResult(res.result);
         setQueuedOfflineSubmit(false);
-        setResult(res.result);
+        // Gate result behind mandatory academic data & automatic account creation
+        setShowMandatoryGuestGate(true);
         return;
       }
 
+      const activeUid = user?.uid || uid;
       const publicDisplayName = await saveStudentLeaderboardIdentity(
-        uid,
+        activeUid,
         { username: customUsername, leaderboardNameMode: 'full_name' },
         effectiveFullName
       );
@@ -425,6 +463,95 @@ export default function ExamTakingModal({
     } finally {
       setSubmitting(false);
       setShowConfirmSubmit(false);
+    }
+  };
+
+  const handleCompleteGuestAcademicGate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (guestGateSubmitting) return;
+    setGuestGateError(null);
+    setGuestGateSubmitting(true);
+
+    try {
+      let finalStudentName = guestFullName.trim();
+
+      if (guestGateMode === 'register') {
+        const nameParts = finalStudentName.split(/\s+/).filter(Boolean);
+        if (nameParts.length < 3) {
+          setGuestGateError('يرجى إدخال الاسم الثلاثي كاملاً باللغة العربية (مثال: أحمد محمد علي)');
+          setGuestGateSubmitting(false);
+          return;
+        }
+        const fmt = validateUsernameFormat(guestUsername);
+        if (!fmt.valid) {
+          setGuestGateError(fmt.message || 'يرجى إدخال اسم مستخدم صحيح لا يقل عن 4 أحرف إنجليزية');
+          setGuestGateSubmitting(false);
+          return;
+        }
+        const uniqueCheck = await checkIdentifierUniqueness({ username: guestUsername.trim() });
+        if (!uniqueCheck.isUnique) {
+          setGuestGateError(uniqueCheck.message || 'اسم المستخدم مسجل مسبقاً، يرجى اختيار اسم مستخدم آخر');
+          setGuestGateSubmitting(false);
+          return;
+        }
+
+        const univObj = YEMEN_UNIVERSITIES_OPTIONS.find((u) => u.id === guestUniversityId);
+        const univNameArabic = univObj?.nameArabic || 'جامعة دار السلام الدولية للعلوم والتكنولوجيا';
+        const combinedSpecialty = `${guestCollegeArabic} — ${guestSpecialtyArabic}`;
+
+        await registerWithUsername(
+          guestUsername.trim(),
+          undefined,
+          finalStudentName,
+          {
+            universityId: guestUniversityId,
+            universityNameArabic: univNameArabic,
+            specialtyArabic: combinedSpecialty,
+            studyLevelId: guestStudyLevelId
+          }
+        );
+
+        saveUserAcademicContext({
+          universityId: guestUniversityId,
+          universityNameArabic: univNameArabic,
+          studyLevelId: guestStudyLevelId
+        });
+      } else {
+        if (!guestLoginId.trim()) {
+          setGuestGateError('يرجى إدخال اسم المستخدم (@username) أو البريد الإلكتروني أو رقم الهاتف');
+          setGuestGateSubmitting(false);
+          return;
+        }
+        await loginWithIdentifier(guestLoginId.trim(), guestLoginPassword || undefined);
+        finalStudentName = userProfile?.displayNameArabic || guestLoginId.trim();
+      }
+
+      // Claim and officially record the guest exam submission under the new authenticated account
+      const claimed = await claimAndGradePendingGuestSubmission(
+        user?.uid || uid || `usr_${normalizeUsername(guestUsername || guestLoginId)}`,
+        finalStudentName || 'طالب طب بشري'
+      );
+
+      const finalResult = claimed?.result || pendingGuestScoredResult;
+      if (finalResult) {
+        const enrichedResult: AssessmentResult = {
+          ...finalResult,
+          studentNameArabic: finalStudentName || finalResult.studentNameArabic,
+          studentDisplayNamePublic: finalStudentName || finalResult.studentDisplayNamePublic,
+          studentUsername: normalizeUsername(guestUsername || guestLoginId) || finalResult.studentUsername
+        };
+        setShowMandatoryGuestGate(false);
+        setResult(enrichedResult);
+        onSubmitted(enrichedResult);
+      }
+    } catch (err: any) {
+      let msg = err?.message || 'تعذر إنشاء الحساب وإظهار النتيجة. يرجى التحقق من البيانات والمحاولة مجدداً.';
+      if (msg.includes('email-already-in-use')) {
+        msg = 'اسم المستخدم هذا مسجل مسبقاً. اختر اسم مستخدم آخر أو اضغط على تبويب تسجيل الدخول لحسابك.';
+      }
+      setGuestGateError(msg);
+    } finally {
+      setGuestGateSubmitting(false);
     }
   };
 
@@ -1017,6 +1144,227 @@ export default function ExamTakingModal({
                 </div>
               </div>
             )}
+          </div>
+        ) : showMandatoryGuestGate ? (
+          /* A2) Mandatory Academic Data Gate for Guests to Reveal Shared Exam Result & Auto-Create Account */
+          <div className="max-w-2xl mx-auto bg-slate-900 border-2 border-teal-500/50 rounded-2xl p-5 sm:p-7 shadow-2xl space-y-5">
+            <div className="text-center space-y-2.5">
+              <div className="w-14 h-14 rounded-2xl bg-teal-500/20 border border-teal-500/40 text-teal-400 mx-auto flex items-center justify-center">
+                <Lock className="w-7 h-7" />
+              </div>
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-extrabold">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>تم حفظ وتصحيح إجاباتك ({answeredCount}/{questions.length} سؤال) بنجاح</span>
+              </span>
+              <h3 className="text-lg sm:text-xl font-extrabold text-white">
+                أكمل بياناتك الأكاديمية لإظهار نتيجتك وتفعيل حسابك تلقائياً
+              </h3>
+              <p className="text-xs text-slate-300 max-w-lg mx-auto leading-relaxed">
+                لإظهار درجتك التفصيلية والتعليلات الطبية وترتيبك التنافسي بين زملائك في <strong className="text-teal-300">«{assessment.titleArabic}»</strong>، يرجى إدخال بياناتك الأكاديمية أدناه ليتم إنشاء حسابك الرسمي تلقائياً (ويمكنك تعيين كلمة مرور لاحقاً من الإعدادات).
+              </p>
+            </div>
+
+            <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  setGuestGateMode('register');
+                  setGuestGateError(null);
+                }}
+                className={`flex-1 py-2.5 rounded-lg font-bold transition-colors ${
+                  guestGateMode === 'register'
+                    ? 'bg-teal-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                تسجيل بياناتي الأكاديمية (طالب جديد)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setGuestGateMode('login');
+                  setGuestGateError(null);
+                }}
+                className={`flex-1 py-2.5 rounded-lg font-bold transition-colors ${
+                  guestGateMode === 'login'
+                    ? 'bg-teal-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                لدي حساب مسجل مسبقاً
+              </button>
+            </div>
+
+            {guestGateError && (
+              <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-800 text-rose-200 text-xs flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                <span>{guestGateError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleCompleteGuestAcademicGate} className="space-y-4 text-xs">
+              {guestGateMode === 'register' ? (
+                <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-slate-200 font-bold mb-1">
+                        1. الاسم الثلاثي بالعربية *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={guestFullName}
+                        onChange={(e) => setGuestFullName(e.target.value)}
+                        placeholder="مثال: أحمد محمد علي"
+                        className="w-full px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs focus:outline-none focus:border-teal-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-200 font-bold mb-1">
+                        2. اسم المستخدم الفريد (@username) *
+                      </label>
+                      <div className="relative" dir="ltr">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-teal-400 font-mono font-bold">
+                          @
+                        </span>
+                        <input
+                          type="text"
+                          required
+                          value={guestUsername}
+                          onChange={(e) =>
+                            setGuestUsername(e.target.value.replace(/[^a-zA-Z0-9_.-]/g, ''))
+                          }
+                          placeholder="ahmed_med"
+                          className="w-full pl-7 pr-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white font-mono text-xs focus:outline-none focus:border-teal-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-slate-200 font-bold mb-1">
+                        3. الجامعة *
+                      </label>
+                      <select
+                        value={guestUniversityId}
+                        onChange={(e) => setGuestUniversityId(e.target.value)}
+                        className="w-full px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs focus:outline-none focus:border-teal-500"
+                      >
+                        {YEMEN_UNIVERSITIES_OPTIONS.map((u) => (
+                          <option key={u.id} value={u.id}>
+                            {u.nameArabic}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-slate-200 font-bold mb-1">
+                        4. الكلية *
+                      </label>
+                      <select
+                        value={guestCollegeArabic}
+                        onChange={(e) => setGuestCollegeArabic(e.target.value)}
+                        className="w-full px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs focus:outline-none focus:border-teal-500"
+                      >
+                        {COLLEGES_OPTIONS.map((col) => (
+                          <option key={col} value={col}>
+                            {col}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-slate-200 font-bold mb-1">
+                        5. التخصص الأكاديمي *
+                      </label>
+                      <select
+                        value={guestSpecialtyArabic}
+                        onChange={(e) => setGuestSpecialtyArabic(e.target.value)}
+                        className="w-full px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs focus:outline-none focus:border-teal-500"
+                      >
+                        {MEDICAL_SPECIALTIES_OPTIONS.map((sp) => (
+                          <option key={sp.id} value={sp.nameArabic}>
+                            {sp.nameArabic}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-slate-200 font-bold mb-1">
+                        6. المستوى الدراسي *
+                      </label>
+                      <select
+                        value={guestStudyLevelId}
+                        onChange={(e) => setGuestStudyLevelId(e.target.value)}
+                        className="w-full px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-teal-300 font-bold text-xs focus:outline-none focus:border-teal-500"
+                      >
+                        {STUDY_LEVELS_OPTIONS.map((lvl) => (
+                          <option key={lvl.id} value={lvl.id}>
+                            {lvl.nameArabic}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+                  <div>
+                    <label className="block text-slate-200 font-bold mb-1">
+                      اسم المستخدم (@username) أو البريد الإلكتروني أو رقم الهاتف:
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={guestLoginId}
+                      onChange={(e) => setGuestLoginId(e.target.value)}
+                      placeholder="@ahmed_med"
+                      className="w-full px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white font-mono text-xs focus:outline-none focus:border-teal-500"
+                      dir="ltr"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-200 font-bold mb-1">
+                      كلمة المرور (اتركها فارغة إذا سجلت بدون كلمة مرور):
+                    </label>
+                    <input
+                      type="password"
+                      value={guestLoginPassword}
+                      onChange={(e) => setGuestLoginPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white font-mono text-xs focus:outline-none focus:border-teal-500"
+                      dir="ltr"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={guestGateSubmitting}
+                className="w-full py-3.5 px-6 rounded-xl bg-gradient-to-l from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 disabled:opacity-50 text-white font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-xl shadow-teal-950/60 transition-all"
+              >
+                {guestGateSubmitting ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>جارٍ اعتماد بياناتك الأكاديمية وإظهار نتيجتك...</span>
+                  </>
+                ) : (
+                  <>
+                    <Award className="w-5 h-5" />
+                    <span>
+                      {guestGateMode === 'register'
+                        ? 'اعتماد البيانات وإنشاء حسابي تلقائياً وإظهار النتيجة الآن'
+                        : 'تسجيل الدخول وإظهار نتيجتي المعتمدة الآن'}
+                    </span>
+                  </>
+                )}
+              </button>
+            </form>
           </div>
         ) : !hasStartedSolving ? (
           /* B) Pre-Exam Readiness & "Start Exam Now" Screen (Timer starts only when student clicks Start Exam) */

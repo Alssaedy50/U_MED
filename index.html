@@ -17,7 +17,18 @@
     <title>UMED | منصة الطب البشري الموحدة - اليمن</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&family=IBM+Plex+Sans+Arabic:wght@400;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap"
+      media="print"
+      onload="this.media='all'"
+    />
+    <noscript>
+      <link
+        rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&family=IBM+Plex+Sans+Arabic:wght@400;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap"
+      />
+    </noscript>
     <script>
       // Capture beforeinstallprompt early so React components never miss the native install prompt
       window.__umedDeferredPrompt = null;
@@ -32,7 +43,7 @@
           if ('caches' in window) {
             caches.keys().then(function (names) {
               names.forEach(function (name) {
-                if (name !== 'umed-v2.3.0' && name !== 'umed-fonts-v1') {
+                if (name !== 'umed-v2.4.0' && name !== 'umed-fonts-v1') {
                   caches.delete(name);
                 }
               });

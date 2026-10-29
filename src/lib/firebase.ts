@@ -22,6 +22,8 @@ import {
 import { 
   getFirestore, 
   initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
   setLogLevel,
   doc, 
   getDoc, 
@@ -99,11 +101,22 @@ const dbId = (firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreData
 
 let firestoreInstance;
 try {
+  const firestoreSettings = {
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+    experimentalAutoDetectLongPolling: true,
+    ignoreUndefinedProperties: true
+  };
   firestoreInstance = dbId
-    ? initializeFirestore(app, { experimentalForceLongPolling: true, ignoreUndefinedProperties: true }, dbId)
-    : initializeFirestore(app, { experimentalForceLongPolling: true, ignoreUndefinedProperties: true });
+    ? initializeFirestore(app, firestoreSettings, dbId)
+    : initializeFirestore(app, firestoreSettings);
 } catch {
-  firestoreInstance = dbId ? getFirestore(app, dbId) : getFirestore(app);
+  try {
+    firestoreInstance = dbId
+      ? initializeFirestore(app, { experimentalAutoDetectLongPolling: true, ignoreUndefinedProperties: true }, dbId)
+      : initializeFirestore(app, { experimentalAutoDetectLongPolling: true, ignoreUndefinedProperties: true });
+  } catch {
+    firestoreInstance = dbId ? getFirestore(app, dbId) : getFirestore(app);
+  }
 }
 export const db = firestoreInstance;
 
@@ -1013,30 +1026,6 @@ export async function checkIdentifierUniqueness(params: {
         };
       }
     }
-
-    // 0.3 Verify against all active `userProfiles` in Cloud Firestore for both exact & similarity match
-    try {
-      const snap = await getDocs(collection(db, 'userProfiles'));
-      for (const d of snap.docs) {
-        if (d.id === excludeUid) continue;
-        const prof = d.data() as UserProfile;
-        if (!prof || !prof.username) continue;
-        const otherNorm = normalizeUsername(prof.username);
-        const otherSkel = getUsernameSimilarityKey(otherNorm);
-        if (otherNorm === normUsername || (similarityKey && otherSkel === similarityKey)) {
-          if (!(await isAccountDeletedInCloud(d.id))) {
-            return {
-              isUnique: false,
-              conflictField: 'username',
-              message:
-                otherNorm === normUsername
-                  ? `اسم المستخدم (@${normUsername}) مرتبط بحساب طالب آخر في السحابة.`
-                  : `منع تشابه أسماء المستخدمين: الاسم (@${normUsername}) يتشابه مع اسم المستخدم المسجل (@${otherNorm}). يرجى اختيار اسم مختلف.`
-            };
-          }
-        }
-      }
-    } catch (e) {}
   }
 
   // 1. Check Email Uniqueness
@@ -1436,24 +1425,25 @@ export async function syncAndDeduplicatePrimaryOwnerIdentity(params: {
   }
 
   try {
-    const profilesSnap = await getDocs(collection(db, 'userProfiles'));
-    for (const d of profilesSnap.docs) {
-      const p = d.data() as UserProfile;
-      const isOwnerMatch =
-        isInitialOwnerEmail(p.email) ||
-        p.isPrimaryOwner ||
-        (p.phone && normalizeYemenPhone(p.phone) === normPhone);
-      if (isOwnerMatch && d.id !== params.ownerUid) {
-        await deleteDoc(doc(db, 'userProfiles', d.id)).catch(() => {});
+    const ownerEmailsSlice = INITIAL_OWNER_EMAILS.slice(0, 10);
+    if (ownerEmailsSlice.length > 0) {
+      const profilesSnap = await getDocs(
+        query(collection(db, 'userProfiles'), where('email', 'in', ownerEmailsSlice))
+      );
+      for (const d of profilesSnap.docs) {
+        if (d.id !== params.ownerUid) {
+          await deleteDoc(doc(db, 'userProfiles', d.id)).catch(() => {});
+        }
       }
-    }
 
-    const rolesSnap = await getDocs(collection(db, 'userRoles'));
-    for (const d of rolesSnap.docs) {
-      const r = d.data() as UserRoleDoc;
-      if (isInitialOwnerEmail(r.email) && d.id !== params.ownerUid) {
-        await deleteDoc(doc(db, 'userRoles', d.id)).catch(() => {});
-        removeLocalRoleEntry(d.id);
+      const rolesSnap = await getDocs(
+        query(collection(db, 'userRoles'), where('email', 'in', ownerEmailsSlice))
+      );
+      for (const d of rolesSnap.docs) {
+        if (d.id !== params.ownerUid) {
+          await deleteDoc(doc(db, 'userRoles', d.id)).catch(() => {});
+          removeLocalRoleEntry(d.id);
+        }
       }
     }
   } catch (e) {}
@@ -2057,6 +2047,9 @@ export async function signUpWithPhone(phone: string, pass: string): Promise<{ us
 }
 
 export async function logOut(): Promise<void> {
+  try {
+    localStorage.removeItem('umed_last_active_user');
+  } catch (e) {}
   await signOut(auth);
 }
 
@@ -2600,6 +2593,15 @@ export async function saveUserProfile(profile: UserProfile): Promise<void> {
   const cleaned = cleanFirestoreData(profile);
   try {
     localStorage.setItem(`umed_cached_profile_${profile.uid}`, JSON.stringify(cleaned));
+    localStorage.setItem(
+      'umed_last_active_user',
+      JSON.stringify({
+        uid: profile.uid,
+        email: profile.email || '',
+        displayName: profile.displayNameArabic || profile.username || '',
+        photoURL: profile.avatarUrl || ''
+      })
+    );
   } catch (e) {}
   try {
     await Promise.all([

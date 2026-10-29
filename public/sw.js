@@ -4,7 +4,7 @@
  * UMED PWA Service Worker - Network-First with Offline Fallback
  */
 
-const CACHE_NAME = 'umed-v2.3.0';
+const CACHE_NAME = 'umed-v2.4.0';
 const FONT_CACHE_NAME = 'umed-fonts-v1';
 const STATIC_SHELL = [
   '/',
@@ -36,16 +36,24 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+function isStaticAssetPathname(pathname) {
+  return (
+    pathname.startsWith('/assets/') ||
+    /\.(?:js|mjs|css|svg|png|jpg|jpeg|webp|gif|ico|woff2?|ttf|otf|json)$/i.test(pathname)
+  );
+}
+
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
 
   const url = new URL(req.url);
 
-  // Cache Google Fonts (Cache-First) so Arabic fonts work 100% offline
+  // 1. Cache Google Fonts & CDN PDF.js (Cache-First) so fonts & PDF viewer work 100% offline
   if (
     url.origin === 'https://fonts.googleapis.com' ||
-    url.origin === 'https://fonts.gstatic.com'
+    url.origin === 'https://fonts.gstatic.com' ||
+    url.origin === 'https://cdnjs.cloudflare.com'
   ) {
     event.respondWith(
       caches.open(FONT_CACHE_NAME).then((cache) => {
@@ -73,7 +81,54 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Network-First strategy with full Offline Cache fallback for app shell, scripts, styles, and icons
+  // 2. Navigation requests (HTML shell): Stale-While-Revalidate for instant 0ms boot
+  if (req.mode === 'navigate' || url.pathname === '/' || url.pathname === '/index.html') {
+    event.respondWith(
+      caches.open(CACHE_NAME).then((cache) => {
+        return cache.match('/index.html').then((cachedIndex) => {
+          const networkFetch = fetch(req)
+            .then((networkRes) => {
+              if (networkRes && networkRes.status === 200) {
+                cache.put('/index.html', networkRes.clone()).catch(() => {});
+                cache.put(req, networkRes.clone()).catch(() => {});
+              }
+              return networkRes;
+            })
+            .catch(() => cachedIndex || cache.match('/'));
+
+          return cachedIndex || networkFetch;
+        });
+      })
+    );
+    return;
+  }
+
+  // 3. Static Assets (JS, CSS, Icons, Images, Manifest): Cache-First with background update
+  if (isStaticAssetPathname(url.pathname)) {
+    event.respondWith(
+      caches.open(CACHE_NAME).then((cache) => {
+        return cache.match(req).then((cachedAsset) => {
+          const fetchPromise = fetch(req)
+            .then((networkRes) => {
+              if (
+                networkRes &&
+                networkRes.status === 200 &&
+                (networkRes.type === 'basic' || networkRes.type === 'cors')
+              ) {
+                cache.put(req, networkRes.clone()).catch(() => {});
+              }
+              return networkRes;
+            })
+            .catch(() => cachedAsset || new Response('', { status: 504 }));
+
+          return cachedAsset || fetchPromise;
+        });
+      })
+    );
+    return;
+  }
+
+  // 4. Default fallback: Network-First with cache fallback
   event.respondWith(
     fetch(req)
       .then((networkResponse) => {
@@ -91,15 +146,7 @@ self.addEventListener('fetch', (event) => {
       })
       .catch(() => {
         return caches.match(req).then((cachedResponse) => {
-          if (cachedResponse) {
-            return cachedResponse;
-          }
-          if (req.mode === 'navigate') {
-            return caches.match('/index.html').then((indexRes) => {
-              return indexRes || caches.match('/');
-            });
-          }
-          return new Response('', { status: 504, statusText: 'Offline' });
+          return cachedResponse || new Response('', { status: 504, statusText: 'Offline' });
         });
       })
   );

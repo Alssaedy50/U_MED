@@ -120,12 +120,111 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+function readCachedInitialAuthSession(): {
+  cachedUser: User | null;
+  cachedRole: UserRoleDoc | null;
+  cachedProfile: UserProfile | null;
+} {
+  try {
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
+      return { cachedUser: null, cachedRole: null, cachedProfile: null };
+    }
+
+    let uid = '';
+    let email = '';
+    let displayName = '';
+    let photoURL = '';
+
+    const rawLastUser = localStorage.getItem('umed_last_active_user');
+    if (rawLastUser) {
+      const parsed = JSON.parse(rawLastUser);
+      if (parsed && parsed.uid) {
+        uid = String(parsed.uid);
+        email = String(parsed.email || '');
+        displayName = String(parsed.displayName || '');
+        photoURL = String(parsed.photoURL || '');
+      }
+    }
+
+    if (!uid) {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('firebase:authUser:')) {
+          const rawFb = localStorage.getItem(key);
+          if (rawFb) {
+            const parsedFb = JSON.parse(rawFb);
+            if (parsedFb && parsedFb.uid) {
+              uid = String(parsedFb.uid);
+              email = String(parsedFb.email || '');
+              displayName = String(parsedFb.displayName || '');
+              photoURL = String(parsedFb.photoURL || '');
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    if (!uid) {
+      return { cachedUser: null, cachedRole: null, cachedProfile: null };
+    }
+
+    let cachedProfile: UserProfile | null = null;
+    try {
+      const rawProf = localStorage.getItem(`umed_cached_profile_${uid}`);
+      if (rawProf) {
+        cachedProfile = JSON.parse(rawProf) as UserProfile;
+      }
+    } catch {}
+
+    let cachedRole: UserRoleDoc | null = null;
+    try {
+      const rawRole = localStorage.getItem(`umed_cached_role_${uid}`);
+      if (rawRole) {
+        cachedRole = JSON.parse(rawRole) as UserRoleDoc;
+      } else if (isInitialOwnerEmail(email)) {
+        cachedRole = {
+          uid,
+          email,
+          role: 'platform_owner',
+          assignedBy: 'SYSTEM_BOOTSTRAP',
+          assignedAt: new Date().toISOString()
+        };
+      }
+    } catch {}
+
+    const syntheticUser = {
+      uid,
+      email: email || cachedProfile?.email || null,
+      displayName: displayName || cachedProfile?.displayNameArabic || null,
+      photoURL: photoURL || cachedProfile?.avatarUrl || null,
+      emailVerified: true,
+      isAnonymous: false,
+      providerData: [],
+      getIdToken: async () => {
+        if (auth.currentUser) return auth.currentUser.getIdToken();
+        return '';
+      }
+    } as unknown as User;
+
+    return {
+      cachedUser: syntheticUser,
+      cachedRole,
+      cachedProfile
+    };
+  } catch {
+    return { cachedUser: null, cachedRole: null, cachedProfile: null };
+  }
+}
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [roleDoc, setRoleDoc] = useState<UserRoleDoc | null>(null);
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const initialSession = React.useMemo(() => readCachedInitialAuthSession(), []);
+  const [user, setUser] = useState<User | null>(() => auth.currentUser || initialSession.cachedUser);
+  const [roleDoc, setRoleDoc] = useState<UserRoleDoc | null>(() => initialSession.cachedRole);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(() => initialSession.cachedProfile);
   const [pendingVerification, setPendingVerification] = useState<VerificationChallenge | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
+  // 0ms synchronous boot: never block UI with a loading spinner on startup
+  const [loading, setLoading] = useState<boolean>(false);
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [firestoreConnected, setFirestoreConnected] = useState<boolean>(false);
   const [firestoreLatency, setFirestoreLatency] = useState<number | null>(null);
@@ -220,6 +319,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (currentUser) {
         setUser(currentUser);
         setPendingVerification(null);
+
+        try {
+          localStorage.setItem(
+            'umed_last_active_user',
+            JSON.stringify({
+              uid: currentUser.uid,
+              email: currentUser.email || '',
+              displayName: currentUser.displayName || '',
+              photoURL: currentUser.photoURL || ''
+            })
+          );
+        } catch (e) {}
 
         // Immediately hydrate cached role and profile so UI renders without waiting on slow mobile networks
         try {
@@ -321,6 +432,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }, () => {});
         } catch (e) {}
       } else {
+        try {
+          localStorage.removeItem('umed_last_active_user');
+        } catch (e) {}
         setUser(null);
         setRoleDoc(null);
         setUserProfile(null);

@@ -149,54 +149,129 @@ function PdfCanvasViewer({ fileUrl, downloadUrl, title, fileName }: PdfCanvasVie
     let cancelled = false;
     container.innerHTML = '';
 
-    async function renderAllPages() {
-      const maxPagesToRender = Math.min(numPages, 60);
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const maxPagesToRender = Math.min(numPages, 120);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const renderedPages = new Set<number>();
+    let observer: IntersectionObserver | null = null;
+
+    async function renderSinglePage(pageNum: number, pageSlot: HTMLDivElement) {
+      if (cancelled || renderedPages.has(pageNum)) return;
+      renderedPages.add(pageNum);
+
+      try {
+        const page = await pdfDoc.getPage(pageNum);
+        if (cancelled) return;
+
+        const baseViewport = page.getViewport({ scale: 1 });
+        const containerWidth = Math.max(300, Math.min(container?.clientWidth || 720, 860) - 24);
+        const fitScale = (containerWidth / baseViewport.width) * scale;
+        const viewport = page.getViewport({ scale: fitScale });
+
+        pageSlot.style.width = `${Math.floor(viewport.width)}px`;
+        pageSlot.style.minHeight = `${Math.floor(viewport.height) + 28}px`;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.floor(viewport.width * dpr);
+        canvas.height = Math.floor(viewport.height * dpr);
+        canvas.style.width = `${Math.floor(viewport.width)}px`;
+        canvas.style.height = `${Math.floor(viewport.height)}px`;
+        canvas.className = 'block bg-white';
+
+        const placeholder = pageSlot.querySelector('[data-pdf-placeholder]');
+        if (placeholder) {
+          pageSlot.replaceChild(canvas, placeholder);
+        } else {
+          pageSlot.appendChild(canvas);
+        }
+
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.scale(dpr, dpr);
+          await page.render({ canvasContext: ctx, viewport }).promise;
+        }
+      } catch {}
+    }
+
+    async function setupLazyPdfPages() {
+      // Estimate default page dimensions from page 1 for smooth scroll placeholders
+      let estimatedWidth = 680;
+      let estimatedHeight = 920;
+      try {
+        const firstPage = await pdfDoc.getPage(1);
+        if (!cancelled) {
+          const baseVp = firstPage.getViewport({ scale: 1 });
+          const cWidth = Math.max(300, Math.min(container?.clientWidth || 720, 860) - 24);
+          const fit = (cWidth / baseVp.width) * scale;
+          const vp = firstPage.getViewport({ scale: fit });
+          estimatedWidth = Math.floor(vp.width);
+          estimatedHeight = Math.floor(vp.height);
+        }
+      } catch {}
+
+      if (cancelled || !container) return;
+
+      const slots: Map<Element, number> = new Map();
+
+      if (typeof IntersectionObserver !== 'undefined') {
+        observer = new IntersectionObserver(
+          (entries) => {
+            entries.forEach((entry) => {
+              if (entry.isIntersecting) {
+                const pageNum = slots.get(entry.target);
+                if (pageNum) {
+                  observer?.unobserve(entry.target);
+                  renderSinglePage(pageNum, entry.target as HTMLDivElement);
+                }
+              }
+            });
+          },
+          { rootMargin: '400px 0px' }
+        );
+      }
 
       for (let pageNum = 1; pageNum <= maxPagesToRender; pageNum++) {
         if (cancelled) break;
-        try {
-          const page = await pdfDoc.getPage(pageNum);
-          if (cancelled) break;
 
-          const baseViewport = page.getViewport({ scale: 1 });
-          const containerWidth = Math.max(300, Math.min(container?.clientWidth || 720, 860) - 24);
-          const fitScale = (containerWidth / baseViewport.width) * scale;
-          const viewport = page.getViewport({ scale: fitScale });
+        const pageWrapper = document.createElement('div');
+        pageWrapper.className =
+          'relative bg-white rounded-xl shadow-lg overflow-hidden mx-auto mb-4 border border-slate-700';
+        pageWrapper.style.width = `${estimatedWidth}px`;
+        pageWrapper.style.minHeight = `${estimatedHeight + 28}px`;
 
-          const pageWrapper = document.createElement('div');
-          pageWrapper.className =
-            'relative bg-white rounded-xl shadow-lg overflow-hidden mx-auto mb-4 border border-slate-700';
-          pageWrapper.style.width = `${Math.floor(viewport.width)}px`;
+        const pageBadge = document.createElement('div');
+        pageBadge.className =
+          'px-2.5 py-1 bg-slate-900/85 text-slate-200 text-[10px] font-mono flex items-center justify-between border-b border-slate-800';
+        pageBadge.innerHTML = `<span>صفحة ${pageNum} من ${numPages}</span><span>U_MED PDF Reader</span>`;
 
-          const pageBadge = document.createElement('div');
-          pageBadge.className =
-            'px-2.5 py-1 bg-slate-900/85 text-slate-200 text-[10px] font-mono flex items-center justify-between border-b border-slate-800';
-          pageBadge.innerHTML = `<span>صفحة ${pageNum} من ${numPages}</span><span>U_MED PDF Reader</span>`;
+        const placeholder = document.createElement('div');
+        placeholder.setAttribute('data-pdf-placeholder', 'true');
+        placeholder.style.width = `${estimatedWidth}px`;
+        placeholder.style.height = `${estimatedHeight}px`;
+        placeholder.className =
+          'flex items-center justify-center bg-slate-100 text-slate-400 text-xs font-semibold';
+        placeholder.textContent = `جاري تجهيز صفحة ${pageNum}...`;
 
-          const canvas = document.createElement('canvas');
-          canvas.width = Math.floor(viewport.width * dpr);
-          canvas.height = Math.floor(viewport.height * dpr);
-          canvas.style.width = `${Math.floor(viewport.width)}px`;
-          canvas.style.height = `${Math.floor(viewport.height)}px`;
-          canvas.className = 'block bg-white';
+        pageWrapper.appendChild(pageBadge);
+        pageWrapper.appendChild(placeholder);
+        container.appendChild(pageWrapper);
 
-          pageWrapper.appendChild(pageBadge);
-          pageWrapper.appendChild(canvas);
-          container?.appendChild(pageWrapper);
-
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.scale(dpr, dpr);
-            await page.render({ canvasContext: ctx, viewport }).promise;
-          }
-        } catch {}
+        // Render the first 3 pages immediately; lazy-render pages 4+ on scroll
+        if (pageNum <= 3 || !observer) {
+          await renderSinglePage(pageNum, pageWrapper);
+        } else {
+          slots.set(pageWrapper, pageNum);
+          observer.observe(pageWrapper);
+        }
       }
     }
 
-    renderAllPages();
+    setupLazyPdfPages();
+
     return () => {
       cancelled = true;
+      if (observer) {
+        observer.disconnect();
+      }
     };
   }, [numPages, scale, htmlContent, useFallbackIframe]);
 
@@ -302,8 +377,25 @@ export default function ResourcePreviewModal({
   resource, 
   onClose 
 }: ResourcePreviewModalProps) {
-  // Low-Bandwidth Guard state: Requires explicit click to fetch stream
-  const [hasConfirmedLoad, setHasConfirmedLoad] = useState<boolean>(false);
+  // Open small (<= 5MB) or locally cached files immediately with a single click
+  const [hasConfirmedLoad, setHasConfirmedLoad] = useState<boolean>(() => {
+    const rawUrl = resource.url || '';
+    if (rawUrl.startsWith('data:') || rawUrl.startsWith('blob:')) return true;
+    try {
+      if (localStorage.getItem(`umed_res_blob_${resource.id}`)) return true;
+    } catch {}
+    const label = (resource.fileSizeLabel || '').trim().toUpperCase();
+    if (!label) return true;
+    const match = label.match(/([\d.]+)\s*(KB|MB|GB|B)?/);
+    if (!match) return true;
+    const num = parseFloat(match[1]);
+    const unit = match[2] || 'MB';
+    const sizeBytes =
+      unit === 'GB' ? num * 1024 * 1024 * 1024 :
+      unit === 'MB' ? num * 1024 * 1024 :
+      unit === 'KB' ? num * 1024 : num;
+    return sizeBytes <= 5 * 1024 * 1024;
+  });
   const [imageZoom, setImageZoom] = useState<number>(1);
   const [iframeError, setIframeError] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);

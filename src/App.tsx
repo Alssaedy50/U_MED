@@ -90,9 +90,7 @@ import {
   downloadExamBookletFile
 } from './services/assessmentService.ts';
 import { Assessment, AssessmentQuestionPublic, AssessmentResult } from './types/umed.ts';
-import ExamTakingModal from './components/assessment/ExamTakingModal.tsx';
 import StudentDashboard from './components/student/StudentDashboard.tsx';
-import StudentProfile from './components/student/StudentProfile.tsx';
 import GlobalNotificationWatcher from './components/notifications/GlobalNotificationWatcher.tsx';
 import NotificationCenterModal from './components/notifications/NotificationCenterModal.tsx';
 import {
@@ -110,6 +108,10 @@ import {
   PlatformOwnerSettingsCard,
   PlatformLegalAndContactModal
 } from './components/settings/PlatformOwnerSettingsModalAndCard.tsx';
+
+// Lazy-load secondary student views & heavy modals
+const ExamTakingModal = React.lazy(() => import('./components/assessment/ExamTakingModal.tsx'));
+const StudentProfile = React.lazy(() => import('./components/student/StudentProfile.tsx'));
 
 // Code-splitting admin heavy modules to minimize student initial bundle size
 const AcademicStructureManager = React.lazy(() => import('./components/admin/AcademicStructureManager.tsx'));
@@ -268,11 +270,12 @@ export default function App() {
   // First-time Registration Profile Picture & Academic Fields
   const [regAvatarUrl, setRegAvatarUrl] = useState<string>('');
   const [regUniversityId, setRegUniversityId] = useState<string>('univ-dar-al-salam');
+  const [regCollegeArabic, setRegCollegeArabic] = useState<string>('كلية الطب البشري والعلوم الصحية');
   const [regSpecialtyArabic, setRegSpecialtyArabic] = useState<string>('الطب البشري والجراحة العامة (MBBS)');
   const [regStudyLevelId, setRegStudyLevelId] = useState<string>('lvl-4');
   const [regSubmitting, setRegSubmitting] = useState<boolean>(false);
 
-  // Device Single-Account Verification State
+  // Device Single-Account Verification State (Deferred strictly to registration attempt)
   const [devicePolicy, setDevicePolicy] = useState<{
     checking: boolean;
     allowed: boolean;
@@ -282,7 +285,7 @@ export default function App() {
     message?: string;
     deviceId: string;
   }>(() => ({
-    checking: true,
+    checking: false,
     allowed: true,
     deviceId: getDeviceFingerprint().deviceId
   }));
@@ -336,37 +339,7 @@ export default function App() {
     userProfile?.studyLevelId
   ]);
 
-  // Verify device single-account policy whenever user is logged out
-  useEffect(() => {
-    if (user) return;
-    let cancelled = false;
-    const fp = getDeviceFingerprint();
-    setDevicePolicy((prev) => ({ ...prev, checking: true, deviceId: fp.deviceId }));
-    checkDeviceSingleAccountPolicy()
-      .then((res) => {
-        if (cancelled) return;
-        setDevicePolicy({
-          checking: false,
-          allowed: res.allowed,
-          existingUid: res.existingUid,
-          existingUsername: res.existingUsername,
-          existingDisplayName: res.existingDisplayName,
-          message: res.message,
-          deviceId: fp.deviceId
-        });
-        if (!res.allowed && res.existingUsername) {
-          setLoginIdentifierInput(res.existingUsername);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setDevicePolicy((prev) => ({ ...prev, checking: false, allowed: true }));
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [user?.uid]);
+  // Device single-account policy is deferred until actual registration submission (no boot network call)
 
   const handleRegPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -452,13 +425,14 @@ export default function App() {
   const [claimedLeaderboard, setClaimedLeaderboard] = useState<AssessmentResult[]>([]);
 
   useEffect(() => {
+    if (!showPublicModelsBrowser) return;
     getAssessments('univ-dar-al-salam')
       .then((list) => {
         const published = list.filter((a) => a.status === 'published');
         setPublicModelsList(published.length > 0 ? published : list);
       })
       .catch(() => {});
-  }, [isGuestExamOpen]);
+  }, [showPublicModelsBrowser]);
 
   // Global Platform Branding, Terms/Privacy & Contact Settings (Managed strictly by Platform Owner)
   const [platformSettings, setPlatformSettings] = useState<PlatformBrandingAndPolicies>(() =>
@@ -628,9 +602,9 @@ export default function App() {
     }
   }, [isAuthorizedAdmin, activeTab]);
 
-  // Start real-time academic sync immediately for all users, and subscribe to enrollment when logged in
+  // Start real-time academic sync ONLY for admins, and subscribe to enrollment when logged in
   useEffect(() => {
-    startAcademicRealtimeSync();
+    startAcademicRealtimeSync(isAuthorizedAdmin);
     if (!user) {
       setStudentEnrollment(null);
       return;
@@ -642,7 +616,16 @@ export default function App() {
       if (enr) setStudentEnrollment(enr);
     });
     return () => unsub();
-  }, [user?.uid]);
+  }, [user?.uid, isAuthorizedAdmin]);
+
+  // Preload secondary student views 1.5s after mount for instant navigation
+  useEffect(() => {
+    const preloadTimer = setTimeout(() => {
+      import('./components/student/StudentProfile.tsx').catch(() => {});
+      import('./components/assessment/ExamTakingModal.tsx').catch(() => {});
+    }, 1500);
+    return () => clearTimeout(preloadTimer);
+  }, []);
 
   useEffect(() => {
     if (loading) return;
@@ -748,6 +731,28 @@ export default function App() {
         setAuthSuccess('تم تسجيل الدخول ومزامنة حسابك السحابي بنجاح ✓');
         setActiveTab('student_dashboard');
       } else {
+        // Check device single-account policy ONLY when attempting registration
+        const fp = getDeviceFingerprint();
+        setDevicePolicy((prev) => ({ ...prev, checking: true, deviceId: fp.deviceId }));
+        const policyCheck = await checkDeviceSingleAccountPolicy();
+        setDevicePolicy({
+          checking: false,
+          allowed: policyCheck.allowed,
+          existingUid: policyCheck.existingUid,
+          existingUsername: policyCheck.existingUsername,
+          existingDisplayName: policyCheck.existingDisplayName,
+          message: policyCheck.message,
+          deviceId: fp.deviceId
+        });
+        if (!policyCheck.allowed) {
+          if (policyCheck.existingUsername) {
+            setLoginIdentifierInput(policyCheck.existingUsername);
+          }
+          setAuthError(policyCheck.message || 'هذا الجهاز مرتبط بحساب مسجل مسبقاً.');
+          setRegSubmitting(false);
+          return;
+        }
+
         // Mandatory First-Time Student Registration with Device Verification & Anti-Similarity
         if (authMethod === 'username') {
           const fmt = validateUsernameFormat(usernameInput);
@@ -758,6 +763,9 @@ export default function App() {
           }
           const univObj = YEMEN_UNIVERSITIES_OPTIONS.find((u) => u.id === regUniversityId);
           const univNameArabic = univObj?.nameArabic || 'جامعة دار السلام الدولية للعلوم والتكنولوجيا';
+          const combinedSpecialty = regCollegeArabic
+            ? `${regCollegeArabic} — ${regSpecialtyArabic}`
+            : regSpecialtyArabic;
 
           await registerWithUsername(
             usernameInput.trim(),
@@ -767,7 +775,7 @@ export default function App() {
               avatarUrl: regAvatarUrl || undefined,
               universityId: regUniversityId,
               universityNameArabic: univNameArabic,
-              specialtyArabic: regSpecialtyArabic,
+              specialtyArabic: combinedSpecialty,
               studyLevelId: regStudyLevelId
             }
           );
@@ -1092,57 +1100,68 @@ export default function App() {
 
       {/* TOP-LEVEL SHARED / GUEST EXAM TAKING MODAL (Works for both Guests & Authenticated Users regardless of Enrollment) */}
       {isGuestExamOpen && (sharedGuestData || pendingGuestSubmission) && (
-        <ExamTakingModal
-          assessment={(sharedGuestData?.assessment || pendingGuestSubmission?.assessment)!}
-          attempt={{
-            id: user
-              ? `att-shared-${user.uid}-${Date.now()}`
-              : `guest-attempt-${sharedGuestData?.assessment.id || pendingGuestSubmission?.assessmentId}`,
-            assessmentId: (sharedGuestData?.assessment.id || pendingGuestSubmission?.assessmentId)!,
-            uid: user?.uid || 'guest',
-            attemptNumber: 1,
-            startedAt: pendingGuestSubmission?.startedAt || new Date().toISOString(),
-            expiresAt: new Date(
-              Date.now() +
-                Number(
-                  sharedGuestData?.assessment.durationMinutes ||
-                    pendingGuestSubmission?.assessment.durationMinutes ||
-                    30
-                ) *
-                  60000
-            ).toISOString(),
-            answers: pendingGuestSubmission?.answers || {},
-            lastSavedAt: new Date().toISOString(),
-            status: 'in_progress'
-          }}
-          questions={sharedGuestData?.questions || []}
-          studentNameArabic={userProfile?.displayNameArabic || user?.displayName || undefined}
-          uid={user?.uid}
-          isGuestMode={false}
-          onRequireGuestAccount={(sub) => {
-            setPendingGuestSubmission(sub);
-            setIsGuestExamOpen(false);
-            clearSharedAssessmentIdFromUrl();
-            setAuthTab('register');
-            setActiveTab('auth');
-          }}
-          onClose={() => {
-            setIsGuestExamOpen(false);
-            clearSharedAssessmentIdFromUrl();
-          }}
-          onSubmitted={(res) => {
-            clearSharedAssessmentIdFromUrl();
-            if (sharedGuestData?.assessment) {
-              setClaimedGuestOutcome({
-                result: res,
-                assessment: sharedGuestData.assessment
-              });
-              getAssessmentLeaderboard(sharedGuestData.assessment.id)
-                .then((lb) => setClaimedLeaderboard(lb))
-                .catch(() => {});
-            }
-          }}
-        />
+        <React.Suspense
+          fallback={
+            <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex items-center justify-center p-4" dir="rtl">
+              <div className="max-w-md w-full bg-slate-900 border border-teal-500/40 rounded-2xl p-8 text-center space-y-4 shadow-2xl">
+                <RefreshCw className="w-9 h-9 animate-spin text-teal-400 mx-auto" />
+                <h2 className="text-sm font-bold text-white">جارٍ فتح واجهة الاختبار التفاعلي...</h2>
+              </div>
+            </div>
+          }
+        >
+          <ExamTakingModal
+            assessment={(sharedGuestData?.assessment || pendingGuestSubmission?.assessment)!}
+            attempt={{
+              id: user
+                ? `att-shared-${user.uid}-${Date.now()}`
+                : `guest-attempt-${sharedGuestData?.assessment.id || pendingGuestSubmission?.assessmentId}`,
+              assessmentId: (sharedGuestData?.assessment.id || pendingGuestSubmission?.assessmentId)!,
+              uid: user?.uid || 'guest',
+              attemptNumber: 1,
+              startedAt: pendingGuestSubmission?.startedAt || new Date().toISOString(),
+              expiresAt: new Date(
+                Date.now() +
+                  Number(
+                    sharedGuestData?.assessment.durationMinutes ||
+                      pendingGuestSubmission?.assessment.durationMinutes ||
+                      30
+                  ) *
+                    60000
+              ).toISOString(),
+              answers: pendingGuestSubmission?.answers || {},
+              lastSavedAt: new Date().toISOString(),
+              status: 'in_progress'
+            }}
+            questions={sharedGuestData?.questions || []}
+            studentNameArabic={userProfile?.displayNameArabic || user?.displayName || undefined}
+            uid={user?.uid}
+            isGuestMode={!user}
+            onRequireGuestAccount={(sub) => {
+              setPendingGuestSubmission(sub);
+              setIsGuestExamOpen(false);
+              clearSharedAssessmentIdFromUrl();
+              setAuthTab('register');
+              setActiveTab('auth');
+            }}
+            onClose={() => {
+              setIsGuestExamOpen(false);
+              clearSharedAssessmentIdFromUrl();
+            }}
+            onSubmitted={(res) => {
+              clearSharedAssessmentIdFromUrl();
+              if (sharedGuestData?.assessment) {
+                setClaimedGuestOutcome({
+                  result: res,
+                  assessment: sharedGuestData.assessment
+                });
+                getAssessmentLeaderboard(sharedGuestData.assessment.id)
+                  .then((lb) => setClaimedLeaderboard(lb))
+                  .catch(() => {});
+              }
+            }}
+          />
+        </React.Suspense>
       )}
 
       {/* TOP-LEVEL CLAIMED GUEST RESULT & LIVE RANKED LEADERBOARD MODAL */}
@@ -1623,14 +1642,14 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* 3. University, Specialty & Study Level Selection */}
+                  {/* 3. University, College, Specialty & Study Level Selection */}
                   <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
                     <div className="font-bold text-slate-200 flex items-center gap-1.5">
                       <GraduationCap className="w-4 h-4 text-teal-400" />
-                      <span>3. تحديد الجامعة والتخصص والمستوى الدراسي:</span>
+                      <span>3. البيانات الأكاديمية للطالب (الاسم الثلاثي، الجامعة، الكلية، التخصص، والمستوى):</span>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                       <div>
                         <label className="block text-slate-400 mb-1 text-[11px]">الجامعة:</label>
                         <select
@@ -1643,6 +1662,21 @@ export default function App() {
                               {u.nameArabic}
                             </option>
                           ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-slate-400 mb-1 text-[11px]">الكلية:</label>
+                        <select
+                          value={regCollegeArabic}
+                          onChange={(e) => setRegCollegeArabic(e.target.value)}
+                          className="w-full px-2.5 py-2 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs focus:outline-none focus:border-teal-500"
+                        >
+                          <option value="كلية الطب البشري والعلوم الصحية">كلية الطب البشري والعلوم الصحية</option>
+                          <option value="كلية الطب والعلوم الصحية">كلية الطب والعلوم الصحية</option>
+                          <option value="كلية طب الأسنان">كلية طب الأسنان</option>
+                          <option value="كلية الصيدلة السريرية">كلية الصيدلة السريرية</option>
+                          <option value="كلية المختبرات والعلوم الطبية">كلية المختبرات والعلوم الطبية</option>
                         </select>
                       </div>
 
@@ -1680,13 +1714,14 @@ export default function App() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
                       <div>
                         <label className="block text-slate-400 mb-1 text-[11px]">
-                          الاسم المعروض بالعربية (اختياري):
+                          الاسم الثلاثي بالعربية *:
                         </label>
                         <input
                           type="text"
+                          required
                           value={displayNameInput}
                           onChange={(e) => setDisplayNameInput(e.target.value)}
-                          placeholder="مثال: د. أحمد محمد"
+                          placeholder="مثال: أحمد محمد علي"
                           className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs focus:outline-none focus:border-teal-500"
                         />
                       </div>
@@ -2400,17 +2435,26 @@ export default function App() {
               )}
 
               {!isAdminMode && activeTab === 'student_profile' && (
-                <StudentProfile
-                  uid={user?.uid || 'visitor'}
-                  userEmail={user?.email || ''}
-                  displayNameArabic={userProfile?.displayNameArabic || user?.displayName || 'طالب كلية الطب البشري'}
-                  initialEnrollment={studentEnrollment}
-                  onNavigateTab={(tab) => {
-                    if (tab === 'library') setActiveTab('student_library');
-                    else if (tab === 'assessments') setActiveTab('student_assessments');
-                    else setActiveTab('student_dashboard');
-                  }}
-                />
+                <React.Suspense
+                  fallback={
+                    <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-6 space-y-4 animate-pulse" dir="rtl">
+                      <div className="h-6 w-48 bg-slate-800 rounded-lg" />
+                      <div className="h-32 bg-slate-800/70 rounded-xl" />
+                    </div>
+                  }
+                >
+                  <StudentProfile
+                    uid={user?.uid || 'visitor'}
+                    userEmail={user?.email || ''}
+                    displayNameArabic={userProfile?.displayNameArabic || user?.displayName || 'طالب كلية الطب البشري'}
+                    initialEnrollment={studentEnrollment}
+                    onNavigateTab={(tab) => {
+                      if (tab === 'library') setActiveTab('student_library');
+                      else if (tab === 'assessments') setActiveTab('student_assessments');
+                      else setActiveTab('student_dashboard');
+                    }}
+                  />
+                </React.Suspense>
               )}
 
               {/* ADMIN, UNIVERSITY OWNER, BATCH REP & DEPT HEAD WORKSPACE VIEWS */}

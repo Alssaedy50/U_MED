@@ -235,11 +235,11 @@ export function getCachedCollection<T extends { id: string }>(
 }
 
 /**
- * Starts real-time Firestore listeners for all academic hierarchy collections so any change made
- * by an admin or batch representative is immediately reflected across all connected users.
+ * Starts real-time Firestore listeners for academic hierarchy collections ONLY for authorized admins.
+ * Regular students read from persistent local cache + one-time sync without keeping 8 open listeners.
  */
-export function startAcademicRealtimeSync(): void {
-  if (realtimeWatchersStarted || !db) return;
+export function startAcademicRealtimeSync(enableRealtimeListeners = false): void {
+  if (!enableRealtimeListeners || realtimeWatchersStarted || !db) return;
   realtimeWatchersStarted = true;
 
   // Listen to shared deleted entity IDs
@@ -284,7 +284,6 @@ export function startAcademicRealtimeSync(): void {
 }
 
 export function subscribeToAcademicHierarchy(onUpdate: () => void): () => void {
-  startAcademicRealtimeSync();
   hierarchyListeners.add(onUpdate);
   return () => {
     hierarchyListeners.delete(onUpdate);
@@ -295,7 +294,6 @@ async function ensureCollectionInitialized<T extends { id: string }>(
   key: CollectionKey,
   firestoreCollectionName: string
 ): Promise<T[]> {
-  startAcademicRealtimeSync();
   const currentLocal = readLocalCollection<T>(key);
   if (currentLocal !== null && syncedCollections.has(key)) {
     return currentLocal;

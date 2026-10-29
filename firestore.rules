@@ -333,10 +333,10 @@ service cloud.firestore {
       allow delete: if isPlatformOwner() || isAnyAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
     }
 
-    // Assessment Results (Readable for ranked leaderboards & student scores)
+    // Assessment Results (Readable for ranked leaderboards & student scores; creation requires authenticated owner or admin)
     match /assessmentResults/{resultId} {
       allow read: if true;
-      allow create: if true;
+      allow create: if isAuthenticated() && (request.resource.data.uid == request.auth.uid || isAnyAdmin());
       allow update: if isAnyAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
       allow delete: if isPlatformOwner() || isAnyAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
     }
