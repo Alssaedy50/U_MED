@@ -7,7 +7,7 @@
  * Dynamically linked to Universities, Study Levels, Blocks, and Courses
  */
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, Suspense } from 'react';
 import { 
   Plus, 
   FileText, 
@@ -57,7 +57,8 @@ import {
   subscribeToUserAcademicContext
 } from '../../services/academicService.ts';
 import ResourcePreviewModal from '../library/ResourcePreviewModal.tsx';
-import TeleDriveBotStudioModal from './TeleDriveBotStudioModal.tsx';
+
+const TeleDriveBotStudioModal = React.lazy(() => import('./TeleDriveBotStudioModal.tsx'));
 
 interface EducationalContentManagerProps {
   adminUid: string;
@@ -2064,15 +2065,28 @@ export default function EducationalContentManager({
       )}
 
       {/* TeleDrive MTProto Ingestion Studio Modal */}
-      <TeleDriveBotStudioModal
-        isOpen={showBotStudioModal}
-        onClose={() => setShowBotStudioModal(false)}
-        defaultUniversityId={form.universityId || assignedUniversityId}
-        onDraftSimulated={() => {
-          loadResources();
-          setStatusFilter('draft');
-        }}
-      />
+      {showBotStudioModal && (
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm">
+              <div className="px-6 py-4 rounded-2xl bg-slate-900 border border-teal-500/30 text-teal-300 text-sm font-bold flex items-center gap-3 shadow-2xl">
+                <RefreshCw className="w-4 h-4 animate-spin text-teal-400" />
+                <span>جاري تحميل استوديو البوت...</span>
+              </div>
+            </div>
+          }
+        >
+          <TeleDriveBotStudioModal
+            isOpen={showBotStudioModal}
+            onClose={() => setShowBotStudioModal(false)}
+            defaultUniversityId={form.universityId || assignedUniversityId}
+            onDraftSimulated={() => {
+              loadResources();
+              setStatusFilter('draft');
+            }}
+          />
+        </Suspense>
+      )}
 
     </div>
   );
