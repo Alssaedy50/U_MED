@@ -19,7 +19,9 @@ import {
   AlertTriangle, 
   ShieldCheck, 
   Eye,
-  Volume2
+  Volume2,
+  Share2,
+  Check
 } from 'lucide-react';
 import { EducationalResource } from '../../types/umed.ts';
 import { resolveResourceFileUrl } from '../../services/resourceService.ts';
@@ -84,6 +86,7 @@ function PdfCanvasViewer({ fileUrl, downloadUrl, title, fileName }: PdfCanvasVie
   const [rendering, setRendering] = useState<boolean>(true);
   const [htmlContent, setHtmlContent] = useState<string | null>(null);
   const [useFallbackIframe, setUseFallbackIframe] = useState<boolean>(false);
+  const [fallbackIframeLoading, setFallbackIframeLoading] = useState<boolean>(true);
   const pdfDocRef = useRef<any>(null);
   const canvasContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -92,6 +95,7 @@ function PdfCanvasViewer({ fileUrl, downloadUrl, title, fileName }: PdfCanvasVie
     setRendering(true);
     setHtmlContent(null);
     setUseFallbackIframe(false);
+    setFallbackIframeLoading(true);
 
     async function loadPdfDocument() {
       try {
@@ -277,11 +281,18 @@ function PdfCanvasViewer({ fileUrl, downloadUrl, title, fileName }: PdfCanvasVie
 
   if (htmlContent) {
     return (
-      <div className="w-full h-[70vh] rounded-xl overflow-hidden border border-slate-800 bg-slate-900">
+      <div className="w-full h-[70vh] relative rounded-xl overflow-hidden border border-slate-800 bg-slate-900">
+        {fallbackIframeLoading && (
+          <div className="absolute inset-0 z-0 flex flex-col items-center justify-center gap-2 bg-slate-950/90 text-slate-300">
+            <RefreshCw className="w-6 h-6 animate-spin text-teal-400" />
+            <span className="text-xs font-bold">جارٍ تحميل محتوى المذكرة الطبية...</span>
+          </div>
+        )}
         <iframe
           srcDoc={htmlContent}
           title={title}
-          className="w-full h-full border-0"
+          onLoad={() => setFallbackIframeLoading(false)}
+          className="relative z-10 w-full h-full border-0"
         />
       </div>
     );
@@ -289,13 +300,22 @@ function PdfCanvasViewer({ fileUrl, downloadUrl, title, fileName }: PdfCanvasVie
 
   if (useFallbackIframe) {
     return (
-      <div className="w-full h-[70vh] flex flex-col rounded-xl overflow-hidden border border-slate-800 bg-slate-900">
-        <iframe
-          src={fileUrl}
-          title={title}
-          className="w-full flex-1 border-0 bg-white"
-        />
-        <div className="p-2.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-2">
+      <div className="w-full h-[70vh] flex flex-col rounded-xl overflow-hidden border border-slate-800 bg-slate-900 relative">
+        <div className="relative flex-1 w-full">
+          {fallbackIframeLoading && (
+            <div className="absolute inset-0 z-0 flex flex-col items-center justify-center gap-2 bg-slate-950/90 text-slate-300">
+              <RefreshCw className="w-6 h-6 animate-spin text-teal-400" />
+              <span className="text-xs font-bold">جارٍ تهيئة إطار المعاينة...</span>
+            </div>
+          )}
+          <iframe
+            src={fileUrl}
+            title={title}
+            onLoad={() => setFallbackIframeLoading(false)}
+            className="relative z-10 w-full h-full border-0 bg-white"
+          />
+        </div>
+        <div className="p-2.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-2 shrink-0">
           <span className="text-[11px] text-slate-300">
             إذا لم يظهر المستند داخل متصفح هاتفك، يمكنك فتحه أو تنزيله مباشرة:
           </span>
@@ -398,6 +418,7 @@ export default function ResourcePreviewModal({
   });
   const [imageZoom, setImageZoom] = useState<number>(1);
   const [iframeError, setIframeError] = useState<boolean>(false);
+  const [frameLoading, setFrameLoading] = useState<boolean>(true);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [loadProgress, setLoadProgress] = useState<number>(0);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -405,6 +426,7 @@ export default function ResourcePreviewModal({
   const [resolvedDownloadUrl, setResolvedDownloadUrl] = useState<string>('');
   const [isCloudStored, setIsCloudStored] = useState<boolean>(false);
   const [playbackRate, setPlaybackRate] = useState<number>(1);
+  const [copiedShare, setCopiedShare] = useState<boolean>(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const lowerFile = (resource.fileName || resource.title || '').toLowerCase().replace(/\.html$/i, '');
@@ -441,6 +463,7 @@ export default function ResourcePreviewModal({
     let createdViewBlobUrl = '';
     let createdDownloadBlobUrl = '';
     setIsLoading(true);
+    setFrameLoading(true);
     setLoadError(null);
     resolveResourceFileUrl(resource, (pct) => {
       if (active) setLoadProgress(pct);
@@ -488,12 +511,42 @@ export default function ResourcePreviewModal({
     }
   };
 
+  const handleShareResource = async () => {
+    const shareText = `📚 مورد طبي من منصة U_MED: ${resource.title}`;
+    const shareUrl =
+      resource.url && !resource.url.startsWith('umed-cloud://')
+        ? resource.url.startsWith('/')
+          ? `${window.location.origin}${resource.url}`
+          : resource.url
+        : window.location.href;
+
+    try {
+      if (typeof navigator !== 'undefined' && navigator.share) {
+        await navigator.share({
+          title: resource.title,
+          text: shareText,
+          url: shareUrl
+        });
+        return;
+      }
+    } catch {}
+
+    try {
+      await navigator.clipboard.writeText(`${shareText}\n${shareUrl}`);
+      setCopiedShare(true);
+      setTimeout(() => setCopiedShare(false), 2500);
+    } catch {
+      setCopiedShare(true);
+      setTimeout(() => setCopiedShare(false), 2500);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-start sm:items-center justify-center p-2.5 sm:p-5 overflow-y-auto overscroll-contain" dir="rtl">
       <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl max-h-[calc(100dvh-1.25rem)] sm:max-h-[92dvh] my-auto flex flex-col shadow-2xl overflow-hidden">
         
-        {/* Header Bar */}
-        <div className="p-3.5 sm:p-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3 shrink-0">
+        {/* Sleek Top Action Bar (Merged Title, Metadata, Download, Share & Close) */}
+        <div className="p-3 sm:p-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-2.5 shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
               isPdf ? 'bg-rose-500/10 text-rose-400' :
@@ -508,7 +561,7 @@ export default function ResourcePreviewModal({
             </div>
             
             <div className="min-w-0">
-              <h3 className="font-bold text-white text-sm truncate">
+              <h3 className="font-bold text-white text-xs sm:text-sm truncate">
                 {resource.title}
               </h3>
               <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-400 mt-0.5">
@@ -516,29 +569,54 @@ export default function ResourcePreviewModal({
                   {isAudio ? 'AUDIO' : isVideo ? 'VIDEO' : resource.resourceType}
                 </span>
                 <span>الحجم: <strong className="text-amber-300 font-mono">{resource.fileSizeLabel || 'غير محدد'}</strong></span>
-                <span>•</span>
-                <span>{resource.sectionType === 'theoretical' ? 'شعبة نظري' : resource.sectionType === 'practical' ? 'شعبة عملي / مختبر' : 'عام'}</span>
+                <span className="hidden xs:inline">•</span>
+                <span className="hidden xs:inline">
+                  {resource.sectionType === 'theoretical' ? 'نظري' : resource.sectionType === 'practical' ? 'عملي / مختبر' : 'عام'}
+                </span>
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
-            {resolvedDownloadUrl && (
-              <a
-                href={resolvedDownloadUrl}
-                download={resource.fileName || `${resource.title}.${isPdf ? 'pdf' : isAudio ? 'mp3' : isVideo ? 'mp4' : 'jpg'}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-2.5 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors"
-                title="تنزيل الملف إلى جهازك"
+          {/* Merged Download & Share Top Action Toolbar */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            <div className="flex items-center bg-slate-900 border border-slate-800 rounded-xl p-0.5 gap-1">
+              {resolvedDownloadUrl && (
+                <a
+                  href={resolvedDownloadUrl}
+                  download={resource.fileName || `${resource.title}.${isPdf ? 'pdf' : isAudio ? 'mp3' : isVideo ? 'mp4' : 'jpg'}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-2.5 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors"
+                  title="تنزيل الملف إلى جهازك"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">تنزيل</span>
+                </a>
+              )}
+
+              <button
+                type="button"
+                onClick={handleShareResource}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                title="مشاركة رابط أو عنوان الملف"
               >
-                <Download className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">تنزيل للجهاز</span>
-              </a>
-            )}
+                {copiedShare ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="hidden sm:inline text-emerald-300">تم النسخ</span>
+                  </>
+                ) : (
+                  <>
+                    <Share2 className="w-3.5 h-3.5 text-indigo-400" />
+                    <span className="hidden sm:inline">مشاركة</span>
+                  </>
+                )}
+              </button>
+            </div>
+
             <button
               onClick={onClose}
-              className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-950/40 text-slate-400 hover:text-rose-300 transition-colors"
+              className="p-2 rounded-xl bg-slate-800 hover:bg-rose-950/40 text-slate-400 hover:text-rose-300 transition-colors"
               title="إغلاق"
             >
               <X className="w-4 h-4" />
@@ -686,7 +764,7 @@ export default function ResourcePreviewModal({
                 </div>
               )}
 
-              {/* 2. IMAGE / HISTOLOGY SLIDE VIEWER */}
+              {/* 2. IMAGE / HISTOLOGY SLIDE VIEWER WITH BACKGROUND LOADING SPINNER */}
               {isImage && resolvedViewUrl && (
                 <div className="w-full flex flex-col items-center justify-center space-y-3">
                   <div className="flex items-center gap-2 bg-slate-900 px-3 py-1.5 rounded-xl border border-slate-800 text-xs">
@@ -713,32 +791,50 @@ export default function ResourcePreviewModal({
                     </button>
                   </div>
 
-                  <div className="max-w-full max-h-[70vh] overflow-auto rounded-xl border border-slate-800 bg-black flex items-center justify-center p-2">
+                  <div className="relative max-w-full min-h-[260px] max-h-[70vh] overflow-auto rounded-xl border border-slate-800 bg-black flex items-center justify-center p-2 w-full">
+                    {frameLoading && (
+                      <div className="absolute inset-0 z-0 flex flex-col items-center justify-center gap-2 text-slate-300 bg-slate-950/90">
+                        <RefreshCw className="w-6 h-6 animate-spin text-teal-400" />
+                        <span className="text-xs font-bold">جارٍ عرض الشريحة الطبية...</span>
+                      </div>
+                    )}
                     <img 
                       src={resolvedViewUrl || undefined} 
                       alt={resource.title}
+                      onLoad={() => setFrameLoading(false)}
                       style={{ transform: `scale(${imageZoom})`, transition: 'transform 0.15s ease' }}
-                      className="max-h-[65vh] object-contain rounded-lg"
-                      onError={() => setIframeError(true)}
+                      className="relative z-10 max-h-[65vh] object-contain rounded-lg"
+                      onError={() => {
+                        setFrameLoading(false);
+                        setIframeError(true);
+                      }}
                     />
                   </div>
                 </div>
               )}
 
-              {/* 2.5 VIDEO LECTURE PLAYER */}
+              {/* 2.5 VIDEO LECTURE PLAYER WITH BACKGROUND LOADING SPINNER */}
               {isVideo && resolvedViewUrl && (
-                <div className="w-full max-w-3xl flex flex-col items-center justify-center space-y-3">
+                <div className="relative w-full max-w-3xl min-h-[260px] flex flex-col items-center justify-center space-y-3">
+                  {frameLoading && (
+                    <div className="absolute inset-0 z-0 flex flex-col items-center justify-center gap-2 rounded-xl bg-slate-950/90 text-slate-300 border border-slate-800">
+                      <RefreshCw className="w-6 h-6 animate-spin text-teal-400" />
+                      <span className="text-xs font-bold">جارٍ تهيئة مشغل الفيديو الطبي...</span>
+                    </div>
+                  )}
                   <video
                     controls
                     autoPlay
                     playsInline
+                    onLoadedData={() => setFrameLoading(false)}
+                    onCanPlay={() => setFrameLoading(false)}
                     src={resolvedViewUrl || undefined}
-                    className="w-full max-h-[68vh] rounded-xl border border-slate-800 bg-black shadow-2xl"
+                    className="relative z-10 w-full max-h-[68vh] rounded-xl border border-slate-800 bg-black shadow-2xl"
                   />
                 </div>
               )}
 
-              {/* 3. PDF & DOCUMENT VIEWER (Multi-Page Canvas for Blob/Stream PDFs, Iframe for External Drive Links) */}
+              {/* 3. PDF & DOCUMENT VIEWER (Multi-Page Canvas for Blob/Stream PDFs, Iframe with Loading Spinner Behind It for External Links) */}
               {!isImage && !isAudio && !isVideo && (
                 resolvedViewUrl.startsWith('blob:') || resolvedViewUrl.startsWith('/api/teledrive/stream/') ? (
                   <PdfCanvasViewer
@@ -770,13 +866,26 @@ export default function ResourcePreviewModal({
                         )}
                       </div>
                     ) : (
-                      <iframe
-                        src={resolvedViewUrl || undefined}
-                        title={resource.title}
-                        className="w-full h-full border-0"
-                        allow="autoplay"
-                        onError={() => setIframeError(true)}
-                      />
+                      <>
+                        {/* Clear Loading Spinner Behind Preview Frame until iframe finishes loading */}
+                        {frameLoading && (
+                          <div className="absolute inset-0 z-0 flex flex-col items-center justify-center gap-2.5 bg-slate-950/90 text-slate-300">
+                            <RefreshCw className="w-7 h-7 animate-spin text-teal-400" />
+                            <span className="text-xs font-bold">جارٍ تحميل معاينة المستند...</span>
+                          </div>
+                        )}
+                        <iframe
+                          src={resolvedViewUrl || undefined}
+                          title={resource.title}
+                          onLoad={() => setFrameLoading(false)}
+                          className="relative z-10 w-full h-full border-0"
+                          allow="autoplay"
+                          onError={() => {
+                            setFrameLoading(false);
+                            setIframeError(true);
+                          }}
+                        />
+                      </>
                     )}
                   </div>
                 )
@@ -801,4 +910,3 @@ export default function ResourcePreviewModal({
     </div>
   );
 }
-

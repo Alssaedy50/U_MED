@@ -130,11 +130,11 @@ function saveJson(filePath: string, data: any) {
 const defaultSA = decodeDefaultServiceAccount();
 const savedDiskConfig = loadJson<Partial<LiveBotConfig>>(BOT_CONFIG_FILE, {});
 
-const DEFAULT_VALID_BOT_TOKEN = '8787910034:AAF_TcpLPwj1m74jtY9XFaeeNv7bAD0aiD8';
+const DEFAULT_VALID_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 
 function normalizeBotToken(raw?: string): string {
   const trimmed = (raw || '').trim();
-  if (!trimmed || trimmed === '8787910034:AAF_TcpLPwj1m74jtY9XFaeeNv7bADOaiD8') {
+  if (!trimmed) {
     return DEFAULT_VALID_BOT_TOKEN;
   }
   return trimmed;
@@ -148,7 +148,7 @@ let botConfig: LiveBotConfig = {
   defaultUniversityId: process.env.DEFAULT_UNIVERSITY_ID || 'univ-dar-al-salam',
   firebaseProjectId: process.env.VITE_FIREBASE_PROJECT_ID || 'umed-yemen',
   ...savedDiskConfig,
-  botToken: normalizeBotToken(savedDiskConfig.botToken || process.env.BOT_TOKEN),
+  botToken: normalizeBotToken(savedDiskConfig.botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN),
   autoPublish: false,
   acceptAllMessagesAndFormats: true,
   serviceAccount: savedDiskConfig.serviceAccount?.private_key ? savedDiskConfig.serviceAccount : defaultSA

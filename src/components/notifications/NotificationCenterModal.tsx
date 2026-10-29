@@ -5,7 +5,8 @@
  * UMED Academic Notification Center Modal & Live Alerts Drawer
  * Allows medical students and faculty to:
  * - View unread alerts for posts, data, exams, competitions, and status updates
- * - Switch directly to the relevant course, exam, or library material
+ * - Filter quickly by [الكل | غير مقروء | الاختبارات | المحاضرات | منشورات الدفعة]
+ * - Switch directly to the relevant course, exam (via targetId / assessmentId), or library material
  * - Toggle sound alerts (Web Audio API synthesized chimes)
  * - Enable native browser notifications
  * - Run instant test alerts to verify system readiness
@@ -27,8 +28,6 @@ import {
   AlertCircle, 
   ExternalLink,
   Settings,
-  ChevronDown,
-  ChevronUp,
   ShieldCheck
 } from 'lucide-react';
 import { 
@@ -39,7 +38,6 @@ import {
   updateNotificationSettings,
   getBrowserNotificationPermission,
   requestBrowserNotificationPermission,
-  getStoredNotifications,
   subscribeToAppNotifications,
   markNotificationAsRead,
   markAllNotificationsAsRead,
@@ -55,6 +53,8 @@ interface NotificationCenterModalProps {
   isDarkMode?: boolean;
 }
 
+type NotificationFilterType = 'all' | 'unread' | 'assessment' | 'data' | 'post';
+
 export default function NotificationCenterModal({
   isOpen,
   onClose,
@@ -65,7 +65,7 @@ export default function NotificationCenterModal({
   const [settings, setSettings] = useState<NotificationSettings>(getNotificationSettings());
   const [browserPermission, setBrowserPermission] = useState<NotificationPermission | 'unsupported'>(getBrowserNotificationPermission());
   const [showSettingsDrawer, setShowSettingsDrawer] = useState<boolean>(false);
-  const [selectedFilter, setSelectedFilter] = useState<'all' | 'post' | 'data' | 'assessment' | 'update'>('all');
+  const [selectedFilter, setSelectedFilter] = useState<NotificationFilterType>('all');
   const [testAlertTriggering, setTestAlertTriggering] = useState<boolean>(false);
 
   useEffect(() => {
@@ -112,6 +112,11 @@ export default function NotificationCenterModal({
         ? 'student_library'
         : 'student_dashboard');
 
+    const resolvedTargetId =
+      notif.targetId ||
+      (notif.actionPayload?.targetId as string | undefined) ||
+      (notif.actionPayload?.assessmentId as string | undefined);
+
     const enrichedPayload: Record<string, unknown> = {
       ...(notif.actionPayload || {}),
       category: notif.category,
@@ -124,6 +129,11 @@ export default function NotificationCenterModal({
           : undefined)
     };
 
+    if ((notif.category === 'exam' || notif.category === 'competition') && resolvedTargetId) {
+      enrichedPayload.targetId = resolvedTargetId;
+      enrichedPayload.assessmentId = resolvedTargetId;
+    }
+
     if (onNavigateTab) {
       onNavigateTab(targetTab, enrichedPayload);
       onClose();
@@ -132,10 +142,10 @@ export default function NotificationCenterModal({
 
   const filteredNotifications = notifications.filter(n => {
     if (selectedFilter === 'all') return true;
-    if (selectedFilter === 'post') return n.category === 'post';
-    if (selectedFilter === 'data') return n.category === 'data';
+    if (selectedFilter === 'unread') return !n.read;
     if (selectedFilter === 'assessment') return n.category === 'exam' || n.category === 'competition';
-    if (selectedFilter === 'update') return n.category === 'update';
+    if (selectedFilter === 'data') return n.category === 'data';
+    if (selectedFilter === 'post') return n.category === 'post';
     return true;
   });
 
@@ -218,7 +228,7 @@ export default function NotificationCenterModal({
             <div className="relative p-2.5 rounded-xl bg-gradient-to-tr from-sky-500 to-indigo-600 text-white shadow-md">
               <Bell className="w-5 h-5 animate-pulse" />
               {unreadCount > 0 && (
-                <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[10px] font-bold text-white shadow">
+                <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[10px] font-bold text-white shadow tabular-nums">
                   {unreadCount > 9 ? '+9' : unreadCount}
                 </span>
               )}
@@ -227,7 +237,7 @@ export default function NotificationCenterModal({
               <h2 className="text-base sm:text-lg font-bold flex items-center gap-2">
                 مركز التنبيهات الأكاديمية
                 {unreadCount > 0 && (
-                  <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-semibold tabular-nums ${
                     isDarkMode ? 'bg-sky-950 text-sky-400 border border-sky-800' : 'bg-sky-100 text-sky-700'
                   }`}>
                     {unreadCount} جديد
@@ -391,21 +401,22 @@ export default function NotificationCenterModal({
           </div>
         )}
 
-        {/* Filter Pills */}
+        {/* Quick Filter Bar: [الكل | غير مقروء | الاختبارات | المحاضرات | منشورات الدفعة] */}
         <div className={`p-2.5 border-b flex items-center gap-1.5 overflow-x-auto no-scrollbar ${
           isDarkMode ? 'border-slate-800 bg-slate-900/50' : 'border-slate-200 bg-white'
         }`}>
           {[
-            { id: 'all', label: 'الكل' },
-            { id: 'post', label: '📢 منشورات' },
-            { id: 'data', label: '📚 داتا' },
-            { id: 'assessment', label: '📝 اختبارات ومسابقات' },
-            { id: 'update', label: '🔄 تحديثات' }
+            { id: 'all' as const, label: 'الكل' },
+            { id: 'unread' as const, label: `غير مقروء${unreadCount > 0 ? ` (${unreadCount})` : ''}` },
+            { id: 'assessment' as const, label: 'الاختبارات' },
+            { id: 'data' as const, label: 'المحاضرات' },
+            { id: 'post' as const, label: 'منشورات الدفعة' }
           ].map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setSelectedFilter(tab.id as typeof selectedFilter)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+              type="button"
+              onClick={() => setSelectedFilter(tab.id)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all tabular-nums ${
                 selectedFilter === tab.id
                   ? 'bg-sky-500 text-white shadow-sm shadow-sky-500/20'
                   : (isDarkMode ? 'bg-slate-800 text-slate-400 hover:text-slate-200' : 'bg-slate-100 text-slate-600 hover:bg-slate-200')
@@ -425,7 +436,7 @@ export default function NotificationCenterModal({
               }`}>
                 <Bell className="w-7 h-7" />
               </div>
-              <h3 className="text-sm font-bold mb-1">لا توجد إشعارات جديدة حالياً</h3>
+              <h3 className="text-sm font-bold mb-1">لا توجد إشعارات مطابقة حالياً</h3>
               <p className={`text-xs max-w-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
                 ستتلقى تنبيهات فورية هنا عند إضافة منشور، داتا، اختبار، أو مسابقة جديدة.
               </p>
@@ -460,7 +471,7 @@ export default function NotificationCenterModal({
                         }`}>
                           {notif.title}
                         </h4>
-                        <span className={`text-[10px] shrink-0 ${isDarkMode ? 'text-slate-400' : 'text-slate-400'}`}>
+                        <span className={`text-[10px] shrink-0 tabular-nums ${isDarkMode ? 'text-slate-400' : 'text-slate-400'}`}>
                           {formatTimestampArabic(notif.createdAt)}
                         </span>
                       </div>
@@ -478,7 +489,9 @@ export default function NotificationCenterModal({
 
                         {notif.actionTab && (
                           <span className="text-sky-400 font-semibold flex items-center gap-1 group-hover:underline">
-                            عرض التفاصيل
+                            {notif.category === 'exam' || notif.category === 'competition'
+                              ? 'فتح الاختبار مباشرة'
+                              : 'عرض التفاصيل'}
                             <ExternalLink className="w-3 h-3" />
                           </span>
                         )}

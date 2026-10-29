@@ -1,20 +1,85 @@
 <!doctype html>
-<html lang="ar" dir="rtl" class="dark">
+<html lang="ar" dir="rtl" data-theme="medical">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#020617" />
+    <meta name="theme-color" content="#0284c7" />
     <meta name="description" content="المنصة الأكاديمية والسريرية الموحدة لطلاب كليات الطب البشري في الجامعات اليمنية - UMED Unified Medical Education Platform" />
     <meta property="og:title" content="UMED | منصة الطب البشري الموحدة - اليمن" />
     <meta property="og:description" content="المنصة الأكاديمية والسريرية الموحدة لطلاب كليات الطب البشري في الجامعات اليمنية - UMED Unified Medical Education Platform" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="UMED" />
     <link rel="manifest" href="/manifest.json" />
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <link rel="apple-touch-icon" href="/icon.svg" />
     <title>UMED | منصة الطب البشري الموحدة - اليمن</title>
+    <script>
+      (function () {
+        try {
+          const savedTheme = localStorage.getItem('umed-theme') || 'medical';
+          document.documentElement.setAttribute('data-theme', savedTheme);
+          if (savedTheme === 'dark' || savedTheme === 'gold') {
+            document.documentElement.classList.add('dark');
+          } else {
+            document.documentElement.classList.remove('dark');
+          }
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'medical');
+          document.documentElement.classList.remove('dark');
+        }
+      })();
+    </script>
+    <style>
+      html[data-theme="medical"], html:not([data-theme]) {
+        background-color: #eef6f9;
+        color: #082f49;
+      }
+      html[data-theme="light"] {
+        background-color: #f1f5f9;
+        color: #0f172a;
+      }
+      html[data-theme="dark"] {
+        background-color: #060b14;
+        color: #f8fafc;
+      }
+      html[data-theme="gold"] {
+        background-color: #0c0a06;
+        color: #fef3c7;
+      }
+      #umed-boot-splash {
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background-color: #eef6f9;
+        color: #082f49;
+        font-family: 'Cairo', system-ui, -apple-system, sans-serif;
+        padding: 24px;
+        text-align: center;
+      }
+      html[data-theme="light"] #umed-boot-splash {
+        background-color: #f1f5f9;
+        color: #0f172a;
+      }
+      html[data-theme="dark"] #umed-boot-splash {
+        background-color: #060b14;
+        color: #f8fafc;
+      }
+      html[data-theme="gold"] #umed-boot-splash {
+        background-color: #0c0a06;
+        color: #fef3c7;
+      }
+      #umed-boot-splash .splash-subtitle {
+        font-size: 12px;
+        color: #475569;
+      }
+      html.dark #umed-boot-splash .splash-subtitle {
+        color: #94a3b8;
+      }
+    </style>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
@@ -53,16 +118,16 @@
       })();
     </script>
   </head>
-  <body class="bg-slate-950 text-slate-100 antialiased selection:bg-sky-500 selection:text-white">
+  <body class="antialiased selection:bg-sky-500 selection:text-white">
     <div id="root">
-      <div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#020617;color:#f8fafc;font-family:'Cairo',sans-serif;padding:24px;text-align:center;">
-        <div style="width:56px;height:56px;border-radius:16px;background:linear-gradient(135deg,#0284c7,#0d9488);display:flex;align-items:center;justify-content:center;box-shadow:0 10px 30px rgba(2,132,199,0.35);margin-bottom:16px;font-weight:900;font-size:20px;color:#fff;">
+      <div id="umed-boot-splash">
+        <div style="width:56px;height:56px;border-radius:16px;background:linear-gradient(135deg,#0284c7,#0d9488);display:flex;align-items:center;justify-content:center;box-shadow:0 10px 30px rgba(2,132,199,0.28);margin-bottom:16px;font-weight:900;font-size:20px;color:#ffffff;">
           U
         </div>
-        <div style="font-size:16px;font-weight:700;color:#e2e8f0;margin-bottom:6px;">
+        <div style="font-size:16px;font-weight:700;margin-bottom:6px;">
           منصة الطب البشري الموحدة — UMED
         </div>
-        <div style="font-size:12px;color:#94a3b8;">
+        <div class="splash-subtitle">
           جاري تهيئة النظام الأكاديمي والسريري...
         </div>
       </div>

@@ -747,192 +747,25 @@ app.post('/api/admin/generate-mcq-explanations', requireAdmin, async (req: Authe
       };
     });
 
-  try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return res.json({
-        success: true,
-        explanations: buildServerFallbackExplanations(rawQuestions)
-      });
-    }
-
-    const { GoogleGenAI, Type } = await import('@google/genai');
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build'
-        }
-      }
-    });
-
-    const formattedPromptItems = rawQuestions.map((q: any, idx: number) => {
-      const optionsText = (q.options || [])
-        .map((o: any) => `${o.id}: ${o.textArabic}${o.textEnglish ? ` (${o.textEnglish})` : ''}`)
-        .join(' | ');
-      const qLang =
-        q.language ||
-        (!/[\u0600-\u06FF]/.test(String(q.stemArabic || '')) && /[A-Za-z]/.test(String(q.stemArabic || ''))
-          ? 'en'
-          : 'ar');
-      return `Question #${idx + 1} [tempId=${q.tempId}] [Language=${qLang}]:
-Stem: ${q.stemArabic}
-${q.stemEnglish && q.stemEnglish !== q.stemArabic ? `Stem (EN): ${q.stemEnglish}\n` : ''}Options: ${optionsText}
-Authoritative User-Supplied Correct Option ID (DO NOT CHANGE): ${q.correctOptionId}`;
-    }).join('\n\n');
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: `You are an expert medical faculty professor generating concise, accurate medical rationales for multiple-choice questions (MCQs).
-For each question below, write the rationale in the SAME language as the question ([Language=en] -> write in professional Medical English; [Language=ar] or [Language=bilingual] -> write in clear Medical Arabic with English medical terms in parentheses):
-1) Explain why the user-supplied correct option (${'`Authoritative User-Supplied Correct Option ID`'}) is medically correct.
-2) Briefly explain why the other distractor options are incorrect.
-CRITICAL RULE: You must treat the supplied Correct Option ID as fixed and authoritative. Never alter or override the correct option ID.
-
-${formattedPromptItems}`,
-      config: {
-        systemInstruction: 'Return concise, clinically accurate medical explanations matching each question language. Never modify the user-supplied correct answer.',
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              tempId: {
-                type: Type.STRING,
-                description: 'The exact tempId provided in the input question.'
-              },
-              explanationArabic: {
-                type: Type.STRING,
-                description: 'Concise unified medical explanation (2-4 sentences) in the question language explaining why the correct option is right and why distractors are wrong.'
-              }
-            },
-            required: ['tempId', 'explanationArabic']
-          }
-        }
-      }
-    });
-
-    const jsonText = (response.text || '[]').trim();
-    const parsed = JSON.parse(jsonText);
-    const explanations = Array.isArray(parsed)
-      ? parsed.map((item: any) => ({
-          tempId: String(item.tempId || ''),
-          explanationArabic: String(item.explanationArabic || '').trim()
-        }))
-      : buildServerFallbackExplanations(rawQuestions);
-
-    return res.json({
-      success: true,
-      explanations
-    });
-  } catch (err: any) {
-    console.warn('[AI Explanations] Fallback triggered:', err?.message);
-    return res.json({
-      success: true,
-      explanations: buildServerFallbackExplanations(rawQuestions)
-    });
-  }
+  return res.json({
+    success: true,
+    explanations: buildServerFallbackExplanations(rawQuestions)
+  });
 });
 
-// 9d. Direct AI Smart Exam & Question Bank Generator / Formatter (Protected: Admin Only)
+// 9d. Direct Smart Exam & Question Bank Template Generator / Formatter (Protected: Admin Only)
 app.post('/api/admin/generate-smart-exam', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const {
-      mode = 'generate_new',
-      language = 'ar',
-      assessmentType = 'exam',
-      questionTypeMode = 'hybrid',
-      isDynamicQuestionCount = true,
-      title = '',
-      topic = 'القلب والأوعية الدموية (Cardiovascular System)',
-      universityName = '',
-      collegeName = '',
-      programName = '',
-      studyLevelName = 'المستوى الثاني',
-      blockName = '',
-      batchName = '',
-      durationMinutes = 30,
-      questionDurationSeconds = 45,
-      mcqCount = 5,
-      optionsCount = 4,
-      trueFalseCount = 1,
-      essayCount = 1,
-      fillBlankCount = 1,
-      difficultyMix = 'clinical_usmle',
-      includeOptionRationales = true,
-      rawContentToConvert = ''
+      language = 'ar'
     } = req.body || {};
 
-    const { buildProfessionalAiPrompt, getSampleTemplateByLanguage } = await import('../src/services/mcqBulkParser.ts');
-
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return res.json({
-        success: true,
-        usedFallback: true,
-        formattedText: getSampleTemplateByLanguage(language)
-      });
-    }
-
-    const { GoogleGenAI } = await import('@google/genai');
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build'
-        }
-      }
-    });
-
-    const masterPrompt = buildProfessionalAiPrompt({
-      mode,
-      language,
-      assessmentType,
-      questionTypeMode,
-      isDynamicQuestionCount: Boolean(isDynamicQuestionCount),
-      title,
-      topic,
-      universityName,
-      collegeName,
-      programName,
-      studyLevelName,
-      blockName,
-      batchName,
-      durationMinutes: Number(durationMinutes) || 30,
-      questionDurationSeconds: Number(questionDurationSeconds) || 45,
-      mcqCount: Math.min(Math.max(Number(mcqCount) || 0, 0), 500),
-      optionsCount: Math.min(Math.max(Number(optionsCount) || 4, 2), 10),
-      trueFalseCount: Math.min(Math.max(Number(trueFalseCount) || 0, 0), 500),
-      essayCount: Math.min(Math.max(Number(essayCount) || 0, 0), 500),
-      fillBlankCount: Math.min(Math.max(Number(fillBlankCount) || 0, 0), 500),
-      difficultyMix,
-      includeOptionRationales: Boolean(includeOptionRationales)
-    });
-
-    const fullContents =
-      mode === 'format_existing' && rawContentToConvert
-        ? `${masterPrompt}\n\n${rawContentToConvert}`
-        : masterPrompt;
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: fullContents
-    });
-
-    const rawText = (response.text || '').trim();
-    if (!rawText) {
-      return res.json({
-        success: true,
-        usedFallback: true,
-        formattedText: getSampleTemplateByLanguage(language)
-      });
-    }
+    const { getSampleTemplateByLanguage } = await import('../src/services/mcqBulkParser.ts');
 
     return res.json({
       success: true,
-      usedFallback: false,
-      formattedText: rawText
+      usedFallback: true,
+      formattedText: getSampleTemplateByLanguage(language)
     });
   } catch (err: any) {
     console.warn('[AI Smart Exam Generator] Fallback triggered:', err?.message);

@@ -5,9 +5,10 @@
  * UMED In-App PWA Install UI & Offline Synchronization Status Components
  * Provides:
  * 1. Header Install Button & Live Offline/Sync Indicator
- * 2. Sidebar Install Card
- * 3. Settings Page PWA & Offline Synchronization Control Panel
- * 4. Step-by-Step Guided Install Modal for Android, iOS Safari, and Desktop
+ * 2. Sidebar Install Card (Always available in WorkspaceSidebar)
+ * 3. Floating Bottom Install Banner with persistent localStorage dismissal ('umed_pwa_banner_dismissed_v1')
+ * 4. Settings Page PWA & Offline Synchronization Control Panel
+ * 5. Step-by-Step Guided Install Modal for Android, iOS Safari, and Desktop
  */
 
 import React, { useEffect, useState } from 'react';
@@ -32,6 +33,8 @@ import {
   flushQuestionOutbox
 } from '../../services/assessmentService.ts';
 import { dispatchAppNotification } from '../../services/notificationService.ts';
+
+export const PWA_BANNER_DISMISSED_STORAGE_KEY = 'umed_pwa_banner_dismissed_v1';
 
 function useUnifiedOfflineSyncState() {
   const isOnline = useOnlineStatus();
@@ -176,6 +179,79 @@ export const PWAInstallGuideModal: React.FC<{
   );
 };
 
+export const PWAFloatingInstallBanner: React.FC = () => {
+  const { isInstalled, isInstallable, isIOS, isAndroid, install, showInstallGuideModal, setShowInstallGuideModal } =
+    usePWAInstall();
+  const [dismissed, setDismissed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(PWA_BANNER_DISMISSED_STORAGE_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const handleDismissBanner = () => {
+    setDismissed(true);
+    try {
+      localStorage.setItem(PWA_BANNER_DISMISSED_STORAGE_KEY, 'true');
+    } catch {}
+  };
+
+  if (isInstalled || dismissed || (!isInstallable && !isIOS && !isAndroid)) {
+    return null;
+  }
+
+  return (
+    <>
+      <div
+        className="lg:hidden fixed bottom-16 left-3 right-3 z-30 max-w-md mx-auto bg-[var(--bg-card)]/95 backdrop-blur-md border border-teal-500/40 rounded-2xl p-2.5 px-3 shadow-xl flex items-center justify-between gap-2.5"
+        dir="rtl"
+      >
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="w-8 h-8 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-400 shrink-0">
+            <Smartphone className="w-4 h-4" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-xs font-bold text-[var(--text-primary)] truncate">
+              تثبيت تطبيق UMED على هاتفك
+            </div>
+            <div className="text-[10px] text-[var(--text-muted)] truncate">
+              تصفح أسرع وحفظ للاختبارات بدون إنترنت
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={install}
+            className="px-3 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-[11px] font-bold flex items-center gap-1 shadow-xs transition-colors"
+          >
+            <Download className="w-3.5 h-3.5 shrink-0" />
+            <span>تثبيت</span>
+          </button>
+          <button
+            type="button"
+            onClick={handleDismissBanner}
+            className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-elevated)] transition-colors"
+            title="إغلاق وعدم الإظهار مجدداً"
+            aria-label="إغلاق بانر التثبيت"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      <PWAInstallGuideModal
+        isOpen={showInstallGuideModal}
+        onClose={() => setShowInstallGuideModal(false)}
+        isIOS={isIOS}
+        isAndroid={isAndroid}
+      />
+    </>
+  );
+};
+
 export const PWAHeaderControls: React.FC = () => {
   const { isInstalled, isIOS, isAndroid, install, showInstallGuideModal, setShowInstallGuideModal } = usePWAInstall();
   const { isOnline, totalPending, isSyncing, triggerManualSync } = useUnifiedOfflineSyncState();
@@ -191,7 +267,7 @@ export const PWAHeaderControls: React.FC = () => {
           <WifiOff className="w-3.5 h-3.5 text-amber-400 animate-pulse shrink-0" />
           <span className="hidden sm:inline">وضع أوفلاين</span>
           {totalPending > 0 && (
-            <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-slate-950 font-mono text-[10px]">
+            <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-slate-950 font-mono text-[10px] tabular-nums">
               {totalPending}
             </span>
           )}
@@ -200,7 +276,7 @@ export const PWAHeaderControls: React.FC = () => {
         <button
           onClick={triggerManualSync}
           disabled={isSyncing}
-          className="px-2.5 py-1.5 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/40 text-sky-300 text-[11px] font-bold flex items-center gap-1.5 transition-colors"
+          className="px-2.5 py-1.5 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/40 text-sky-300 text-[11px] font-bold flex items-center gap-1.5 transition-colors tabular-nums"
           title="اضغط لمزامنة البيانات المحفوظة أوفلاين مع السحابة الآن"
         >
           <RefreshCw className={`w-3.5 h-3.5 text-sky-400 shrink-0 ${isSyncing ? 'animate-spin' : ''}`} />
@@ -271,7 +347,7 @@ export const PWASidebarInstallCard: React.FC = () => {
           <button
             onClick={triggerManualSync}
             disabled={!isOnline || isSyncing}
-            className="w-full py-1.5 px-2.5 rounded-lg bg-sky-950/60 hover:bg-sky-900/60 border border-sky-700/50 text-sky-300 text-[10px] font-bold flex items-center justify-center gap-1.5"
+            className="w-full py-1.5 px-2.5 rounded-lg bg-sky-950/60 hover:bg-sky-900/60 border border-sky-700/50 text-sky-300 text-[10px] font-bold flex items-center justify-center gap-1.5 tabular-nums"
           >
             <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
             <span>
@@ -358,11 +434,11 @@ export const PWASettingsCard: React.FC = () => {
               <HardDrive className="w-3.5 h-3.5 text-sky-400" />
               <span>حالة حفظ ومزامنة الإجابات والبيانات:</span>
             </span>
-            <span className="font-mono font-bold text-white">
+            <span className="font-mono font-bold text-white tabular-nums">
               {totalPending === 0 ? 'مزامن 100% ✓' : `${totalPending} بانتظار المزامنة`}
             </span>
           </div>
-          <div className="text-[11px] text-slate-400 space-y-1">
+          <div className="text-[11px] text-slate-400 space-y-1 tabular-nums">
             <div>• محاولات اختبارات محفوظة أوفلاين: <strong className="text-slate-200 font-mono">{pendingExams}</strong></div>
             <div>• أسئلة مستوردة محفوظة أوفلاين: <strong className="text-slate-200 font-mono">{pendingQuestions}</strong></div>
           </div>

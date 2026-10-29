@@ -845,57 +845,149 @@ export default function EducationalContentManager({
     setFilterCourseId('all');
   };
 
+  const publishedCount = useMemo(() => resources.filter(r => r.status === 'published').length, [resources]);
+  const draftCount = useMemo(() => resources.filter(r => r.status === 'draft').length, [resources]);
+  const pdfCount = useMemo(() => resources.filter(r => r.resourceType === 'pdf').length, [resources]);
+  const mediaAndSlidesCount = useMemo(() => resources.filter(r => r.resourceType !== 'pdf').length, [resources]);
+
   return (
     <div className="space-y-4">
       
-      {/* Unified Header & Primary Actions */}
-      <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-4 sm:p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 text-xs text-teal-400 font-bold">
-            <span>إدارة المحتوى والمكتبة الرقمية</span>
-            <span aria-hidden="true">·</span>
-            <span className="font-mono tabular-nums text-[var(--text-muted)]">إجمالي الملفات: {resources.length}</span>
+      {/* Unified Header & Primary Actions + Top Statistics Strip */}
+      <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-4 sm:p-5 shadow-sm space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-xs text-teal-400 font-bold">
+              <span>إدارة المحتوى والمكتبة الرقمية</span>
+              <span aria-hidden="true">·</span>
+              <span className="font-mono tabular-nums text-[var(--text-muted)]">إجمالي الملفات: {resources.length}</span>
+            </div>
+            <h2 className="text-base sm:text-lg font-black text-[var(--text-primary)]">
+              تنظيم ونشر المحاضرات والشرائح والمراجع الطبية
+            </h2>
+            <p className="text-xs text-[var(--text-muted)]">
+              تصفح وإدارة المحاضرات مباشرة، مع نافذة منبثقة مخصصة لإضافة أو تعديل أي مورد تعليمي.
+            </p>
           </div>
-          <h2 className="text-base sm:text-lg font-black text-[var(--text-primary)]">
-            تنظيم ونشر المحاضرات والشرائح والمراجع الطبية
-          </h2>
-          <p className="text-xs text-[var(--text-muted)]">
-            إدارة ملفات السحابة وجوجل درايف ومسودات تيليجرام، وتصنيفها حسب المستوى والبلوك والمقرر.
-          </p>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                loadAcademicHierarchy();
+                setUploadSourceMode('device_file');
+                setUploadError(null);
+                setShowAddModal(true);
+              }}
+              className="py-2.5 px-4 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-black text-xs flex items-center gap-2 shadow-lg shadow-teal-600/20 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            >
+              <Plus className="w-4 h-4 shrink-0" />
+              <span>+ إضافة مورد تعليمي جديد</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowBotStudioModal(true)}
+              className="py-2.5 px-3.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 font-bold text-xs flex items-center gap-2 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            >
+              <Cloud className="w-4 h-4 shrink-0" />
+              <span>استوديو السحب التلقائي (TeleDrive)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                loadAcademicHierarchy();
+                loadResources();
+              }}
+              className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors shrink-0"
+              title="تحديث المكتبة"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        {/* Top Statistics Strip (شريط الإحصائيات السريع) */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-3 border-t border-[var(--border-color)] text-xs">
           <button
             type="button"
-            onClick={() => setShowBotStudioModal(true)}
-            className="py-2.5 px-3.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 font-bold text-xs flex items-center gap-2 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            onClick={() => { setStatusFilter('all'); setTypeFilter('all'); }}
+            className={`p-3 rounded-xl border text-right transition-all flex items-center justify-between ${
+              statusFilter === 'all' && typeFilter === 'all'
+                ? 'bg-teal-500/10 border-teal-500/40'
+                : 'bg-[var(--bg-input)] border-[var(--border-color)] hover:border-teal-500/30'
+            }`}
           >
-            <Cloud className="w-4 h-4 shrink-0" />
-            <span>استوديو السحب التلقائي (TeleDrive)</span>
+            <div>
+              <span className="text-[11px] text-[var(--text-muted)] font-semibold block">إجمالي الموارد</span>
+              <span className="text-base sm:text-lg font-black text-[var(--text-primary)] font-mono tabular-nums mt-0.5 block">
+                {resources.length}
+              </span>
+            </div>
+            <div className="w-9 h-9 rounded-xl bg-teal-500/15 text-teal-400 flex items-center justify-center shrink-0">
+              <FileText className="w-4 h-4" />
+            </div>
           </button>
 
           <button
-            onClick={() => {
-              loadAcademicHierarchy();
-              setUploadSourceMode('device_file');
-              setUploadError(null);
-              setShowAddModal(true);
-            }}
-            className="py-2.5 px-4 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center gap-2 shadow-sm transition-colors whitespace-nowrap shrink-0"
+            type="button"
+            onClick={() => setStatusFilter('published')}
+            className={`p-3 rounded-xl border text-right transition-all flex items-center justify-between ${
+              statusFilter === 'published'
+                ? 'bg-emerald-500/10 border-emerald-500/40'
+                : 'bg-[var(--bg-input)] border-[var(--border-color)] hover:border-emerald-500/30'
+            }`}
           >
-            <Upload className="w-4 h-4 shrink-0" />
-            <span>رفع ملف أو إضافة محاضرة</span>
+            <div>
+              <span className="text-[11px] text-[var(--text-muted)] font-semibold block">منشور للطلاب</span>
+              <span className="text-base sm:text-lg font-black text-emerald-400 font-mono tabular-nums mt-0.5 block">
+                {publishedCount}
+              </span>
+            </div>
+            <div className="w-9 h-9 rounded-xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center shrink-0">
+              <CheckCircle2 className="w-4 h-4" />
+            </div>
           </button>
 
           <button
-            onClick={() => {
-              loadAcademicHierarchy();
-              loadResources();
-            }}
-            className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors shrink-0"
-            title="تحديث المكتبة"
+            type="button"
+            onClick={() => setStatusFilter('draft')}
+            className={`p-3 rounded-xl border text-right transition-all flex items-center justify-between ${
+              statusFilter === 'draft' || statusFilter === 'telegram_draft'
+                ? 'bg-amber-500/10 border-amber-500/40'
+                : 'bg-[var(--bg-input)] border-[var(--border-color)] hover:border-amber-500/30'
+            }`}
           >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            <div>
+              <span className="text-[11px] text-[var(--text-muted)] font-semibold block">مسودات وقيد المراجعة</span>
+              <span className="text-base sm:text-lg font-black text-amber-400 font-mono tabular-nums mt-0.5 block">
+                {draftCount}
+              </span>
+            </div>
+            <div className="w-9 h-9 rounded-xl bg-amber-500/15 text-amber-400 flex items-center justify-center shrink-0">
+              <AlertCircle className="w-4 h-4" />
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setTypeFilter(typeFilter === 'pdf' ? 'all' : 'pdf')}
+            className={`p-3 rounded-xl border text-right transition-all flex items-center justify-between ${
+              typeFilter === 'pdf'
+                ? 'bg-indigo-500/10 border-indigo-500/40'
+                : 'bg-[var(--bg-input)] border-[var(--border-color)] hover:border-indigo-500/30'
+            }`}
+          >
+            <div>
+              <span className="text-[11px] text-[var(--text-muted)] font-semibold block">ملفات PDF / وسائط</span>
+              <span className="text-sm sm:text-base font-black text-indigo-400 font-mono tabular-nums mt-0.5 block">
+                {pdfCount} PDF · {mediaAndSlidesCount} وسائط
+              </span>
+            </div>
+            <div className="w-9 h-9 rounded-xl bg-indigo-500/15 text-indigo-400 flex items-center justify-center shrink-0">
+              <ImageIcon className="w-4 h-4" />
+            </div>
           </button>
         </div>
       </div>

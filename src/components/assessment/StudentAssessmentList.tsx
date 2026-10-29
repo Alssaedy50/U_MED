@@ -3,11 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  * 
  * Student Assessment & Academic Competition List
- * Features:
- * - Student Display Name / Username Visibility Preference Bar
- * - Share Trial Exam Modal (Copy Link, WhatsApp, Telegram)
- * - Live Ordered Leaderboard Modal (Top Podium + Ranked Results)
- * - Optional Per-Question Timer, Optional Full Exam Timer, and Availability Countdown
+ * Organized into 3 Clean Top Tabs:
+ * 1) الاختبارات والمسابقات المتاحة
+ * 2) لوحة الشرف والترتيب (Leaderboard)
+ * 3) سجل محاولاتي ونتائجي السابقة مع الشهادات
  */
 
 import React, { useState, useEffect } from 'react';
@@ -30,17 +29,17 @@ import {
   Timer,
   Medal,
   X,
-  Sparkles,
   ExternalLink,
-  Download
+  Download,
+  History,
+  Sparkles
 } from 'lucide-react';
 import { 
   Assessment, 
   AssessmentAttempt, 
   AssessmentQuestionPublic, 
   AssessmentResult, 
-  AssessmentType,
-  LeaderboardNameMode
+  AssessmentType
 } from '../../types/umed.ts';
 import { 
   getPublishedAssessmentsForStudent, 
@@ -53,7 +52,6 @@ import {
   subscribeToExamOfflineSync,
   prefetchAssessmentsForOffline,
   getStudentLeaderboardIdentity,
-  saveStudentLeaderboardIdentity,
   formatStudentLeaderboardName,
   resolveResultPublicDisplayName,
   getAssessmentLeaderboard,
@@ -76,6 +74,8 @@ interface StudentAssessmentListProps {
   navigationTimestamp?: number;
 }
 
+type MainSectionTab = 'available' | 'leaderboard' | 'history_certificates';
+
 export default function StudentAssessmentList({
   universityId,
   studyLevelId,
@@ -85,7 +85,9 @@ export default function StudentAssessmentList({
   highlightedAssessmentId,
   navigationTimestamp
 }: StudentAssessmentListProps) {
-  const [activeTab, setActiveTab] = useState<AssessmentType>(initialAssessmentType || 'exam');
+  const [mainTab, setMainTab] = useState<MainSectionTab>('available');
+  const [typeFilter, setTypeFilter] = useState<'all' | AssessmentType>(initialAssessmentType || 'all');
+
   const [assessments, setAssessments] = useState<Assessment[]>(() =>
     getCachedPublishedAssessments(universityId, studyLevelId)
   );
@@ -118,41 +120,59 @@ export default function StudentAssessmentList({
   const [sharingAssessment, setSharingAssessment] = useState<Assessment | null>(null);
   const [copiedShareId, setCopiedShareId] = useState<string | null>(null);
 
-  // Ranked Leaderboard Modal State
-  const [leaderboardAssessment, setLeaderboardAssessment] = useState<Assessment | null>(null);
+  // Leaderboard Tab & Modal State
+  const [selectedLeaderboardAssessmentId, setSelectedLeaderboardAssessmentId] = useState<string>('');
   const [leaderboardItems, setLeaderboardItems] = useState<AssessmentResult[]>([]);
   const [loadingLeaderboard, setLoadingLeaderboard] = useState<boolean>(false);
 
-  // Synchronize activeTab when navigated from a notification (Exam vs Competition)
+  // Certificate Preview Modal State
+  const [certificatePreview, setCertificatePreview] = useState<{
+    assessment: Assessment;
+    result: AssessmentResult;
+  } | null>(null);
+
+  // Synchronize filter when navigated from a notification (Exam vs Competition)
   useEffect(() => {
     if (initialAssessmentType === 'competition' || initialAssessmentType === 'exam') {
-      setActiveTab(initialAssessmentType);
+      setMainTab('available');
+      setTypeFilter(initialAssessmentType);
     }
   }, [initialAssessmentType, navigationTimestamp]);
 
-  // Also auto-detect tab if highlightedAssessmentId matches a known assessment
+  // Auto-detect tab if highlightedAssessmentId matches a known assessment
   useEffect(() => {
     if (!highlightedAssessmentId || assessments.length === 0) return;
     const target = assessments.find((a) => a.id === highlightedAssessmentId);
-    if (target && (target.assessmentType === 'competition' || target.assessmentType === 'exam')) {
-      setActiveTab(target.assessmentType);
+    if (target) {
+      setMainTab('available');
+      setTypeFilter('all');
     }
   }, [highlightedAssessmentId, assessments]);
 
-  // Load Leaderboard when modal opens
+  // Ensure default selected assessment for Leaderboard tab
   useEffect(() => {
-    if (!leaderboardAssessment) return;
+    if (assessments.length > 0 && (!selectedLeaderboardAssessmentId || !assessments.some(a => a.id === selectedLeaderboardAssessmentId))) {
+      setSelectedLeaderboardAssessmentId(assessments[0].id);
+    }
+  }, [assessments, selectedLeaderboardAssessmentId]);
+
+  // Subscribe to Leaderboard for the selected assessment
+  useEffect(() => {
+    if (!selectedLeaderboardAssessmentId) {
+      setLeaderboardItems([]);
+      return;
+    }
     setLoadingLeaderboard(true);
-    getAssessmentLeaderboard(leaderboardAssessment.id)
+    getAssessmentLeaderboard(selectedLeaderboardAssessmentId)
       .then((ranked) => setLeaderboardItems(ranked))
       .catch(() => {})
       .finally(() => setLoadingLeaderboard(false));
 
-    const unsub = subscribeToAssessmentLeaderboard(leaderboardAssessment.id, (liveRanked) => {
+    const unsub = subscribeToAssessmentLeaderboard(selectedLeaderboardAssessmentId, (liveRanked) => {
       setLeaderboardItems(liveRanked);
     });
     return () => unsub();
-  }, [leaderboardAssessment]);
+  }, [selectedLeaderboardAssessmentId]);
 
   const loadData = async (showSpinner = false) => {
     if (showSpinner) setLoading(true);
@@ -214,7 +234,6 @@ export default function StudentAssessmentList({
     setStatusMsg(null);
 
     try {
-      // 1. Open ExamTakingModal in 0ms with local/resumed attempt & any cached questions
       const instant = prepareAttemptInstant(assessment, uid);
       setActiveInitialResult(null);
       setActiveAssessment(assessment);
@@ -222,7 +241,6 @@ export default function StudentAssessmentList({
       setActiveQuestions(instant.cachedQuestions);
       setStartingAttempt(null);
 
-      // 2. If questions are not yet fully cached locally, fetch them in 1 batch query while the modal is open
       const expectedCount = assessment.questionIds?.length || 1;
       if (instant.cachedQuestions.length < expectedCount) {
         const res = await startAttemptServer(assessment.id, assessment);
@@ -337,7 +355,7 @@ export default function StudentAssessmentList({
   });
 
   const filteredAssessments = assessments
-    .filter(a => a.assessmentType === activeTab)
+    .filter(a => typeFilter === 'all' || a.assessmentType === typeFilter)
     .sort((a, b) => {
       if (highlightedAssessmentId) {
         if (a.id === highlightedAssessmentId) return -1;
@@ -358,71 +376,82 @@ export default function StudentAssessmentList({
     }
   };
 
+  const passedCertificatesCount = results.filter((r) => r.isReleased && r.percentage >= 50).length;
+  const selectedLeaderboardAssessment = assessments.find((a) => a.id === selectedLeaderboardAssessmentId) || null;
+
   return (
     <div className="space-y-4" dir="rtl">
       
-      {/* Compact Top Header, Tab Switcher & Competitive Identity Strip */}
+      {/* 1. Top Header & 3 Primary Tabs: [الاختبارات والمسابقات المتاحة | لوحة الشرف والترتيب | سجل محاولاتي ونتائجي مع الشهادات] */}
       <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-3.5 sm:p-4 shadow-sm space-y-3 overflow-hidden">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="text-sm sm:text-base font-extrabold text-[var(--text-primary)] flex items-center gap-2">
-              <Trophy className="w-4 h-4 sm:w-5 sm:h-5 text-amber-400 shrink-0" />
-              <span className="truncate">مركز الاختبارات والمسابقات التنافسية</span>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <Trophy className="w-5 h-5 text-amber-400 shrink-0" />
+            <h2 className="text-sm sm:text-base font-extrabold text-[var(--text-primary)] truncate">
+              مركز الاختبارات والمسابقات والنتائج
             </h2>
-            <p className="hidden sm:block text-xs text-[var(--text-muted)] mt-0.5">
-              اختبارات المواد والمسابقات الطبية مع الترتيب التنافسي، المؤقتات الذكية، ومشاركة الاختبارات التجريبية
-            </p>
           </div>
 
-          {/* Segmented Tab Switcher */}
-          <div className="grid grid-cols-2 sm:flex items-center gap-1.5 p-1 bg-[var(--bg-input)] rounded-xl border border-[var(--border-color)] w-full sm:w-auto shrink-0">
+          <div className="flex items-center gap-2 text-xs">
+            <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-[var(--text-muted)]">
+              <UserCheck className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+              <span>هويتك التنافسية:</span>
+              <strong className="text-teal-400">{previewPublicName}</strong>
+            </div>
             <button
               type="button"
-              onClick={() => setActiveTab('exam')}
-              className={`justify-center px-3 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap tabular-nums ${
-                activeTab === 'exam'
-                  ? 'bg-teal-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-[var(--text-primary)]'
-              }`}
+              onClick={() => loadData(true)}
+              disabled={loading}
+              className="p-2 rounded-xl bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] border border-[var(--border-color)] text-[var(--text-primary)]"
+              title="تحديث القائمة"
             >
-              <FileText className="w-3.5 h-3.5 shrink-0" />
-              <span>امتحانات المواد</span>
-              <span className="font-mono text-[11px] opacity-90">
-                ({assessments.filter(a => a.assessmentType === 'exam').length})
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('competition')}
-              className={`justify-center px-3 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap tabular-nums ${
-                activeTab === 'competition'
-                  ? 'bg-amber-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-[var(--text-primary)]'
-              }`}
-            >
-              <Award className="w-3.5 h-3.5 shrink-0" />
-              <span>المسابقات الطبية</span>
-              <span className="font-mono text-[11px] opacity-90">
-                ({assessments.filter(a => a.assessmentType === 'competition').length})
-              </span>
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-teal-400' : ''}`} />
             </button>
           </div>
         </div>
 
-        {/* Single-Line Unboxed Competitive Identity Bar */}
-        <div className="pt-2.5 border-t border-[var(--border-color)]/70 flex items-center justify-between gap-2 text-xs flex-wrap">
-          <div className="flex items-center gap-1.5 min-w-0">
-            <UserCheck className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-            <span className="text-slate-400 text-[11px] shrink-0">الاسم في لوحة الشرف:</span>
-            <span className="text-teal-400 font-bold truncate" dir="auto">
-              {previewPublicName}
-            </span>
-          </div>
-          {effectiveUsername && (
-            <span className="text-[11px] font-mono text-slate-400 tabular-nums shrink-0" dir="ltr">
-              @{effectiveUsername.replace(/^@+/, '')}
-            </span>
-          )}
+        {/* 3 Main Tabs Bar */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 p-1 bg-[var(--bg-input)] rounded-xl border border-[var(--border-color)]">
+          <button
+            type="button"
+            onClick={() => setMainTab('available')}
+            className={`py-2.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 tabular-nums ${
+              mainTab === 'available'
+                ? 'bg-teal-600 text-white shadow-sm'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            <FileText className="w-4 h-4 shrink-0" />
+            <span className="truncate">الاختبارات والمسابقات المتاحة</span>
+            <span className="font-mono text-[11px] opacity-90">({assessments.length})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setMainTab('leaderboard')}
+            className={`py-2.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 tabular-nums ${
+              mainTab === 'leaderboard'
+                ? 'bg-amber-600 text-white shadow-sm'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            <Trophy className="w-4 h-4 shrink-0" />
+            <span className="truncate">لوحة الشرف والترتيب (Leaderboard)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setMainTab('history_certificates')}
+            className={`py-2.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 tabular-nums ${
+              mainTab === 'history_certificates'
+                ? 'bg-indigo-600 text-white shadow-sm'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            <History className="w-4 h-4 shrink-0" />
+            <span className="truncate">سجل محاولاتي ونتائجي مع الشهادات</span>
+            <span className="font-mono text-[11px] opacity-90">({results.length})</span>
+          </button>
         </div>
       </div>
 
@@ -446,233 +475,650 @@ export default function StudentAssessmentList({
         </div>
       )}
 
-      {loading ? (
-        <div className="p-10 text-center text-slate-400 space-y-2.5 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl">
-          <RefreshCw className="w-7 h-7 animate-spin mx-auto text-teal-400" />
-          <p className="text-xs">جاري تحميل الاختبارات والمسابقات المتاحة...</p>
-        </div>
-      ) : filteredAssessments.length === 0 ? (
-        <div className="p-10 text-center text-slate-400 space-y-2.5 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl">
-          <FileText className="w-10 h-10 mx-auto text-slate-600" />
-          <h3 className="text-sm font-bold text-[var(--text-primary)]">لا توجد تقييمات منشورة حالياً لهذا المستوى</h3>
-          <p className="text-xs text-slate-500 max-w-sm mx-auto">
-            لم يقم مسؤولو الكلية بنشر {activeTab === 'exam' ? 'امتحانات' : 'مسابقات'} جديدة لمستواك الأكاديمي الحالي بعد.
-          </p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 sm:gap-4">
-          {filteredAssessments.map((assessment) => {
-            const now = new Date();
-            const opensAt = new Date(assessment.opensAt);
-            const closesAt = new Date(assessment.closesAt);
+      {/* =====================================================================
+          TAB 1: الاختبارات والمسابقات المتاحة (Available Exams & Competitions)
+         ===================================================================== */}
+      {mainTab === 'available' && (
+        <div className="space-y-3.5">
+          {/* Quick Sub-Filter Pills: الكل | امتحانات المواد | المسابقات الطبية */}
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 [scrollbar-width:none]">
+            <button
+              type="button"
+              onClick={() => setTypeFilter('all')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold border transition-all shrink-0 tabular-nums ${
+                typeFilter === 'all'
+                  ? 'bg-teal-600 text-white border-teal-500 shadow-sm'
+                  : 'bg-[var(--bg-card)] text-[var(--text-secondary)] border-[var(--border-color)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              الكل ({assessments.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setTypeFilter('exam')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold border transition-all shrink-0 tabular-nums flex items-center gap-1.5 ${
+                typeFilter === 'exam'
+                  ? 'bg-teal-600 text-white border-teal-500 shadow-sm'
+                  : 'bg-[var(--bg-card)] text-[var(--text-secondary)] border-[var(--border-color)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>امتحانات المواد ({assessments.filter(a => a.assessmentType === 'exam').length})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setTypeFilter('competition')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold border transition-all shrink-0 tabular-nums flex items-center gap-1.5 ${
+                typeFilter === 'competition'
+                  ? 'bg-amber-600 text-white border-amber-500 shadow-sm'
+                  : 'bg-[var(--bg-card)] text-[var(--text-secondary)] border-[var(--border-color)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              <Award className="w-3.5 h-3.5" />
+              <span>المسابقات الطبية ({assessments.filter(a => a.assessmentType === 'competition').length})</span>
+            </button>
+          </div>
 
-            const isOpen = now >= opensAt && now <= closesAt;
-            const isUpcoming = now < opensAt;
+          {loading ? (
+            <div className="p-10 text-center text-[var(--text-muted)] space-y-2.5 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl">
+              <RefreshCw className="w-7 h-7 animate-spin mx-auto text-teal-400" />
+              <p className="text-xs">جاري تحميل الاختبارات والمسابقات المتاحة...</p>
+            </div>
+          ) : filteredAssessments.length === 0 ? (
+            <div className="p-10 text-center text-[var(--text-muted)] space-y-2.5 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl">
+              <FileText className="w-10 h-10 mx-auto text-[var(--text-muted)] opacity-60" />
+              <h3 className="text-sm font-bold text-[var(--text-primary)]">لا توجد تقييمات منشورة حالياً لهذا المستوى</h3>
+              <p className="text-xs text-[var(--text-muted)] max-w-sm mx-auto">
+                لم يقم مسؤولو الكلية بنشر اختبارات أو مسابقات جديدة لمستواك الأكاديمي الحالي بعد.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 sm:gap-4">
+              {filteredAssessments.map((assessment) => {
+                const now = new Date();
+                const opensAt = new Date(assessment.opensAt);
+                const closesAt = new Date(assessment.closesAt);
 
-            const userAttemptList = attempts.filter(
-              a => a.assessmentId === assessment.id && (a.status === 'scored' || a.status === 'submitted')
-            );
-            const activeInProgressAttempt = attempts.find(
-              a => a.assessmentId === assessment.id && a.status === 'in_progress' && new Date(a.expiresAt).getTime() > now.getTime()
-            );
-            const userResult = results.find(r => r.assessmentId === assessment.id);
-            const attemptCount = userAttemptList.length;
-            const hasMaxAttempts = attemptCount >= assessment.maxAttempts && !activeInProgressAttempt;
+                const isOpen = now >= opensAt && now <= closesAt;
+                const isUpcoming = now < opensAt;
 
-            const isHighlighted = Boolean(highlightedAssessmentId && highlightedAssessmentId === assessment.id);
-            const hasFullTimer = assessment.enableExamTimer !== false && Number(assessment.durationMinutes) > 0;
-            const hasPerQuestionTimer = Number(assessment.questionDurationSeconds || 0) > 0;
+                const userAttemptList = attempts.filter(
+                  a => a.assessmentId === assessment.id && (a.status === 'scored' || a.status === 'submitted')
+                );
+                const activeInProgressAttempt = attempts.find(
+                  a => a.assessmentId === assessment.id && a.status === 'in_progress' && new Date(a.expiresAt).getTime() > now.getTime()
+                );
+                const userResult = results.find(r => r.assessmentId === assessment.id);
+                const attemptCount = userAttemptList.length;
+                const hasMaxAttempts = attemptCount >= assessment.maxAttempts && !activeInProgressAttempt;
 
-            return (
-              <div 
-                key={assessment.id}
-                className={`umed-card bg-[var(--bg-card)] text-[var(--text-primary)] rounded-2xl p-4 sm:p-5 shadow-sm transition-all space-y-3.5 flex flex-col justify-between border overflow-hidden ${
-                  isHighlighted
-                    ? activeTab === 'competition'
-                      ? 'border-amber-500 ring-2 ring-amber-500/30'
-                      : 'border-teal-500 ring-2 ring-teal-500/30'
-                    : 'border-[var(--border-color)] hover:border-teal-500/40'
-                }`}
-              >
-                <div className="space-y-2.5">
-                  {/* Top Status Line: Single Status Pill + Clean Inline Metadata */}
-                  <div className="flex items-center justify-between gap-2 text-[11px] tabular-nums">
-                    <div className="flex items-center gap-2 min-w-0 flex-wrap">
-                      <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border shrink-0 ${
-                        isOpen 
-                          ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' 
-                          : isUpcoming 
-                          ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
-                          : 'bg-slate-800/80 text-slate-400 border-slate-700'
-                      }`}>
-                        {isOpen ? 'متاح الآن' : isUpcoming ? 'قادم قريباً' : 'مغلق / منتهي'}
-                      </span>
+                const isHighlighted = Boolean(highlightedAssessmentId && highlightedAssessmentId === assessment.id);
+                const hasFullTimer = assessment.enableExamTimer !== false && Number(assessment.durationMinutes) > 0;
+                const hasPerQuestionTimer = Number(assessment.questionDurationSeconds || 0) > 0;
+                const isCompetition = assessment.assessmentType === 'competition';
 
-                      {hasPerQuestionTimer && (
-                        <span className="inline-flex items-center gap-1 text-amber-400 font-bold">
-                          <Timer className="w-3.5 h-3.5 shrink-0" />
-                          <span>{assessment.questionDurationSeconds}ث / سؤال</span>
-                        </span>
-                      )}
-
-                      {isHighlighted && (
-                        <span className="text-sky-400 font-bold">· من الإشعار</span>
-                      )}
-                    </div>
-
-                    <span className="text-slate-400 font-mono tabular-nums shrink-0">
-                      المحاولات: <strong className="text-[var(--text-primary)]">{attemptCount}/{assessment.maxAttempts}</strong>
-                    </span>
-                  </div>
-
-                  {/* Assessment Title & Description */}
-                  <div>
-                    <h3 className="text-base font-extrabold text-[var(--text-primary)] leading-snug">
-                      {assessment.titleArabic}
-                    </h3>
-                    {assessment.descriptionArabic && (
-                      <p className="text-xs text-slate-400 line-clamp-2 mt-1 leading-relaxed">
-                        {assessment.descriptionArabic}
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Unboxed Hairline-Divided Telemetry Strip (Replaces Nested Box) */}
-                  <div className="py-2.5 border-y border-[var(--border-color)]/80 space-y-2 text-xs tabular-nums">
-                    <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <div className="flex items-center gap-1.5 text-[var(--text-primary)] font-semibold">
-                        <Clock className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-                        <span>
-                          {hasFullTimer ? `الوقت: ${assessment.durationMinutes} دقيقة` : 'الوقت: مفتوح'}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-[var(--text-primary)] font-semibold">
-                        <ShieldCheck className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-                        <span>الدرجة: <strong className="font-mono">{assessment.totalPoints}</strong> نقطة</span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400 flex-wrap">
-                      <div className="flex items-center gap-1.5">
-                        <Calendar className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                        <span>متاح حتى: <span className="font-mono">{formatDateLatin(assessment.closesAt)}</span></span>
-                      </div>
-                      {isOpen && (
-                        <span className="text-amber-400 font-bold">
-                          {formatRemainingAvailability(assessment.closesAt)}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Score Banner if completed */}
-                {userResult && (
-                  userResult.isReleased ? (
-                    <div className="px-3 py-2.5 rounded-xl bg-teal-500/10 border border-teal-500/30 flex items-center justify-between text-xs text-teal-300 tabular-nums">
-                      <div className="flex items-center gap-1.5">
-                        <Award className="w-4 h-4 text-teal-400 shrink-0" />
-                        <span>درجتك المعتمدة: <strong className="font-mono text-sm">{userResult.score}/{userResult.totalPoints}</strong></span>
-                      </div>
-                      <span className="font-mono font-extrabold text-teal-300">
-                        {userResult.percentage}%
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="px-3 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center gap-2 text-xs text-amber-300">
-                      <Lock className="w-4 h-4 shrink-0" />
-                      <span>تم تسليم المحاولة — ستظهر الدرجة فور إعلان النتائج رسمياً.</span>
-                    </div>
-                  )
-                )}
-
-                {/* Primary & Secondary Actions */}
-                <div className="space-y-2 pt-0.5">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      hasMaxAttempts && userResult
-                        ? handleOpenCompletedExamReview(assessment, userResult)
-                        : handleStartAttempt(assessment)
-                    }
-                    disabled={(!isOpen && !userResult) || (hasMaxAttempts && !userResult) || startingAttempt === assessment.id}
-                    className={`w-full min-h-[44px] py-2.5 px-4 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 transition-all active:scale-[0.99] ${
-                      isOpen && !hasMaxAttempts
-                        ? activeTab === 'competition'
-                          ? 'bg-amber-600 hover:bg-amber-500 text-white shadow-md shadow-amber-950/20'
-                          : 'bg-teal-600 hover:bg-teal-500 text-white shadow-md shadow-teal-950/20'
-                        : hasMaxAttempts && userResult
-                        ? 'bg-teal-950/90 hover:bg-teal-900 border border-teal-500/50 text-teal-200'
-                        : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                return (
+                  <div 
+                    key={assessment.id}
+                    className={`umed-card bg-[var(--bg-card)] text-[var(--text-primary)] rounded-2xl p-4 sm:p-5 shadow-sm transition-all space-y-3.5 flex flex-col justify-between border overflow-hidden ${
+                      isHighlighted
+                        ? isCompetition
+                          ? 'border-amber-500 ring-2 ring-amber-500/30'
+                          : 'border-teal-500 ring-2 ring-teal-500/30'
+                        : 'border-[var(--border-color)] hover:border-teal-500/40'
                     }`}
                   >
-                    {startingAttempt === assessment.id ? (
-                      <>
-                        <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
-                        <span>جارٍ فتح الاختبار...</span>
-                      </>
-                    ) : hasMaxAttempts && userResult ? (
-                      <>
-                        <Award className="w-4 h-4 text-teal-400 shrink-0" />
-                        <span>مراجعة النتيجة والتعليلات</span>
-                      </>
-                    ) : hasMaxAttempts ? (
-                      <>
-                        <CheckCircle2 className="w-4 h-4 shrink-0" />
-                        <span>تم استيفاء المحاولات المسموحة</span>
-                      </>
-                    ) : activeInProgressAttempt ? (
-                      <>
-                        <Play className="w-4 h-4 fill-current shrink-0" />
-                        <span>متابعة المحاولة الجارية (#{activeInProgressAttempt.attemptNumber || attemptCount + 1})</span>
-                      </>
-                    ) : isOpen ? (
-                      <>
-                        <Play className="w-4 h-4 fill-current shrink-0" />
-                        <span>{activeTab === 'competition' ? 'بدء الاختبار التنافسي الآن' : 'بدء الاختبار الآن'}</span>
-                      </>
-                    ) : (
-                      <span>الاختبار غير متاح حالياً</span>
+                    <div className="space-y-2.5">
+                      <div className="flex items-center justify-between gap-2 text-[11px] tabular-nums">
+                        <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                          <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border shrink-0 ${
+                            isOpen 
+                              ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' 
+                              : isUpcoming 
+                              ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                              : 'bg-slate-800/80 text-slate-400 border-slate-700'
+                          }`}>
+                            {isOpen ? 'متاح الآن' : isUpcoming ? 'قادم قريباً' : 'مغلق / منتهي'}
+                          </span>
+
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                            isCompetition
+                              ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                              : 'bg-teal-500/15 text-teal-400 border-teal-500/30'
+                          }`}>
+                            {isCompetition ? 'مسابقة تنافسية' : 'امتحان مادة'}
+                          </span>
+
+                          {hasPerQuestionTimer && (
+                            <span className="inline-flex items-center gap-1 text-amber-400 font-bold">
+                              <Timer className="w-3.5 h-3.5 shrink-0" />
+                              <span>{assessment.questionDurationSeconds}ث / سؤال</span>
+                            </span>
+                          )}
+                        </div>
+
+                        <span className="text-[var(--text-muted)] font-mono tabular-nums shrink-0">
+                          المحاولات: <strong className="text-[var(--text-primary)]">{attemptCount}/{assessment.maxAttempts}</strong>
+                        </span>
+                      </div>
+
+                      <div>
+                        <h3 className="text-base font-extrabold text-[var(--text-primary)] leading-snug">
+                          {assessment.titleArabic}
+                        </h3>
+                        {assessment.descriptionArabic && (
+                          <p className="text-xs text-[var(--text-secondary)] line-clamp-2 mt-1 leading-relaxed">
+                            {assessment.descriptionArabic}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="py-2.5 border-y border-[var(--border-color)]/80 space-y-2 text-xs tabular-nums">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <div className="flex items-center gap-1.5 text-[var(--text-primary)] font-semibold">
+                            <Clock className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                            <span>
+                              {hasFullTimer ? `الوقت: ${assessment.durationMinutes} دقيقة` : 'الوقت: مفتوح'}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[var(--text-primary)] font-semibold">
+                            <ShieldCheck className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                            <span>الدرجة: <strong className="font-mono">{assessment.totalPoints}</strong> نقطة</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--text-muted)] flex-wrap">
+                          <div className="flex items-center gap-1.5">
+                            <Calendar className="w-3.5 h-3.5 shrink-0" />
+                            <span>متاح حتى: <span className="font-mono">{formatDateLatin(assessment.closesAt)}</span></span>
+                          </div>
+                          {isOpen && (
+                            <span className="text-amber-400 font-bold">
+                              {formatRemainingAvailability(assessment.closesAt)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {userResult && (
+                      userResult.isReleased ? (
+                        <div className="px-3 py-2.5 rounded-xl bg-teal-500/10 border border-teal-500/30 flex items-center justify-between text-xs text-teal-400 tabular-nums">
+                          <div className="flex items-center gap-1.5">
+                            <Award className="w-4 h-4 text-teal-400 shrink-0" />
+                            <span>درجتك المعتمدة: <strong className="font-mono text-sm">{userResult.score}/{userResult.totalPoints}</strong></span>
+                          </div>
+                          <span className="font-mono font-extrabold">
+                            {userResult.percentage}%
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="px-3 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center gap-2 text-xs text-amber-400">
+                          <Lock className="w-4 h-4 shrink-0" />
+                          <span>تم تسليم المحاولة — ستظهر الدرجة فور إعلان النتائج رسمياً.</span>
+                        </div>
+                      )
                     )}
-                  </button>
 
-                  {/* Secondary Action Toolbar: 3 Fit-to-Width Mobile Buttons without Truncation */}
-                  <div className="grid grid-cols-3 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setLeaderboardAssessment(assessment)}
-                      className="py-2 px-2 min-h-[40px] rounded-xl bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] border border-[var(--border-color)] text-amber-400 text-[11px] sm:text-xs font-bold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap active:scale-[0.98]"
-                      title="عرض لوحة الترتيب وقائمة المتصدرين"
-                    >
-                      <Trophy className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                      <span>الترتيب</span>
-                    </button>
+                    <div className="space-y-2 pt-0.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          hasMaxAttempts && userResult
+                            ? handleOpenCompletedExamReview(assessment, userResult)
+                            : handleStartAttempt(assessment)
+                        }
+                        disabled={(!isOpen && !userResult) || (hasMaxAttempts && !userResult) || startingAttempt === assessment.id}
+                        className={`w-full min-h-[44px] py-2.5 px-4 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 transition-all active:scale-[0.99] ${
+                          isOpen && !hasMaxAttempts
+                            ? isCompetition
+                              ? 'bg-amber-600 hover:bg-amber-500 text-white shadow-md shadow-amber-950/20'
+                              : 'bg-teal-600 hover:bg-teal-500 text-white shadow-md shadow-teal-950/20'
+                            : hasMaxAttempts && userResult
+                            ? 'bg-teal-600/20 hover:bg-teal-600/30 border border-teal-500/50 text-teal-400'
+                            : 'bg-[var(--bg-input)] text-[var(--text-muted)] cursor-not-allowed'
+                        }`}
+                      >
+                        {startingAttempt === assessment.id ? (
+                          <>
+                            <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
+                            <span>جارٍ فتح الاختبار...</span>
+                          </>
+                        ) : hasMaxAttempts && userResult ? (
+                          <>
+                            <Award className="w-4 h-4 text-teal-400 shrink-0" />
+                            <span>مراجعة النتيجة والتعليلات</span>
+                          </>
+                        ) : hasMaxAttempts ? (
+                          <>
+                            <CheckCircle2 className="w-4 h-4 shrink-0" />
+                            <span>تم استيفاء المحاولات المسموحة</span>
+                          </>
+                        ) : activeInProgressAttempt ? (
+                          <>
+                            <Play className="w-4 h-4 fill-current shrink-0" />
+                            <span>متابعة المحاولة الجارية (#{activeInProgressAttempt.attemptNumber || attemptCount + 1})</span>
+                          </>
+                        ) : isOpen ? (
+                          <>
+                            <Play className="w-4 h-4 fill-current shrink-0" />
+                            <span>{isCompetition ? 'بدء المسابقة الآن' : 'بدء الاختبار الآن'}</span>
+                          </>
+                        ) : (
+                          <span>الاختبار غير متاح حالياً</span>
+                        )}
+                      </button>
 
-                    <button
-                      type="button"
-                      onClick={() => setDownloadModalAssessment({ assessment, result: userResult })}
-                      className="py-2 px-2 min-h-[40px] rounded-xl bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] border border-teal-500/30 text-teal-400 text-[11px] sm:text-xs font-bold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap active:scale-[0.98]"
-                      title="تحميل ملزمة الاختبار للمذاكرة والمراجعة الذاتية"
-                    >
-                      <Download className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-                      <span>الملزمة</span>
-                    </button>
+                      <div className="grid grid-cols-3 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedLeaderboardAssessmentId(assessment.id);
+                            setMainTab('leaderboard');
+                          }}
+                          className="py-2 px-2 min-h-[40px] rounded-xl bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] border border-[var(--border-color)] text-amber-400 text-[11px] sm:text-xs font-bold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap active:scale-[0.98]"
+                        >
+                          <Trophy className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          <span>لوحة الشرف</span>
+                        </button>
 
-                    <button
-                      type="button"
-                      onClick={() => setSharingAssessment(assessment)}
-                      className="py-2 px-2 min-h-[40px] rounded-xl bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] border border-indigo-500/30 text-indigo-300 text-[11px] sm:text-xs font-bold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap active:scale-[0.98]"
-                      title="مشاركة رابط الاختبار مع الزملاء"
-                    >
-                      <Share2 className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                      <span>مشاركة</span>
-                    </button>
+                        <button
+                          type="button"
+                          onClick={() => setDownloadModalAssessment({ assessment, result: userResult })}
+                          className="py-2 px-2 min-h-[40px] rounded-xl bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] border border-teal-500/30 text-teal-400 text-[11px] sm:text-xs font-bold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap active:scale-[0.98]"
+                        >
+                          <Download className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                          <span>الملزمة</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setSharingAssessment(assessment)}
+                          className="py-2 px-2 min-h-[40px] rounded-xl bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] border border-indigo-500/30 text-indigo-400 text-[11px] sm:text-xs font-bold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap active:scale-[0.98]"
+                        >
+                          <Share2 className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                          <span>مشاركة</span>
+                        </button>
+                      </div>
+                    </div>
+
                   </div>
-                </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
+      {/* =====================================================================
+          TAB 2: لوحة الشرف والترتيب (Leaderboard)
+         ===================================================================== */}
+      {mainTab === 'leaderboard' && (
+        <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-4 sm:p-5 space-y-4 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[var(--border-color)]">
+            <div>
+              <h3 className="text-sm sm:text-base font-extrabold text-[var(--text-primary)] flex items-center gap-2">
+                <Trophy className="w-5 h-5 text-amber-400 shrink-0" />
+                <span>لوحة الشرف وترتيب المتصدرين (Leaderboard)</span>
+              </h3>
+              <p className="text-xs text-[var(--text-muted)] mt-0.5">
+                اختر الاختبار أو المسابقة لعرض قائمة الأوائل والترتيب التنافسي حسب الدرجة والسرعة
+              </p>
+            </div>
+
+            {assessments.length > 0 && (
+              <select
+                value={selectedLeaderboardAssessmentId}
+                onChange={(e) => setSelectedLeaderboardAssessmentId(e.target.value)}
+                className="px-3.5 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] text-xs font-bold focus:outline-none focus:border-amber-500 sm:min-w-[260px]"
+              >
+                {assessments.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.assessmentType === 'competition' ? '🏆 ' : '📝 '}
+                    {a.titleArabic}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {assessments.length === 0 ? (
+            <div className="p-10 text-center text-[var(--text-muted)] text-xs space-y-2">
+              <Trophy className="w-10 h-10 mx-auto opacity-50" />
+              <div>لا توجد اختبارات أو مسابقات منشورة لعرض لوحة الشرف الخاصة بها حالياً.</div>
+            </div>
+          ) : loadingLeaderboard && leaderboardItems.length === 0 ? (
+            <div className="p-10 text-center text-xs text-[var(--text-muted)] space-y-2">
+              <RefreshCw className="w-6 h-6 animate-spin mx-auto text-amber-400" />
+              <div>جاري تحميل ترتيب الطلاب...</div>
+            </div>
+          ) : leaderboardItems.length === 0 ? (
+            <div className="p-10 text-center text-[var(--text-muted)] space-y-3 bg-[var(--bg-input)] rounded-2xl border border-[var(--border-color)]">
+              <Trophy className="w-10 h-10 mx-auto text-amber-400/60" />
+              <div className="text-sm font-bold text-[var(--text-primary)]">
+                لا توجد نتائج معلنة في لوحة الشرف لـ «{selectedLeaderboardAssessment?.titleArabic}» بعد
               </div>
-            );
-          })}
+              <p className="text-xs text-[var(--text-muted)]">
+                كن أول من يخوض هذا التقييم ليظهر اسمك في الصدارة (#1)!
+              </p>
+              {selectedLeaderboardAssessment && (
+                <button
+                  type="button"
+                  onClick={() => handleStartAttempt(selectedLeaderboardAssessment)}
+                  className="px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold inline-flex items-center gap-2 shadow-md"
+                >
+                  <Play className="w-4 h-4 fill-current" />
+                  <span>ابدأ الحل الآن وتصدر القائمة</span>
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {/* Top 3 Podium Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {leaderboardItems.slice(0, 3).map((topItem, i) => {
+                  const rnk = i + 1;
+                  const name = resolveResultPublicDisplayName(topItem);
+                  return (
+                    <div
+                      key={topItem.id || i}
+                      className={`p-4 rounded-2xl border text-center space-y-1.5 tabular-nums ${
+                        rnk === 1
+                          ? 'bg-amber-500/15 border-amber-500/50 shadow-sm'
+                          : rnk === 2
+                          ? 'bg-[var(--bg-elevated)] border-[var(--border-color)]'
+                          : 'bg-amber-700/15 border-amber-700/40'
+                      }`}
+                    >
+                      <div className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-[var(--bg-card)] border border-[var(--border-color)] text-xs font-extrabold font-mono text-amber-400">
+                        #{rnk}
+                      </div>
+                      <div className="text-xs sm:text-sm font-extrabold text-[var(--text-primary)] truncate">{name}</div>
+                      <div className="text-xl font-black text-teal-400 font-mono">
+                        {topItem.percentage}%
+                      </div>
+                      <div className="text-[11px] text-[var(--text-muted)] font-mono">
+                        {topItem.score}/{topItem.totalPoints} نقطة · {formatDurationShort(topItem.durationSeconds)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Full Ordered List */}
+              <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+                {leaderboardItems.map((item, idx) => {
+                  const rank = idx + 1;
+                  const isMe = item.uid === uid;
+                  const displayName = resolveResultPublicDisplayName(item);
+
+                  return (
+                    <div
+                      key={item.id || `${item.uid}-${idx}`}
+                      className={`flex items-center justify-between p-3 rounded-xl border text-xs tabular-nums ${
+                        isMe
+                          ? 'bg-teal-500/15 border-teal-500/50 text-[var(--text-primary)] ring-1 ring-teal-500/30'
+                          : 'bg-[var(--bg-input)] border-[var(--border-color)] text-[var(--text-primary)]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className={`w-7 h-7 rounded-lg font-mono font-extrabold flex items-center justify-center text-xs ${
+                          rank === 1
+                            ? 'bg-amber-400 text-slate-950'
+                            : rank === 2
+                            ? 'bg-slate-300 text-slate-950'
+                            : rank === 3
+                            ? 'bg-amber-700 text-white'
+                            : 'bg-[var(--bg-elevated)] text-[var(--text-muted)]'
+                        }`}>
+                          {rank <= 3 ? <Medal className="w-4 h-4" /> : `#${rank}`}
+                        </span>
+                        <div>
+                          <div className="font-bold flex items-center gap-1.5">
+                            <span>{displayName}</span>
+                            {isMe && (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] bg-teal-500/20 text-teal-400 border border-teal-500/30">
+                                أنت
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[10px] text-[var(--text-muted)]">
+                            زمن الحل: {formatDurationShort(item.durationSeconds)}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3 font-mono">
+                        <span className="text-[var(--text-secondary)] font-semibold">{item.score}/{item.totalPoints}</span>
+                        <span className="px-2.5 py-1 rounded-lg bg-teal-500/15 text-teal-400 font-bold">
+                          {item.percentage}%
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* =====================================================================
+          TAB 3: سجل محاولاتي ونتائجي السابقة مع الشهادات (My Attempts, Results & Certificates)
+         ===================================================================== */}
+      {mainTab === 'history_certificates' && (
+        <div className="space-y-4">
+          {/* Summary Stats Strip for Student Results & Certificates */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs tabular-nums">
+            <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-3.5 flex items-center justify-between">
+              <span className="text-[var(--text-muted)] font-semibold">إجمالي الاختبارات المنجزة</span>
+              <span className="font-mono font-black text-base text-teal-400">{results.length}</span>
+            </div>
+            <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-3.5 flex items-center justify-between">
+              <span className="text-[var(--text-muted)] font-semibold">شهادات الاجتياز والتفوق</span>
+              <span className="font-mono font-black text-base text-amber-400">{passedCertificatesCount}</span>
+            </div>
+            <div className="col-span-2 sm:col-span-1 umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-3.5 flex items-center justify-between">
+              <span className="text-[var(--text-muted)] font-semibold">متوسط الأداء الأكاديمي</span>
+              <span className="font-mono font-black text-base text-emerald-400">
+                {results.length > 0
+                  ? `${Math.round(results.reduce((acc, r) => acc + (r.percentage || 0), 0) / results.length)}%`
+                  : '—'}
+              </span>
+            </div>
+          </div>
+
+          {results.length === 0 ? (
+            <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-10 text-center space-y-3 text-xs">
+              <Award className="w-10 h-10 mx-auto text-[var(--text-muted)] opacity-60" />
+              <h3 className="text-sm font-bold text-[var(--text-primary)]">لم تقم بتسليم أي محاولة اختبار بعد</h3>
+              <p className="text-[var(--text-muted)] max-w-md mx-auto">
+                بمجرد إتمامك لأي اختبار أو مسابقة طبية، ستظهر درجاتك التفصيلية، مراجعة الإجابات والتعليلات، وشهادات الاجتياز الرقمية هنا.
+              </p>
+              <button
+                type="button"
+                onClick={() => setMainTab('available')}
+                className="px-5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs inline-flex items-center gap-2"
+              >
+                <span>استعراض الاختبارات المتاحة الآن</span>
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+              {results.map((resItem) => {
+                const linkedAssessment: Assessment = assessments.find((a) => a.id === resItem.assessmentId) || {
+                  id: resItem.assessmentId,
+                  titleArabic: `تقييم أكاديمي (${resItem.assessmentId})`,
+                  assessmentType: 'exam',
+                  universityId,
+                  programId: 'prog-mbbs',
+                  studyLevelId,
+                  durationMinutes: 30,
+                  totalPoints: resItem.totalPoints || 100,
+                  maxAttempts: 3,
+                  opensAt: resItem.submittedAt,
+                  closesAt: resItem.submittedAt,
+                  questionIds: [],
+                  resultReleasePolicy: 'immediate',
+                  status: 'published',
+                  createdBy: 'system',
+                  createdAt: resItem.submittedAt
+                };
+                const isPassed = resItem.isReleased && resItem.percentage >= 50;
+
+                return (
+                  <div
+                    key={resItem.id}
+                    className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-4 sm:p-5 space-y-3.5 flex flex-col justify-between text-xs shadow-sm"
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
+                          isPassed
+                            ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                            : !resItem.isReleased
+                            ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                            : 'bg-rose-500/15 text-rose-400 border-rose-500/30'
+                        }`}>
+                          {!resItem.isReleased
+                            ? 'قيد المراجعة'
+                            : resItem.percentage >= 85
+                            ? 'امتياز وتفوق 🌟'
+                            : isPassed
+                            ? 'مجتاز بنجاح ✓'
+                            : 'بحاجة لمراجعة'}
+                        </span>
+                        <span className="text-[11px] font-mono text-[var(--text-muted)] tabular-nums">
+                          {formatDateLatin(resItem.submittedAt)}
+                        </span>
+                      </div>
+
+                      <h4 className="text-sm sm:text-base font-extrabold text-[var(--text-primary)]">
+                        {linkedAssessment.titleArabic}
+                      </h4>
+
+                      {resItem.isReleased ? (
+                        <div className="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] flex items-center justify-between tabular-nums">
+                          <div>
+                            <div className="text-[11px] text-[var(--text-muted)]">الدرجة المحققة</div>
+                            <div className="text-sm font-extrabold font-mono text-[var(--text-primary)] mt-0.5">
+                              {resItem.score} / {resItem.totalPoints} نقطة
+                            </div>
+                          </div>
+                          <div className="text-left">
+                            <div className="text-[11px] text-[var(--text-muted)]">النسبة المئوية</div>
+                            <div className="text-lg font-black font-mono text-teal-400">
+                              {resItem.percentage}%
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center gap-2">
+                          <Lock className="w-4 h-4 shrink-0" />
+                          <span>تم رصد المحاولة وبانتظار إعلان النتائج الرسمي.</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenCompletedExamReview(linkedAssessment, resItem)}
+                        className="py-2 px-3 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold flex items-center justify-center gap-1.5 transition-colors"
+                      >
+                        <FileText className="w-3.5 h-3.5 shrink-0" />
+                        <span>مراجعة الإجابات</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setDownloadModalAssessment({ assessment: linkedAssessment, result: resItem })}
+                        className="py-2 px-3 rounded-xl bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] border border-[var(--border-color)] text-teal-400 font-bold flex items-center justify-center gap-1.5 transition-colors"
+                      >
+                        <Download className="w-3.5 h-3.5 shrink-0" />
+                        <span>تحميل الملزمة</span>
+                      </button>
+
+                      {isPassed && (
+                        <button
+                          type="button"
+                          onClick={() => setCertificatePreview({ assessment: linkedAssessment, result: resItem })}
+                          className="py-2 px-3 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-400 font-bold flex items-center justify-center gap-1.5 transition-colors"
+                        >
+                          <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                          <span>عرض الشهادة</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Digital Certificate Preview Modal */}
+      {certificatePreview && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4" dir="rtl">
+          <div className="umed-card bg-[var(--bg-card)] border-2 border-amber-500/50 rounded-3xl p-6 sm:p-8 max-w-lg w-full text-center space-y-4 shadow-2xl relative overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setCertificatePreview(null)}
+              className="absolute top-4 left-4 p-1.5 rounded-xl bg-[var(--bg-input)] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="w-16 h-16 rounded-2xl bg-amber-500/15 border border-amber-500/40 text-amber-400 mx-auto flex items-center justify-center">
+              <Award className="w-9 h-9" />
+            </div>
+
+            <div className="space-y-1">
+              <span className="px-3 py-1 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30 text-[11px] font-extrabold">
+                شهادة اجتياز وتفوق أكاديمي • U_MED
+              </span>
+              <h3 className="text-lg sm:text-xl font-black text-[var(--text-primary)] pt-2">
+                تشهد منصة U_MED الطبية الأكاديمية بأن
+              </h3>
+              <div className="text-xl font-black text-teal-400 py-1">
+                د. {effectiveFullName}
+              </div>
+              <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                قد اجتاز بنجاح تقييم <strong className="text-[var(--text-primary)]">«{certificatePreview.assessment.titleArabic}»</strong> بنسبة مئوية قدرها{' '}
+                <strong className="text-amber-400 font-mono">{certificatePreview.result.percentage}%</strong> ({certificatePreview.result.score}/{certificatePreview.result.totalPoints} نقطة).
+              </p>
+            </div>
+
+            <div className="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] flex items-center justify-between text-[11px] text-[var(--text-muted)] font-mono">
+              <span>التاريخ: {formatDateLatin(certificatePreview.result.submittedAt)}</span>
+              <span>CERT-{certificatePreview.result.id.slice(-6).toUpperCase()}</span>
+            </div>
+
+            <div className="flex items-center justify-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  handleQuickDownloadExamFile(
+                    certificatePreview.assessment,
+                    certificatePreview.result,
+                    'solved'
+                  );
+                }}
+                className="px-5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-2"
+              >
+                <Download className="w-4 h-4" />
+                <span>تحميل سجل النتيجة الكامل</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setCertificatePreview(null)}
+                className="px-5 py-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] text-xs font-bold"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -761,147 +1207,6 @@ export default function StudentAssessmentList({
         </div>
       )}
 
-      {/* Ranked Leaderboard Modal */}
-      {leaderboardAssessment && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4" dir="rtl">
-          <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-5 md:p-6 max-w-2xl w-full max-h-[88dvh] flex flex-col justify-between space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-3">
-              <div>
-                <div className="flex items-center gap-2 text-amber-400 font-bold text-base">
-                  <Trophy className="w-5 h-5" />
-                  <span>لوحة الشرف وترتيب نتائج الطلاب</span>
-                </div>
-                <p className="text-xs text-[var(--text-muted)] mt-0.5">{leaderboardAssessment.titleArabic}</p>
-              </div>
-              <button
-                onClick={() => setLeaderboardAssessment(null)}
-                className="p-1.5 rounded-lg bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto space-y-3 pr-1">
-              {loadingLeaderboard && leaderboardItems.length === 0 ? (
-                <div className="p-10 text-center text-xs text-[var(--text-muted)] space-y-2">
-                  <RefreshCw className="w-6 h-6 animate-spin mx-auto text-amber-400" />
-                  <div>جاري تحميل ترتيب الطلاب...</div>
-                </div>
-              ) : leaderboardItems.length === 0 ? (
-                <div className="p-10 text-center text-[var(--text-muted)] space-y-2 bg-[var(--bg-input)] rounded-xl border border-[var(--border-color)]">
-                  <Trophy className="w-10 h-10 mx-auto text-[var(--text-muted)] opacity-60" />
-                  <div className="text-sm font-bold text-[var(--text-primary)]">لا توجد نتائج معلنة في لوحة الترتيب بعد</div>
-                  <p className="text-xs text-[var(--text-muted)]">
-                    كن أول من يخوض هذا التقييم ليظهر اسمك في الصدارة (#1)!
-                  </p>
-                </div>
-              ) : (
-                <>
-                  {/* Top 3 Podium Cards */}
-                  {leaderboardItems.length >= 1 && (
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pb-2">
-                      {leaderboardItems.slice(0, 3).map((topItem, i) => {
-                        const rnk = i + 1;
-                        const name = resolveResultPublicDisplayName(topItem);
-                        return (
-                          <div
-                            key={topItem.id || i}
-                            className={`p-3.5 rounded-xl border text-center space-y-1.5 tabular-nums ${
-                              rnk === 1
-                                ? 'bg-amber-500/15 border-amber-500/50'
-                                : rnk === 2
-                                ? 'bg-[var(--bg-elevated)] border-[var(--border-color)]'
-                                : 'bg-amber-700/15 border-amber-700/40'
-                            }`}
-                          >
-                            <div className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-[var(--bg-card)] border border-[var(--border-color)] text-xs font-extrabold font-mono text-amber-400">
-                              #{rnk}
-                            </div>
-                            <div className="text-xs font-bold text-[var(--text-primary)] line-clamp-1">{name}</div>
-                            <div className="text-lg font-extrabold text-teal-400 font-mono">
-                              {topItem.percentage}%
-                            </div>
-                            <div className="text-[10px] text-[var(--text-muted)] font-mono">
-                              {topItem.score}/{topItem.totalPoints} نقطة · {formatDurationShort(topItem.durationSeconds)}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {/* Full Ordered List */}
-                  <div className="space-y-2">
-                    {leaderboardItems.map((item, idx) => {
-                      const rank = idx + 1;
-                      const isMe = item.uid === uid;
-                      const displayName = resolveResultPublicDisplayName(item);
-
-                      return (
-                        <div
-                          key={item.id || `${item.uid}-${idx}`}
-                          className={`flex items-center justify-between p-3 rounded-xl border text-xs tabular-nums ${
-                            isMe
-                              ? 'bg-teal-500/15 border-teal-500/50 text-[var(--text-primary)] ring-1 ring-teal-500/30'
-                              : 'bg-[var(--bg-input)] border-[var(--border-color)] text-[var(--text-primary)]'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3">
-                            <span className={`w-7 h-7 rounded-lg font-mono font-extrabold flex items-center justify-center text-xs ${
-                              rank === 1
-                                ? 'bg-amber-400 text-slate-950'
-                                : rank === 2
-                                ? 'bg-slate-300 text-slate-950'
-                                : rank === 3
-                                ? 'bg-amber-700 text-white'
-                                : 'bg-[var(--bg-elevated)] text-[var(--text-muted)]'
-                            }`}>
-                              {rank <= 3 ? <Medal className="w-4 h-4" /> : `#${rank}`}
-                            </span>
-                            <div>
-                              <div className="font-bold flex items-center gap-1.5">
-                                <span>{displayName}</span>
-                                {isMe && (
-                                  <span className="px-2 py-0.5 rounded-full text-[10px] bg-teal-500/20 text-teal-400 border border-teal-500/30">
-                                    أنت
-                                  </span>
-                                )}
-                              </div>
-                              <div className="text-[10px] text-[var(--text-muted)]">
-                                زمن الحل: {formatDurationShort(item.durationSeconds)}
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-3 font-mono">
-                            <span className="text-[var(--text-secondary)] font-semibold">{item.score}/{item.totalPoints}</span>
-                            <span className="px-2.5 py-1 rounded-lg bg-teal-500/15 text-teal-400 font-bold">
-                              {item.percentage}%
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
-            </div>
-
-            <div className="pt-3 border-t border-[var(--border-color)] flex items-center justify-between gap-2">
-              <span className="text-[11px] text-[var(--text-muted)]">
-                اسمك المعروض حالياً: <strong className="text-teal-400">{previewPublicName}</strong>
-              </span>
-              <button
-                onClick={() => setLeaderboardAssessment(null)}
-                className="px-4 py-2 rounded-xl bg-[var(--bg-elevated)] hover:opacity-90 border border-[var(--border-color)] text-[var(--text-primary)] text-xs font-bold"
-              >
-                إغلاق
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Dedicated Exam Booklet Download Modal Sheet */}
       {downloadModalAssessment && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto" dir="rtl">
@@ -927,7 +1232,6 @@ export default function StudentAssessmentList({
             </p>
 
             <div className="space-y-3">
-              {/* Option 1: Solved copy */}
               <div className="p-4 rounded-xl bg-teal-500/10 border border-teal-500/30 space-y-2">
                 <div className="flex items-start justify-between gap-2">
                   <div>
@@ -962,7 +1266,6 @@ export default function StudentAssessmentList({
                 </button>
               </div>
 
-              {/* Option 2: Blank practice copy */}
               <div className="p-4 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] space-y-2">
                 <div className="flex items-start justify-between gap-2">
                   <div>

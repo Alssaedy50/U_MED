@@ -5,14 +5,9 @@
  * Global Real-Time Notification Watcher & Live Toast Banner
  * Ensures 100% notification delivery for every user (Normal Student, Batch Rep, Dept Head, Admin, Owner) across:
  * 1. Batch Announcements (منشورات الدفعة)
- * 2. Educational Resources & Clinical Data (داتا ومحاضرات)
- * 3. Exams & Clinical Competitions (اختبارات ومسابقات)
+ * 2. Educational Resources & Clinical Data (داتا ومحاضرات) — deferred by 1500ms on startup for fast initial mobile TTI
+ * 3. Exams & Clinical Competitions (اختبارات ومسابقات) — deferred by 1500ms on startup for fast initial mobile TTI
  * 4. Enrollment Approvals & Role Promotions (تحديثات القيد والترقيات)
- * 
- * Uses persistent per-user seen-event tracking (`umed_seen_notif_events_v2_${uid}`) so:
- * - A user logging in AFTER an exam/post/resource was launched still receives the notification immediately.
- * - Reloading the page never duplicates or re-chimes already-received notifications.
- * - Switching accounts on the same device isolates each user's notifications and unread counters.
  */
 
 import React, { useEffect, useState } from 'react';
@@ -110,60 +105,74 @@ export default function GlobalNotificationWatcher({
     } catch (e) {}
   }, [user?.uid, effectiveUnivId, studentStudyLevelId]);
 
-  // 2. Real-time Firestore listener for Educational Resources & Clinical Data (داتا ومحاضرات) scoped to student university
+  // 2. Real-time Firestore listener for Educational Resources & Clinical Data (deferred by 1500ms for fast mobile TTI)
   useEffect(() => {
     if (!db || !user?.uid) return;
     const currentUid = user.uid;
+    let unsub: (() => void) | null = null;
 
-    try {
-      const q = query(
-        collection(db, 'educationalResources'),
-        where('universityId', '==', effectiveUnivId),
-        where('status', '==', 'published')
-      );
+    const timer = setTimeout(() => {
+      try {
+        if (!db) return;
+        const q = query(
+          collection(db, 'educationalResources'),
+          where('universityId', '==', effectiveUnivId),
+          where('status', '==', 'published')
+        );
 
-      const unsub = onSnapshot(
-        q,
-        (snapshot) => {
-          const items: EducationalResource[] = [];
-          snapshot.docs.forEach((d) => {
-            items.push({ ...(d.data() as EducationalResource), id: d.id });
-          });
-          syncNotificationsForResources(currentUid, items, effectiveUnivId, studentStudyLevelId);
-        },
-        () => {}
-      );
+        unsub = onSnapshot(
+          q,
+          (snapshot) => {
+            const items: EducationalResource[] = [];
+            snapshot.docs.forEach((d) => {
+              items.push({ ...(d.data() as EducationalResource), id: d.id });
+            });
+            syncNotificationsForResources(currentUid, items, effectiveUnivId, studentStudyLevelId);
+          },
+          () => {}
+        );
+      } catch (e) {}
+    }, 1500);
 
-      return () => unsub();
-    } catch (e) {}
+    return () => {
+      clearTimeout(timer);
+      if (unsub) unsub();
+    };
   }, [user?.uid, effectiveUnivId, studentStudyLevelId]);
 
-  // 3. Real-time Firestore listener for Exams & Competitions (اختبارات ومسابقات) scoped to student university
+  // 3. Real-time Firestore listener for Exams & Competitions (deferred by 1500ms for fast mobile TTI)
   useEffect(() => {
     if (!db || !user?.uid) return;
     const currentUid = user.uid;
+    let unsub: (() => void) | null = null;
 
-    try {
-      const q = query(
-        collection(db, 'assessments'),
-        where('universityId', '==', effectiveUnivId),
-        where('status', '==', 'published')
-      );
+    const timer = setTimeout(() => {
+      try {
+        if (!db) return;
+        const q = query(
+          collection(db, 'assessments'),
+          where('universityId', '==', effectiveUnivId),
+          where('status', '==', 'published')
+        );
 
-      const unsub = onSnapshot(
-        q,
-        (snapshot) => {
-          const items: Assessment[] = [];
-          snapshot.docs.forEach((d) => {
-            items.push({ ...(d.data() as Assessment), id: d.id });
-          });
-          syncNotificationsForAssessments(currentUid, items, effectiveUnivId, studentStudyLevelId);
-        },
-        () => {}
-      );
+        unsub = onSnapshot(
+          q,
+          (snapshot) => {
+            const items: Assessment[] = [];
+            snapshot.docs.forEach((d) => {
+              items.push({ ...(d.data() as Assessment), id: d.id });
+            });
+            syncNotificationsForAssessments(currentUid, items, effectiveUnivId, studentStudyLevelId);
+          },
+          () => {}
+        );
+      } catch (e) {}
+    }, 1500);
 
-      return () => unsub();
-    } catch (e) {}
+    return () => {
+      clearTimeout(timer);
+      if (unsub) unsub();
+    };
   }, [user?.uid, effectiveUnivId, studentStudyLevelId]);
 
   // 4. Real-time Firestore listener for Student Enrollment status updates (تحديثات القيد والاعتماد)
@@ -187,36 +196,40 @@ export default function GlobalNotificationWatcher({
     } catch (e) {}
   }, [user?.uid]);
 
-  // 5. One-time initial sync pass on mount/change (no recurring setInterval polling)
+  // 5. One-time initial sync pass deferred by 1500ms on mount/change
   useEffect(() => {
     if (!user?.uid) return;
     const currentUid = user.uid;
 
-    const runSyncPass = async () => {
-      try {
-        const [publishedAssessments, batchPosts, publishedResources, enrollment] = await Promise.all([
-          getAssessments(effectiveUnivId, undefined, 'published').catch(() => []),
-          fetchBatchNotifications({ universityId: effectiveUnivId, studyLevelId: studentStudyLevelId }).catch(() => []),
-          fetchEducationalResources({ universityId: effectiveUnivId, studyLevelId: studentStudyLevelId, status: 'published' }).catch(() => []),
-          fetchStudentEnrollment(currentUid).catch(() => null)
-        ]);
+    const timer = setTimeout(() => {
+      const runSyncPass = async () => {
+        try {
+          const [publishedAssessments, batchPosts, publishedResources, enrollment] = await Promise.all([
+            getAssessments(effectiveUnivId, undefined, 'published').catch(() => []),
+            fetchBatchNotifications({ universityId: effectiveUnivId, studyLevelId: studentStudyLevelId }).catch(() => []),
+            fetchEducationalResources({ universityId: effectiveUnivId, studyLevelId: studentStudyLevelId, status: 'published' }).catch(() => []),
+            fetchStudentEnrollment(currentUid).catch(() => null)
+          ]);
 
-        if (publishedAssessments.length > 0) {
-          syncNotificationsForAssessments(currentUid, publishedAssessments, effectiveUnivId, studentStudyLevelId);
-        }
-        if (batchPosts.length > 0) {
-          syncNotificationsForBatchPosts(currentUid, batchPosts, effectiveUnivId, studentStudyLevelId);
-        }
-        if (publishedResources.length > 0) {
-          syncNotificationsForResources(currentUid, publishedResources, effectiveUnivId, studentStudyLevelId);
-        }
-        if (enrollment) {
-          syncNotificationForEnrollment(currentUid, enrollment);
-        }
-      } catch (e) {}
-    };
+          if (publishedAssessments.length > 0) {
+            syncNotificationsForAssessments(currentUid, publishedAssessments, effectiveUnivId, studentStudyLevelId);
+          }
+          if (batchPosts.length > 0) {
+            syncNotificationsForBatchPosts(currentUid, batchPosts, effectiveUnivId, studentStudyLevelId);
+          }
+          if (publishedResources.length > 0) {
+            syncNotificationsForResources(currentUid, publishedResources, effectiveUnivId, studentStudyLevelId);
+          }
+          if (enrollment) {
+            syncNotificationForEnrollment(currentUid, enrollment);
+          }
+        } catch (e) {}
+      };
 
-    runSyncPass();
+      runSyncPass();
+    }, 1500);
+
+    return () => clearTimeout(timer);
   }, [user?.uid, effectiveUnivId, studentStudyLevelId]);
 
   if (!liveToast || !user) return null;
@@ -231,6 +244,11 @@ export default function GlobalNotificationWatcher({
         ? 'student_library'
         : 'student_dashboard');
 
+    const resolvedTargetId =
+      liveToast.targetId ||
+      (liveToast.actionPayload?.targetId as string | undefined) ||
+      (liveToast.actionPayload?.assessmentId as string | undefined);
+
     const enrichedPayload: Record<string, unknown> = {
       ...(liveToast.actionPayload || {}),
       category: liveToast.category,
@@ -242,6 +260,11 @@ export default function GlobalNotificationWatcher({
           ? 'exam'
           : undefined)
     };
+
+    if ((liveToast.category === 'exam' || liveToast.category === 'competition') && resolvedTargetId) {
+      enrichedPayload.targetId = resolvedTargetId;
+      enrichedPayload.assessmentId = resolvedTargetId;
+    }
 
     setLiveToast(null);
     if (onNavigateTab) {

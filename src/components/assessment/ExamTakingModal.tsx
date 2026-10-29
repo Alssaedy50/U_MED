@@ -4,11 +4,11 @@
  * 
  * Exam & Competition Taking Modal (Mobile-First RTL Interface)
  * Features:
+ * - Focused Top Header (Assessment Title, Prominent Timer, Current Question Number, Submit Button)
+ * - Question Map: Fixed Side Column on Large Screens + Floating Button Drawer on Phones
  * - Optional Full Exam Countdown Timer OR Open Untimed Mode
  * - Optional Per-Question Countdown Timer with Auto-Advance
- * - Availability Window Remaining Indicator
  * - Guest Trial Mode with Mandatory Account Creation Gate on Result Reveal
- * - Ranked Leaderboard & Student Display Name / Username Visibility Selector
  */
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
@@ -16,7 +16,6 @@ import {
   Clock, 
   CheckCircle2, 
   AlertTriangle, 
-  CloudCheck, 
   CloudOff, 
   ChevronRight, 
   ChevronLeft, 
@@ -28,7 +27,6 @@ import {
   Trophy,
   UserPlus,
   Share2,
-  Copy,
   Check,
   Timer,
   UserCheck,
@@ -37,7 +35,8 @@ import {
   Download,
   FileText,
   Play,
-  ShieldCheck
+  ShieldCheck,
+  LayoutGrid
 } from 'lucide-react';
 import { 
   Assessment, 
@@ -119,8 +118,9 @@ export default function ExamTakingModal({
     if (initialResult) return true;
     return Object.keys(attempt.answers || {}).length > 0;
   });
-  const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('saved');
+  const [, setSyncStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('saved');
   const [showConfirmSubmit, setShowConfirmSubmit] = useState<boolean>(false);
+  const [showQuestionMapDrawer, setShowQuestionMapDrawer] = useState<boolean>(false);
   const [showMandatoryGuestGate, setShowMandatoryGuestGate] = useState<boolean>(false);
   const [pendingGuestScoredResult, setPendingGuestScoredResult] = useState<AssessmentResult | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
@@ -142,7 +142,7 @@ export default function ExamTakingModal({
   const [guestGateSubmitting, setGuestGateSubmitting] = useState<boolean>(false);
   const [guestGateError, setGuestGateError] = useState<string | null>(null);
 
-  // Effective guest status (false once the visitor completes inline account creation)
+  // Effective guest status
   const effectiveIsGuest = isGuestMode && !user;
 
   // Automatic Student Leaderboard Identity from registered account
@@ -245,7 +245,7 @@ export default function ExamTakingModal({
     }
   };
 
-  // Ensure deadline is refreshed when questions finish loading or when guest passes the identity gate
+  // Ensure deadline is refreshed when questions finish loading
   useEffect(() => {
     if (!isExamTimerEnabled || result || !hasStartedSolving || questions.length === 0) return;
     const minDeadline = startedAtTimestampRef.current + effectiveExamDurationSeconds * 1000;
@@ -261,7 +261,7 @@ export default function ExamTakingModal({
     setQuestionTimeLeft(perQuestionDuration);
   }, [currentQuestionIndex, isQuestionTimerEnabled, perQuestionDuration, result, showMandatoryGuestGate, hasStartedSolving, questions.length]);
 
-  // Per-question countdown interval (strictly clamped to perQuestionDuration so it never overshoots by +1/+2s)
+  // Per-question countdown interval
   useEffect(() => {
     if (!isQuestionTimerEnabled || result || submitting || showMandatoryGuestGate || !hasStartedSolving || questions.length === 0) return;
 
@@ -276,7 +276,6 @@ export default function ExamTakingModal({
       if (rem <= 0) {
         clearInterval(qTimer);
         setQuestionTimeLeft(0);
-        // Auto-advance to next question or trigger finish if on last question
         if (currentQuestionIndex < questions.length - 1) {
           setCurrentQuestionIndex((idx) => Math.min(questions.length - 1, idx + 1));
         } else {
@@ -340,7 +339,6 @@ export default function ExamTakingModal({
     setAnswers(newAnswers);
 
     if (isGuestMode) {
-      // Save guest progress locally
       setSyncStatus('saved');
       const elapsedSeconds = Math.max(1, Math.floor((Date.now() - startedAtTimestampRef.current) / 1000));
       savePendingGuestExamSubmission({
@@ -433,7 +431,6 @@ export default function ExamTakingModal({
         savePendingGuestExamSubmission(pendingPayload);
         setPendingGuestScoredResult(res.result);
         setQueuedOfflineSubmit(false);
-        // Gate result behind mandatory academic data & automatic account creation
         setShowMandatoryGuestGate(true);
         return;
       }
@@ -529,7 +526,6 @@ export default function ExamTakingModal({
         finalStudentName = userProfile?.displayNameArabic || guestLoginId.trim();
       }
 
-      // Claim and officially record the guest exam submission under the new authenticated account
       const claimed = await claimAndGradePendingGuestSubmission(
         user?.uid || uid || `usr_${normalizeUsername(guestUsername || guestLoginId)}`,
         finalStudentName || 'طالب طب بشري'
@@ -584,22 +580,9 @@ export default function ExamTakingModal({
     return `${m} د ${s} ث`;
   };
 
-  // Remaining time until assessment closes
-  const getClosingCountdownText = () => {
-    if (!assessment.closesAt) return null;
-    const diffMs = new Date(assessment.closesAt).getTime() - Date.now();
-    if (diffMs <= 0) return 'مغلق';
-    const hours = Math.floor(diffMs / 3600000);
-    const days = Math.floor(hours / 24);
-    if (days > 0) return `متاح لـ ${days} يوم و ${hours % 24} ساعة`;
-    const mins = Math.floor((diffMs % 3600000) / 60000);
-    return `يغلق خلال ${hours} س و ${mins} د`;
-  };
-
   const currentQuestion = questions[currentQuestionIndex];
   const answeredCount = Object.keys(answers).length;
   const isTimerCritical = isExamTimerEnabled && timeLeftSeconds <= 300;
-  const isCurrentlyOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
   const previewDisplayName = formatStudentLeaderboardName({
     uid,
     fullNameArabic: effectiveFullName,
@@ -611,113 +594,119 @@ export default function ExamTakingModal({
     ? leaderboard.findIndex((r) => r.uid === result.uid || r.id === result.id)
     : -1;
 
+  const isSolvingActive = !result && !showMandatoryGuestGate && hasStartedSolving;
+
+  const renderQuestionGridItems = (closeDrawerOnSelect = false) => (
+    <div className="grid grid-cols-5 gap-2">
+      {questions.map((q, idx) => {
+        const isAnswered = Boolean(answers[q.id]);
+        const isCurrent = idx === currentQuestionIndex;
+
+        let btnClass = 'bg-slate-800/90 text-slate-300 border border-slate-700 hover:bg-slate-700';
+        if (isCurrent) {
+          btnClass = 'bg-teal-500 text-slate-950 font-black border-teal-300 ring-2 ring-teal-400/60 shadow-md';
+        } else if (isAnswered) {
+          btnClass = 'bg-teal-950/90 border border-teal-500/50 text-teal-300 font-bold';
+        }
+
+        return (
+          <button
+            key={q.id}
+            type="button"
+            onClick={() => {
+              setCurrentQuestionIndex(idx);
+              if (closeDrawerOnSelect) setShowQuestionMapDrawer(false);
+            }}
+            className={`h-10 rounded-xl text-xs font-mono transition-all flex items-center justify-center tabular-nums ${btnClass}`}
+          >
+            {idx + 1}
+          </button>
+        );
+      })}
+    </div>
+  );
+
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex flex-col justify-between overflow-hidden text-slate-100 font-sans" dir="rtl">
       
-      {/* 1. Header Bar */}
-      <header className="bg-slate-900 border-b border-slate-800 p-3.5 md:p-4 flex flex-wrap items-center justify-between gap-3 shadow-lg">
-        <div className="flex items-center gap-2.5 flex-wrap">
-          <span className={`px-2.5 py-1 rounded-lg text-xs font-bold ${
-            assessment.assessmentType === 'competition' 
-              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' 
-              : 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
-          }`}>
-            {assessment.assessmentType === 'competition' ? 'مسابقة أكاديمية' : 'اختبار مادة'}
-          </span>
-          {isGuestMode && (
-            <span className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">
-              متاح للحل المباشر (بدون حساب)
-            </span>
-          )}
-          <h2 className="text-sm md:text-base font-bold text-white line-clamp-1">
+      {/* 1. Simplified Focused Top Header: [عنوان الاختبار | رقم السؤال | المؤقت البارز | زر التسليم / الإغلاق] */}
+      <header className="bg-slate-900 border-b border-slate-800 px-3.5 py-2.5 sm:px-5 sm:py-3 flex items-center justify-between gap-2.5 shadow-lg shrink-0">
+        {/* Title & Question Counter */}
+        <div className="flex items-center gap-2.5 min-w-0">
+          <h2 className="text-xs sm:text-base font-extrabold text-white truncate max-w-[165px] xs:max-w-[230px] sm:max-w-md">
             {assessment.titleArabic}
           </h2>
-          {getClosingCountdownText() && (
-            <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 text-[11px] border border-slate-700">
-              <Clock className="w-3 h-3 text-amber-400" />
-              <span>{getClosingCountdownText()}</span>
+          {isSolvingActive && questions.length > 0 && (
+            <span className="px-2.5 py-1 rounded-lg bg-teal-500/15 border border-teal-500/30 text-teal-300 text-[11px] sm:text-xs font-bold font-mono whitespace-nowrap shrink-0 tabular-nums">
+              سؤال {currentQuestionIndex + 1}/{questions.length}
             </span>
           )}
         </div>
 
-        <div className="flex items-center gap-2.5 text-xs">
-          {/* Cloud / Local Offline Sync Status */}
-          <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300">
-            {isGuestMode ? (
-              <>
-                <CheckCircle2 className="w-3.5 h-3.5 text-indigo-400" />
-                <span className="text-indigo-300">حفظ إجاباتك تلقائياً ✓</span>
-              </>
-            ) : syncStatus === 'saving' ? (
-              <>
-                <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" />
-                <span className="text-amber-300">جاري الحفظ...</span>
-              </>
-            ) : syncStatus === 'saved' && isCurrentlyOnline ? (
-              <>
-                <CloudCheck className="w-3.5 h-3.5 text-teal-400" />
-                <span className="text-teal-300">تم الحفظ سحابياً ✓</span>
-              </>
-            ) : syncStatus === 'saved' && !isCurrentlyOnline ? (
-              <>
-                <CheckCircle2 className="w-3.5 h-3.5 text-amber-400" />
-                <span className="text-amber-300">محفوظ محلياً (أوفلاين) ✓</span>
-              </>
-            ) : (
-              <>
-                <CloudOff className="w-3.5 h-3.5 text-rose-400" />
-                <span className="text-rose-300">محفوظ محلياً — بانتظار الشبكة</span>
-              </>
-            )}
-          </div>
-
-          {/* Per-Question Timer Badge (if enabled) */}
-          {!result && !showMandatoryGuestGate && isQuestionTimerEnabled && (
-            <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl font-mono text-xs font-bold border transition-colors ${
-              questionTimeLeft <= 10
-                ? 'bg-rose-950/90 border-rose-500 text-rose-200 animate-pulse'
-                : 'bg-amber-950/70 border-amber-600/60 text-amber-300'
-            }`} title="مؤقت السؤال الحالي">
+        {/* Prominent Timer + Submit Button + Close */}
+        <div className="flex items-center gap-2 shrink-0">
+          {isSolvingActive && isQuestionTimerEnabled && (
+            <div
+              className={`hidden xs:flex items-center gap-1 px-2.5 py-1.5 rounded-xl font-mono text-xs font-bold border tabular-nums ${
+                questionTimeLeft <= 10
+                  ? 'bg-rose-950/90 border-rose-500 text-rose-200 animate-pulse'
+                  : 'bg-amber-950/70 border-amber-600/60 text-amber-300'
+              }`}
+              title="مؤقت السؤال الحالي"
+            >
               <Timer className="w-3.5 h-3.5" />
-              <span>سؤال: {questionTimeLeft}ث</span>
+              <span>{questionTimeLeft}ث</span>
             </div>
           )}
 
-          {/* Full Exam Timer Badge (or Open Untimed Badge) */}
-          {!result && !showMandatoryGuestGate && (
+          {isSolvingActive && (
             isExamTimerEnabled ? (
-              <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-mono text-sm font-bold border transition-colors ${
-                isTimerCritical 
-                  ? 'bg-rose-950/80 border-rose-600 text-rose-300 animate-pulse' 
-                  : 'bg-slate-800 border-slate-700 text-teal-300'
-              }`} title="الوقت الكلي المتبقي للاختبار">
-                <Clock className="w-4 h-4" />
+              <div
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-mono text-xs sm:text-sm font-black border tabular-nums ${
+                  isTimerCritical
+                    ? 'bg-rose-950/90 border-rose-500 text-rose-200 animate-pulse'
+                    : 'bg-slate-800 border-teal-500/40 text-teal-300'
+                }`}
+                title="الوقت المتبقي للاختبار"
+              >
+                <Clock className="w-4 h-4 text-teal-400 shrink-0" />
                 <span>{formatTimer(timeLeftSeconds)}</span>
               </div>
             ) : (
-              <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold bg-slate-800 border border-slate-700 text-emerald-300">
+              <div className="hidden sm:flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-bold bg-slate-800 border border-slate-700 text-emerald-300">
                 <Clock className="w-3.5 h-3.5" />
                 <span>وقت مفتوح</span>
               </div>
             )
           )}
 
+          {isSolvingActive && (
+            <button
+              type="button"
+              onClick={() => setShowConfirmSubmit(true)}
+              className="px-3 sm:px-4 py-1.5 min-h-[36px] rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-md transition-colors whitespace-nowrap"
+            >
+              <Send className="w-3.5 h-3.5 shrink-0" />
+              <span>تسليم</span>
+            </button>
+          )}
+
           <button 
             onClick={onClose}
-            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
+            className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
             title="إغلاق"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4 sm:w-5 sm:h-5" />
           </button>
         </div>
       </header>
 
       {/* 2. Main Content Area */}
-      <main className="flex-1 overflow-y-auto p-4 md:p-6 max-w-4xl w-full mx-auto space-y-6">
+      <main className="flex-1 overflow-y-auto p-3.5 sm:p-6 max-w-6xl w-full mx-auto">
         
-        {/* A) Official Result & Ranked Leaderboard Screen (Shown immediately for both Guests and Registered Users) */}
+        {/* A) Official Result & Ranked Leaderboard Screen */}
         {result ? (
-          <div className="space-y-6">
+          <div className="max-w-4xl mx-auto space-y-6">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl text-center space-y-5">
               <div className="w-16 h-16 rounded-full bg-teal-500/20 text-teal-400 mx-auto flex items-center justify-center border border-teal-500/30">
                 <Award className="w-9 h-9" />
@@ -781,7 +770,6 @@ export default function ExamTakingModal({
                 </div>
               )}
 
-              {/* PROMINENT GUEST NOTIFICATION: Prompt unauthenticated users to create an account to join competition & unlock all services */}
               {isGuestMode && (
                 <div className="bg-gradient-to-br from-amber-950/60 via-indigo-950/70 to-slate-950 border-2 border-amber-500/50 rounded-2xl p-5 text-right max-w-2xl mx-auto space-y-4 shadow-2xl">
                   <div className="flex items-start gap-3">
@@ -833,7 +821,6 @@ export default function ExamTakingModal({
                 </div>
               )}
 
-              {/* Student Registered Identity Badge for Logged-in Users */}
               {!isGuestMode && (
                 <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-3.5 text-right max-w-xl mx-auto flex items-center justify-between flex-wrap gap-2">
                   <div className="text-xs font-bold text-teal-300 flex items-center gap-1.5">
@@ -848,7 +835,6 @@ export default function ExamTakingModal({
                 </div>
               )}
 
-              {/* Download Exam File Section (Solved with Rationale OR Blank for Self-Practice) */}
               <div className="bg-slate-950/90 border border-teal-500/30 rounded-2xl p-4 sm:p-5 text-right max-w-2xl mx-auto space-y-3 shadow-lg">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center gap-2 text-xs sm:text-sm font-extrabold text-teal-300">
@@ -919,7 +905,6 @@ export default function ExamTakingModal({
               </div>
             </div>
 
-            {/* Ordered Leaderboard Section */}
             {(result.isReleased || isGuestMode) && (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
                 <div className="flex items-center justify-between flex-wrap gap-2 border-b border-slate-800 pb-3">
@@ -948,43 +933,45 @@ export default function ExamTakingModal({
                   <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
                     {leaderboard.map((item, idx) => {
                       const rank = idx + 1;
-                      const isMe = !isGuestMode && ((uid && item.uid === uid) || item.id === result.id);
-                      const displayName = resolveResultPublicDisplayName(item);
+                      const isCurrentUser = item.uid === result.uid || item.id === result.id;
+                      const publicName = resolveResultPublicDisplayName(item);
 
                       return (
                         <div
                           key={item.id || `${item.uid}-${idx}`}
                           className={`flex items-center justify-between p-3 rounded-xl border text-xs transition-all ${
-                            isMe
-                              ? 'bg-teal-950/60 border-teal-500/60 text-teal-100 ring-1 ring-teal-500/30'
-                              : rank <= 3
-                              ? 'bg-amber-950/20 border-amber-500/30 text-slate-100'
-                              : 'bg-slate-950/70 border-slate-800/80 text-slate-300'
+                            isCurrentUser
+                              ? 'bg-teal-950/60 border-teal-500/60 text-teal-100 ring-1 ring-teal-500/40'
+                              : rank === 1
+                              ? 'bg-amber-950/30 border-amber-600/40 text-amber-100'
+                              : 'bg-slate-950/70 border-slate-800/80 text-slate-200'
                           }`}
                         >
                           <div className="flex items-center gap-3">
-                            <div className={`w-7 h-7 rounded-lg font-mono font-extrabold flex items-center justify-center text-xs ${
-                              rank === 1
-                                ? 'bg-amber-400 text-slate-950 shadow-md shadow-amber-500/30'
-                                : rank === 2
-                                ? 'bg-slate-300 text-slate-950'
-                                : rank === 3
-                                ? 'bg-amber-700 text-white'
-                                : 'bg-slate-800 text-slate-400'
-                            }`}>
+                            <span
+                              className={`w-7 h-7 rounded-lg font-mono font-extrabold flex items-center justify-center text-xs ${
+                                rank === 1
+                                  ? 'bg-amber-400 text-slate-950'
+                                  : rank === 2
+                                  ? 'bg-slate-300 text-slate-950'
+                                  : rank === 3
+                                  ? 'bg-amber-700 text-white'
+                                  : 'bg-slate-800 text-slate-400'
+                              }`}
+                            >
                               {rank <= 3 ? <Medal className="w-4 h-4" /> : `#${rank}`}
-                            </div>
+                            </span>
                             <div>
                               <div className="font-bold flex items-center gap-1.5">
-                                <span>{displayName}</span>
-                                {isMe && (
+                                <span>{publicName}</span>
+                                {isCurrentUser && (
                                   <span className="px-2 py-0.5 rounded-full text-[10px] bg-teal-500/20 text-teal-300 border border-teal-500/30">
                                     أنت
                                   </span>
                                 )}
                               </div>
-                              <div className="text-[10px] text-slate-400 flex items-center gap-2 mt-0.5">
-                                <span>الزمن: {formatDurationShort(item.durationSeconds)}</span>
+                              <div className="text-[10px] text-slate-400">
+                                زمن الحل: {formatDurationShort(item.durationSeconds)}
                               </div>
                             </div>
                           </div>
@@ -993,11 +980,7 @@ export default function ExamTakingModal({
                             <span className="text-slate-300 font-semibold">
                               {item.score}/{item.totalPoints}
                             </span>
-                            <span className={`px-2.5 py-1 rounded-lg font-bold ${
-                              rank === 1
-                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                                : 'bg-teal-500/15 text-teal-300'
-                            }`}>
+                            <span className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-teal-300 font-bold">
                               {item.percentage}%
                             </span>
                           </div>
@@ -1009,7 +992,6 @@ export default function ExamTakingModal({
               </div>
             )}
 
-            {/* Detailed Medical Question Reviews & Explanations (when released) */}
             {result.isReleased && Array.isArray(result.questionReviews) && result.questionReviews.length > 0 && (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
                 <div className="flex items-center justify-between flex-wrap gap-2 border-b border-slate-800 pb-3">
@@ -1149,7 +1131,7 @@ export default function ExamTakingModal({
             )}
           </div>
         ) : showMandatoryGuestGate ? (
-          /* A2) Mandatory Academic Data Gate for Guests to Reveal Shared Exam Result & Auto-Create Account */
+          /* A2) Mandatory Academic Data Gate for Guests */
           <div className="max-w-2xl mx-auto bg-slate-900 border-2 border-teal-500/50 rounded-2xl p-5 sm:p-7 shadow-2xl space-y-5">
             <div className="text-center space-y-2.5">
               <div className="w-14 h-14 rounded-2xl bg-teal-500/20 border border-teal-500/40 text-teal-400 mx-auto flex items-center justify-center">
@@ -1163,7 +1145,7 @@ export default function ExamTakingModal({
                 أكمل بياناتك الأكاديمية لإظهار نتيجتك وتفعيل حسابك تلقائياً
               </h3>
               <p className="text-xs text-slate-300 max-w-lg mx-auto leading-relaxed">
-                لإظهار درجتك التفصيلية والتعليلات الطبية وترتيبك التنافسي بين زملائك في <strong className="text-teal-300">«{assessment.titleArabic}»</strong>، يرجى إدخال بياناتك الأكاديمية أدناه ليتم إنشاء حسابك الرسمي تلقائياً (ويمكنك تعيين كلمة مرور لاحقاً من الإعدادات).
+                لإظهار درجتك التفصيلية والتعليلات الطبية وترتيبك التنافسي بين زملائك في <strong className="text-teal-300">«{assessment.titleArabic}»</strong>، يرجى إدخال بياناتك الأكاديمية أدناه ليتم إنشاء حسابك الرسمي تلقائياً.
               </p>
             </div>
 
@@ -1370,7 +1352,7 @@ export default function ExamTakingModal({
             </form>
           </div>
         ) : !hasStartedSolving ? (
-          /* B) Pre-Exam Readiness & "Start Exam Now" Screen (Timer starts only when student clicks Start Exam) */
+          /* B) Pre-Exam Readiness & "Start Exam Now" Screen */
           <div className="max-w-2xl mx-auto bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-2xl space-y-6">
             <div className="text-center space-y-3">
               <div className={`w-16 h-16 rounded-2xl mx-auto flex items-center justify-center border ${
@@ -1457,251 +1439,331 @@ export default function ExamTakingModal({
             </div>
           </div>
         ) : (
-          /* C) Active Question Solving Area */
-          <div className="space-y-5">
+          /* C) Active Question Solving Area with Fixed Desktop Sidebar Question Map + Mobile Floating Button Drawer */
+          <div className="flex flex-col lg:flex-row items-start gap-5">
             
-            {/* Question Quick Navigation Bar */}
-            <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-3 shadow-md flex items-center gap-2 overflow-x-auto scrollbar-thin">
-              <span className="text-xs text-slate-400 whitespace-nowrap pl-2 border-l border-slate-800">
-                الأسئلة ({answeredCount}/{questions.length}):
-              </span>
-              <div className="flex items-center gap-1.5">
-                {questions.map((q, idx) => {
-                  const isAnswered = Boolean(answers[q.id]);
-                  const isCurrent = idx === currentQuestionIndex;
-
-                  let btnClass = 'bg-slate-800 text-slate-400 hover:bg-slate-700';
-                  if (isCurrent) {
-                    btnClass = 'bg-teal-500 text-slate-950 font-bold ring-2 ring-teal-400';
-                  } else if (isAnswered) {
-                    btnClass = 'bg-teal-950 border border-teal-800/60 text-teal-300';
-                  }
-
-                  return (
-                    <button
-                      key={q.id}
-                      onClick={() => setCurrentQuestionIndex(idx)}
-                      className={`w-8 h-8 rounded-lg text-xs font-mono transition-all flex items-center justify-center shrink-0 ${btnClass}`}
-                    >
-                      {idx + 1}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Per-Question Timer Visual Progress Bar (if enabled) */}
-            {isQuestionTimerEnabled && (
-              <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5 space-y-1.5">
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-slate-300 flex items-center gap-1.5 font-semibold">
-                    <Timer className="w-3.5 h-3.5 text-amber-400" />
-                    <span>مؤقت السؤال الحالي ({perQuestionDuration} ثانية لكل سؤال)</span>
-                  </span>
-                  <span className={`font-mono font-bold ${questionTimeLeft <= 10 ? 'text-rose-400' : 'text-amber-300'}`}>
-                    متبقي {questionTimeLeft} ثانية
-                  </span>
-                </div>
-                <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full transition-all duration-700 ${
-                      questionTimeLeft <= 10 ? 'bg-rose-500' : 'bg-amber-400'
-                    }`}
-                    style={{
-                      width: `${Math.max(0, Math.min(100, (questionTimeLeft / perQuestionDuration) * 100))}%`
-                    }}
-                  />
-                </div>
-              </div>
-            )}
-
-            {errorMsg && (
-              <div className="p-4 rounded-xl bg-rose-950/60 border border-rose-800 text-rose-300 text-sm flex items-center gap-3">
-                <AlertTriangle className="w-5 h-5 shrink-0" />
-                <span>{errorMsg}</span>
-              </div>
-            )}
-
-            {!currentQuestion ? (
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center space-y-3 shadow-xl">
-                <RefreshCw className="w-8 h-8 animate-spin text-teal-400 mx-auto" />
-                <div className="text-sm font-bold text-white">جارٍ تحضير أسئلة الاختبار...</div>
-                <p className="text-xs text-slate-400">
-                  لن يتم احتساب أي ثانية من وقت الاختبار حتى تظهر الأسئلة أمامك الآن.
-                </p>
-              </div>
-            ) : (
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 md:p-6 shadow-xl space-y-6">
-                
-                <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-wrap gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-teal-400 bg-teal-950/80 px-2.5 py-1 rounded-lg border border-teal-800/50">
-                      السؤال {currentQuestionIndex + 1} من {questions.length}
+            {/* Main Question Column */}
+            <div className="flex-1 w-full space-y-4">
+              {/* Per-Question Timer Visual Progress Bar (if enabled) */}
+              {isQuestionTimerEnabled && (
+                <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5 space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-slate-300 flex items-center gap-1.5 font-semibold">
+                      <Timer className="w-3.5 h-3.5 text-amber-400" />
+                      <span>مؤقت السؤال الحالي ({perQuestionDuration} ثانية لكل سؤال)</span>
                     </span>
-                    <span className="text-xs text-slate-400 bg-slate-800 px-2.5 py-1 rounded-lg">
-                      {currentQuestion.questionType === 'essay'
-                        ? 'سؤال مقالي'
-                        : currentQuestion.questionType === 'fill_blank'
-                        ? 'إكمال الفراغ'
-                        : currentQuestion.questionType === 'true_false'
-                        ? 'صح وخطأ'
-                        : 'اختيار من متعدد'}
+                    <span className={`font-mono font-bold ${questionTimeLeft <= 10 ? 'text-rose-400' : 'text-amber-300'}`}>
+                      متبقي {questionTimeLeft} ثانية
                     </span>
                   </div>
-                  <span className="text-xs text-slate-400 font-mono">
-                    النقاط: {currentQuestion.points}
+                  <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-700 ${
+                        questionTimeLeft <= 10 ? 'bg-rose-500' : 'bg-amber-400'
+                      }`}
+                      style={{
+                        width: `${Math.max(0, Math.min(100, (questionTimeLeft / perQuestionDuration) * 100))}%`
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {errorMsg && (
+                <div className="p-4 rounded-xl bg-rose-950/60 border border-rose-800 text-rose-300 text-sm flex items-center gap-3">
+                  <AlertTriangle className="w-5 h-5 shrink-0" />
+                  <span>{errorMsg}</span>
+                </div>
+              )}
+
+              {!currentQuestion ? (
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center space-y-3 shadow-xl">
+                  <RefreshCw className="w-8 h-8 animate-spin text-teal-400 mx-auto" />
+                  <div className="text-sm font-bold text-white">جارٍ تحضير أسئلة الاختبار...</div>
+                  <p className="text-xs text-slate-400">
+                    لن يتم احتساب أي ثانية من وقت الاختبار حتى تظهر الأسئلة أمامك الآن.
+                  </p>
+                </div>
+              ) : (
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 md:p-6 shadow-xl space-y-6">
+                  
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-teal-400 bg-teal-950/80 px-2.5 py-1 rounded-lg border border-teal-800/50">
+                        السؤال {currentQuestionIndex + 1} من {questions.length}
+                      </span>
+                      <span className="text-xs text-slate-400 bg-slate-800 px-2.5 py-1 rounded-lg">
+                        {currentQuestion.questionType === 'essay'
+                          ? 'سؤال مقالي'
+                          : currentQuestion.questionType === 'fill_blank'
+                          ? 'إكمال الفراغ'
+                          : currentQuestion.questionType === 'true_false'
+                          ? 'صح وخطأ'
+                          : 'اختيار من متعدد'}
+                      </span>
+                    </div>
+                    <span className="text-xs text-slate-400 font-mono">
+                      النقاط: {currentQuestion.points}
+                    </span>
+                  </div>
+
+                  {(() => {
+                    const isEnglishQuestion =
+                      currentQuestion.language === 'en' ||
+                      (!/[\u0600-\u06FF]/.test(currentQuestion.stemArabic || '') &&
+                        /[A-Za-z]/.test(currentQuestion.stemArabic || ''));
+                    return (
+                      <>
+                        <div className="space-y-2" dir={isEnglishQuestion ? 'ltr' : 'rtl'}>
+                          <p className={`text-base md:text-lg font-bold text-slate-100 leading-relaxed ${isEnglishQuestion ? 'text-left' : 'text-right'}`}>
+                            {currentQuestion.stemArabic}
+                          </p>
+                          {currentQuestion.stemEnglish && currentQuestion.stemEnglish !== currentQuestion.stemArabic && (
+                            <p className="text-xs md:text-sm font-medium text-slate-400 font-mono text-left" dir="ltr">
+                              {currentQuestion.stemEnglish}
+                            </p>
+                          )}
+                          {currentQuestion.imageUrl && (
+                            <div className="mt-3 rounded-xl overflow-hidden border border-slate-800 max-h-64">
+                              <img src={currentQuestion.imageUrl} alt="Medical Slide" className="w-full object-contain bg-slate-950" />
+                            </div>
+                          )}
+                        </div>
+
+                        {currentQuestion.questionType === 'fill_blank' && (
+                          <div className="space-y-2 pt-2">
+                            <label className="block text-xs font-bold text-sky-300">
+                              {isEnglishQuestion
+                                ? 'Type the missing medical word / term in the blank:'
+                                : 'اكتب الكلمة أو المصطلح الطبي المناسب لإكمال الفراغ:'}
+                            </label>
+                            <input
+                              type="text"
+                              value={answers[currentQuestion.id] || ''}
+                              onChange={(e) => handleSelectOption(currentQuestion.id, e.target.value)}
+                              dir={isEnglishQuestion ? 'ltr' : 'rtl'}
+                              placeholder={
+                                isEnglishQuestion
+                                  ? 'Type exact answer here (auto-saved)...'
+                                  : 'اكتب إجابة الفراغ هنا بدقة (يتم الحفظ التلقائي فور الكتابة)...'
+                              }
+                              className="w-full px-4 py-3.5 rounded-xl bg-slate-950/90 border border-sky-700/70 text-sm font-bold text-white focus:outline-none focus:border-sky-400"
+                            />
+                          </div>
+                        )}
+
+                        {currentQuestion.questionType === 'essay' && (
+                          <div className="space-y-2 pt-2">
+                            <div className="flex items-center justify-between text-xs text-slate-400">
+                              <span>{isEnglishQuestion ? 'Write your detailed medical essay answer:' : 'اكتب إجابتك المقالية الطبية بالتفصيل:'}</span>
+                              <span className="font-mono">{(answers[currentQuestion.id] || '').length} {isEnglishQuestion ? 'chars' : 'حرف'}</span>
+                            </div>
+                            <textarea
+                              value={answers[currentQuestion.id] || ''}
+                              onChange={(e) => handleSelectOption(currentQuestion.id, e.target.value)}
+                              rows={6}
+                              dir={isEnglishQuestion ? 'ltr' : 'rtl'}
+                              placeholder={isEnglishQuestion ? 'Type your detailed clinical answer here (auto-saved)...' : 'اكتب الإجابة المقالية هنا بالتفصيل (يتم الحفظ التلقائي فور الكتابة)...'}
+                              className="w-full p-4 rounded-xl bg-slate-950/80 border border-slate-700 text-sm text-white focus:outline-none focus:border-teal-500 leading-relaxed"
+                            />
+                          </div>
+                        )}
+
+                        {currentQuestion.questionType === 'true_false' && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2" dir={isEnglishQuestion ? 'ltr' : 'rtl'}>
+                            {currentQuestion.options.map((opt) => {
+                              const isSelected = answers[currentQuestion.id] === opt.id;
+                              const cleanOptLabel = sanitizeOptionTextForDisplay(opt.textArabic);
+                              const isTrue = opt.id === 'opt-a' || cleanOptLabel.includes('صح') || /true/i.test(cleanOptLabel);
+                              return (
+                                <button
+                                  key={opt.id}
+                                  type="button"
+                                  onClick={() => handleSelectOption(currentQuestion.id, opt.id)}
+                                  className={`p-5 rounded-2xl border text-base font-bold transition-all flex items-center justify-center gap-3 ${
+                                    isSelected
+                                      ? isTrue
+                                        ? 'bg-emerald-950/80 border-emerald-500 text-emerald-100 ring-2 ring-emerald-500/50 shadow-lg'
+                                        : 'bg-rose-950/80 border-rose-500 text-rose-100 ring-2 ring-rose-500/50 shadow-lg'
+                                      : 'bg-slate-950/60 border-slate-800 text-slate-300 hover:bg-slate-900 hover:border-slate-700'
+                                  }`}
+                                >
+                                  {isTrue ? (
+                                    <CheckCircle2 className={`w-6 h-6 ${isSelected ? 'text-emerald-400' : 'text-slate-500'}`} />
+                                  ) : (
+                                    <X className={`w-6 h-6 ${isSelected ? 'text-rose-400' : 'text-slate-500'}`} />
+                                  )}
+                                  <span>{cleanOptLabel}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {(!currentQuestion.questionType || currentQuestion.questionType === 'mcq') && (
+                          <div className="space-y-3 pt-2" dir={isEnglishQuestion ? 'ltr' : 'rtl'}>
+                            {currentQuestion.options.map((opt, oIdx) => {
+                              const isSelected = answers[currentQuestion.id] === opt.id;
+                              const letter = isEnglishQuestion
+                                ? ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'][oIdx] || opt.id
+                                : ['أ', 'ب', 'ج', 'د', 'هـ', 'و', 'ز', 'ح'][oIdx] || opt.id;
+                              const cleanOptArabic = sanitizeOptionTextForDisplay(opt.textArabic);
+                              const cleanOptEnglish = opt.textEnglish
+                                ? sanitizeOptionTextForDisplay(opt.textEnglish)
+                                : '';
+
+                              return (
+                                <button
+                                  key={opt.id}
+                                  onClick={() => handleSelectOption(currentQuestion.id, opt.id)}
+                                  className={`w-full ${isEnglishQuestion ? 'text-left' : 'text-right'} p-4 rounded-xl border text-sm font-medium transition-all flex items-start gap-3 ${
+                                    isSelected
+                                      ? 'bg-teal-950/70 border-teal-500 text-teal-100 shadow-lg shadow-teal-950/50 ring-1 ring-teal-500/50'
+                                      : 'bg-slate-950/60 border-slate-800 text-slate-300 hover:bg-slate-800/80 hover:border-slate-700'
+                                  }`}
+                                >
+                                  <div className={`w-7 h-7 rounded-lg border text-xs font-bold flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
+                                    isSelected ? 'bg-teal-500 border-teal-400 text-slate-950' : 'border-slate-700 bg-slate-900 text-slate-400'
+                                  }`}>
+                                    {isSelected ? `✓ ${letter}` : letter}
+                                  </div>
+                                  <div className="flex-1 space-y-1">
+                                    <div>{cleanOptArabic}</div>
+                                    {cleanOptEnglish && cleanOptEnglish !== cleanOptArabic && (
+                                      <div className="text-xs text-slate-500 font-mono" dir="ltr">{cleanOptEnglish}</div>
+                                    )}
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+
+                </div>
+              )}
+            </div>
+
+            {/* Fixed Side Column Question Map on Large Desktop Screens (hidden lg:flex lg:w-72) */}
+            <aside className="hidden lg:flex lg:w-72 shrink-0 flex-col bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-4 sticky top-0 shadow-xl">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div className="flex items-center gap-2 text-xs font-extrabold text-white">
+                  <LayoutGrid className="w-4 h-4 text-teal-400" />
+                  <span>خريطة أرقام الأسئلة</span>
+                </div>
+                <span className="text-xs font-mono font-bold text-teal-400 tabular-nums">
+                  {answeredCount}/{questions.length}
+                </span>
+              </div>
+
+              <div className="max-h-[55vh] overflow-y-auto pr-1">
+                {renderQuestionGridItems(false)}
+              </div>
+
+              <div className="pt-3 border-t border-slate-800 space-y-2 text-[11px] text-slate-400">
+                <div className="flex items-center justify-between">
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="w-3 h-3 rounded bg-teal-500 inline-block" />
+                    <span>السؤال الحالي</span>
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="w-3 h-3 rounded bg-teal-950 border border-teal-500/60 inline-block" />
+                    <span>تمت الإجابة ({answeredCount})</span>
                   </span>
                 </div>
-
-                {(() => {
-                  const isEnglishQuestion =
-                    currentQuestion.language === 'en' ||
-                    (!/[\u0600-\u06FF]/.test(currentQuestion.stemArabic || '') &&
-                      /[A-Za-z]/.test(currentQuestion.stemArabic || ''));
-                  return (
-                    <>
-                      <div className="space-y-2" dir={isEnglishQuestion ? 'ltr' : 'rtl'}>
-                        <p className={`text-base md:text-lg font-bold text-slate-100 leading-relaxed ${isEnglishQuestion ? 'text-left' : 'text-right'}`}>
-                          {currentQuestion.stemArabic}
-                        </p>
-                        {currentQuestion.stemEnglish && currentQuestion.stemEnglish !== currentQuestion.stemArabic && (
-                          <p className="text-xs md:text-sm font-medium text-slate-400 font-mono text-left" dir="ltr">
-                            {currentQuestion.stemEnglish}
-                          </p>
-                        )}
-                        {currentQuestion.imageUrl && (
-                          <div className="mt-3 rounded-xl overflow-hidden border border-slate-800 max-h-64">
-                            <img src={currentQuestion.imageUrl} alt="Medical Slide" className="w-full object-contain bg-slate-950" />
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Question Type: Fill in the Blank Answer Input */}
-                      {currentQuestion.questionType === 'fill_blank' && (
-                        <div className="space-y-2 pt-2">
-                          <label className="block text-xs font-bold text-sky-300">
-                            {isEnglishQuestion
-                              ? 'Type the missing medical word / term in the blank:'
-                              : 'اكتب الكلمة أو المصطلح الطبي المناسب لإكمال الفراغ:'}
-                          </label>
-                          <input
-                            type="text"
-                            value={answers[currentQuestion.id] || ''}
-                            onChange={(e) => handleSelectOption(currentQuestion.id, e.target.value)}
-                            dir={isEnglishQuestion ? 'ltr' : 'rtl'}
-                            placeholder={
-                              isEnglishQuestion
-                                ? 'Type exact answer here (auto-saved)...'
-                                : 'اكتب إجابة الفراغ هنا بدقة (يتم الحفظ التلقائي فور الكتابة)...'
-                            }
-                            className="w-full px-4 py-3.5 rounded-xl bg-slate-950/90 border border-sky-700/70 text-sm font-bold text-white focus:outline-none focus:border-sky-400"
-                          />
-                        </div>
-                      )}
-
-                      {/* Question Type: Essay Answer Area */}
-                      {currentQuestion.questionType === 'essay' && (
-                        <div className="space-y-2 pt-2">
-                          <div className="flex items-center justify-between text-xs text-slate-400">
-                            <span>{isEnglishQuestion ? 'Write your detailed medical essay answer:' : 'اكتب إجابتك المقالية الطبية بالتفصيل:'}</span>
-                            <span className="font-mono">{(answers[currentQuestion.id] || '').length} {isEnglishQuestion ? 'chars' : 'حرف'}</span>
-                          </div>
-                          <textarea
-                            value={answers[currentQuestion.id] || ''}
-                            onChange={(e) => handleSelectOption(currentQuestion.id, e.target.value)}
-                            rows={6}
-                            dir={isEnglishQuestion ? 'ltr' : 'rtl'}
-                            placeholder={isEnglishQuestion ? 'Type your detailed clinical answer here (auto-saved)...' : 'اكتب الإجابة المقالية هنا بالتفصيل (يتم الحفظ التلقائي فور الكتابة)...'}
-                            className="w-full p-4 rounded-xl bg-slate-950/80 border border-slate-700 text-sm text-white focus:outline-none focus:border-teal-500 leading-relaxed"
-                          />
-                        </div>
-                      )}
-
-                      {/* Question Type: True / False Choice Cards */}
-                      {currentQuestion.questionType === 'true_false' && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2" dir={isEnglishQuestion ? 'ltr' : 'rtl'}>
-                          {currentQuestion.options.map((opt) => {
-                            const isSelected = answers[currentQuestion.id] === opt.id;
-                            const cleanOptLabel = sanitizeOptionTextForDisplay(opt.textArabic);
-                            const isTrue = opt.id === 'opt-a' || cleanOptLabel.includes('صح') || /true/i.test(cleanOptLabel);
-                            return (
-                              <button
-                                key={opt.id}
-                                type="button"
-                                onClick={() => handleSelectOption(currentQuestion.id, opt.id)}
-                                className={`p-5 rounded-2xl border text-base font-bold transition-all flex items-center justify-center gap-3 ${
-                                  isSelected
-                                    ? isTrue
-                                      ? 'bg-emerald-950/80 border-emerald-500 text-emerald-100 ring-2 ring-emerald-500/50 shadow-lg'
-                                      : 'bg-rose-950/80 border-rose-500 text-rose-100 ring-2 ring-rose-500/50 shadow-lg'
-                                    : 'bg-slate-950/60 border-slate-800 text-slate-300 hover:bg-slate-900 hover:border-slate-700'
-                                }`}
-                              >
-                                {isTrue ? (
-                                  <CheckCircle2 className={`w-6 h-6 ${isSelected ? 'text-emerald-400' : 'text-slate-500'}`} />
-                                ) : (
-                                  <X className={`w-6 h-6 ${isSelected ? 'text-rose-400' : 'text-slate-500'}`} />
-                                )}
-                                <span>{cleanOptLabel}</span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-
-                      {/* Question Type: MCQ with Dynamic Options */}
-                      {(!currentQuestion.questionType || currentQuestion.questionType === 'mcq') && (
-                        <div className="space-y-3 pt-2" dir={isEnglishQuestion ? 'ltr' : 'rtl'}>
-                          {currentQuestion.options.map((opt, oIdx) => {
-                            const isSelected = answers[currentQuestion.id] === opt.id;
-                            const letter = isEnglishQuestion
-                              ? ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'][oIdx] || opt.id
-                              : ['أ', 'ب', 'ج', 'د', 'هـ', 'و', 'ز', 'ح'][oIdx] || opt.id;
-                            const cleanOptArabic = sanitizeOptionTextForDisplay(opt.textArabic);
-                            const cleanOptEnglish = opt.textEnglish
-                              ? sanitizeOptionTextForDisplay(opt.textEnglish)
-                              : '';
-
-                            return (
-                              <button
-                                key={opt.id}
-                                onClick={() => handleSelectOption(currentQuestion.id, opt.id)}
-                                className={`w-full ${isEnglishQuestion ? 'text-left' : 'text-right'} p-4 rounded-xl border text-sm font-medium transition-all flex items-start gap-3 ${
-                                  isSelected
-                                    ? 'bg-teal-950/70 border-teal-500 text-teal-100 shadow-lg shadow-teal-950/50 ring-1 ring-teal-500/50'
-                                    : 'bg-slate-950/60 border-slate-800 text-slate-300 hover:bg-slate-800/80 hover:border-slate-700'
-                                }`}
-                              >
-                                <div className={`w-7 h-7 rounded-lg border text-xs font-bold flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
-                                  isSelected ? 'bg-teal-500 border-teal-400 text-slate-950' : 'border-slate-700 bg-slate-900 text-slate-400'
-                                }`}>
-                                  {isSelected ? `✓ ${letter}` : letter}
-                                </div>
-                                <div className="flex-1 space-y-1">
-                                  <div>{cleanOptArabic}</div>
-                                  {cleanOptEnglish && cleanOptEnglish !== cleanOptArabic && (
-                                    <div className="text-xs text-slate-500 font-mono" dir="ltr">{cleanOptEnglish}</div>
-                                  )}
-                                </div>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </>
-                  );
-                })()}
-
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmSubmit(true)}
+                  className="w-full mt-2 py-2.5 px-4 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-extrabold flex items-center justify-center gap-2 shadow-md transition-colors"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>تسليم الاختبار وإظهار النتيجة</span>
+                </button>
               </div>
-            )}
+            </aside>
 
           </div>
         )}
 
       </main>
 
+      {/* Floating Question Map Button on Mobile/Tablet Screens (lg:hidden) */}
+      {isSolvingActive && questions.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowQuestionMapDrawer(true)}
+          className="lg:hidden fixed bottom-20 left-4 z-40 px-3.5 py-2.5 rounded-2xl bg-slate-900/95 hover:bg-slate-800 border border-teal-500/50 text-teal-300 shadow-2xl flex items-center gap-2 text-xs font-extrabold backdrop-blur-md active:scale-95"
+          title="فتح خريطة أرقام الأسئلة"
+        >
+          <LayoutGrid className="w-4 h-4 text-teal-400 shrink-0" />
+          <span>خريطة الأسئلة</span>
+          <span className="px-1.5 py-0.5 rounded-md bg-teal-500/20 text-teal-300 font-mono text-[11px] tabular-nums">
+            {answeredCount}/{questions.length}
+          </span>
+        </button>
+      )}
+
+      {/* Mobile Side/Bottom Question Map Drawer */}
+      {showQuestionMapDrawer && isSolvingActive && (
+        <div
+          className="lg:hidden fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-end justify-center p-0"
+          dir="rtl"
+          onClick={() => setShowQuestionMapDrawer(false)}
+        >
+          <div
+            className="bg-slate-900 border-t border-slate-800 rounded-t-3xl w-full max-h-[75dvh] p-5 flex flex-col space-y-4 shadow-2xl animate-in slide-in-from-bottom duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-10 h-1.5 bg-slate-700 rounded-full mx-auto" />
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2 text-sm font-extrabold text-white">
+                <LayoutGrid className="w-4 h-4 text-teal-400" />
+                <span>خريطة أرقام الأسئلة ({answeredCount}/{questions.length} مجاب)</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowQuestionMapDrawer(false)}
+                className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto py-1">
+              {renderQuestionGridItems(true)}
+            </div>
+
+            <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 text-[11px] text-slate-400">
+                <span className="inline-flex items-center gap-1">
+                  <span className="w-2.5 h-2.5 rounded bg-teal-500 inline-block" />
+                  <span>الحالي</span>
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="w-2.5 h-2.5 rounded bg-teal-950 border border-teal-500/60 inline-block" />
+                  <span>مجاب ({answeredCount})</span>
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowQuestionMapDrawer(false);
+                  setShowConfirmSubmit(true);
+                }}
+                className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>تسليم الاختبار</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 3. Footer Bar Navigation */}
-      {!result && !showMandatoryGuestGate && hasStartedSolving && (
+      {isSolvingActive && (
         <footer 
           className="bg-slate-900 border-t border-slate-800 px-3 py-2.5 sm:px-4 sm:py-3.5 flex items-center justify-between gap-2 shadow-xl shrink-0"
           style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
@@ -1713,17 +1775,16 @@ export default function ExamTakingModal({
             title="السؤال السابق"
           >
             <ChevronRight className="w-4 h-4 shrink-0" />
-            <span className="hidden sm:inline">السؤال السابق</span>
-            <span className="sm:hidden">السابق</span>
+            <span>السؤال السابق</span>
           </button>
 
           <button
-            onClick={() => setShowConfirmSubmit(true)}
-            className="min-h-[42px] flex-1 max-w-sm px-3 sm:px-5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 sm:gap-2 transition-colors shadow-lg shadow-teal-900/40 active:scale-95"
+            type="button"
+            onClick={() => setShowQuestionMapDrawer(true)}
+            className="lg:hidden min-h-[42px] px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-teal-300 text-xs font-bold flex items-center gap-1.5"
           >
-            <Send className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
-            <span className="hidden sm:inline">إظهار النتيجة وتسليم الاختبار</span>
-            <span className="sm:hidden">تسليم الاختبار</span>
+            <LayoutGrid className="w-3.5 h-3.5 text-teal-400" />
+            <span className="font-mono tabular-nums">{currentQuestionIndex + 1}/{questions.length}</span>
           </button>
 
           <button
@@ -1732,8 +1793,7 @@ export default function ExamTakingModal({
             className="min-h-[42px] px-3 sm:px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition-colors shrink-0 active:scale-95"
             title="السؤال التالي"
           >
-            <span className="hidden sm:inline">السؤال التالي</span>
-            <span className="sm:hidden">التالي</span>
+            <span>السؤال التالي</span>
             <ChevronLeft className="w-4 h-4 shrink-0" />
           </button>
         </footer>

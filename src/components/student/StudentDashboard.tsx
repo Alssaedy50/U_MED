@@ -10,19 +10,21 @@
 import React, { useState, useEffect } from 'react';
 import { 
   BookOpen, 
-  Clock, 
-  AlertCircle, 
   FileText, 
   ChevronRight, 
-  Sparkles,
+  ChevronDown,
+  ChevronUp,
   RefreshCw,
   Stethoscope,
   Trophy,
   Bell,
-  UserCheck,
   ExternalLink,
   Download,
-  X
+  X,
+  Layers,
+  FlaskConical,
+  Eye,
+  GraduationCap
 } from 'lucide-react';
 import { 
   StudentEnrollment, 
@@ -70,9 +72,9 @@ import {
   syncNotificationsForBatchPosts,
   syncNotificationForEnrollment
 } from '../../services/notificationService.ts';
-import RegisterEnrollment from './RegisterEnrollment.tsx';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { YEMEN_UNIVERSITIES_OPTIONS } from '../../lib/firebase.ts';
+import ResourcePreviewModal from '../library/ResourcePreviewModal.tsx';
 
 // Lazy-load secondary student views for faster initial dashboard TTI
 const StudentMedicalLibrary = React.lazy(() => import('../library/StudentMedicalLibrary.tsx'));
@@ -94,6 +96,8 @@ interface StudentDashboardProps {
     timestamp?: number;
   } | null;
 }
+
+type CourseSubTab = 'lectures' | 'clinical_refs' | 'assessments';
 
 export default function StudentDashboard({
   uid,
@@ -138,7 +142,6 @@ export default function StudentDashboard({
     } catch (e) {}
     return buildDefaultEnrollment();
   });
-  const [showOptionalEnrollmentModal, setShowOptionalEnrollmentModal] = useState<boolean>(false);
   const [universities, setUniversities] = useState<University[]>(() =>
     getCachedCollection<University>('universities')
   );
@@ -201,6 +204,18 @@ export default function StudentDashboard({
     if (!enrollment) return [];
     return getCachedPublishedAssessments(enrollment.universityId, enrollment.currentStudyLevelId);
   });
+
+  // Collapsible Batch Posts & Expanded Course Sub-Tabs States
+  const [isBatchPostsCollapsed, setIsBatchPostsCollapsed] = useState<boolean>(false);
+  const [showAllBatchPosts, setShowAllBatchPosts] = useState<boolean>(false);
+  const [expandedCourseId, setExpandedCourseId] = useState<string | null>(null);
+  const [activeCourseSubTab, setActiveCourseSubTab] = useState<Record<string, CourseSubTab>>({});
+  const [previewResourceModal, setPreviewResourceModal] = useState<EducationalResource | null>(null);
+  const [localAssessmentJump, setLocalAssessmentJump] = useState<{
+    assessmentType?: 'exam' | 'competition';
+    assessmentId?: string;
+    timestamp?: number;
+  } | null>(null);
 
   useEffect(() => {
     setInternalTab(activeSection);
@@ -408,6 +423,13 @@ export default function StudentDashboard({
     }
   }, [selectedPeriod, enrollment?.universityId, studyPeriods]);
 
+  // Auto-expand first course if none is expanded when courses load
+  useEffect(() => {
+    if (courses.length > 0 && (!expandedCourseId || !courses.some(c => c.id === expandedCourseId))) {
+      setExpandedCourseId(courses[0].id);
+    }
+  }, [courses]);
+
   const getUniversityName = (univId: string): string => {
     const found = universities.find(u => u.id === univId);
     if (found) return found.nameArabic;
@@ -458,7 +480,7 @@ export default function StudentDashboard({
 
   if (loading) {
     return (
-      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-12 text-center text-xs text-slate-400">
+      <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-12 text-center text-xs text-[var(--text-muted)]">
         <RefreshCw className="w-6 h-6 animate-spin mx-auto text-teal-400 mb-2" />
         <span>جارٍ تحميل بيانات الطالب ولوحة الدراسة...</span>
       </div>
@@ -509,13 +531,60 @@ export default function StudentDashboard({
   const isInternship = activeEnrollment.currentStudyLevelId === 'lvl-internship';
   const currentUniversityName = userProfile?.universityNameArabic || getUniversityName(activeEnrollment.universityId);
   const currentSpecialtyArabic = userProfile?.specialtyArabic || 'الطب البشري والجراحة العامة (MBBS)';
+  const currentLevelLabel = isInternship
+    ? 'سنة الامتياز السريرية'
+    : `المستوى ${activeEnrollment.currentStudyLevelId.replace('lvl-', '')}`;
+
+  const effectiveAssessmentTarget = localAssessmentJump || assessmentNavTarget;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       
-      {/* 1. Academic Summary Banner — Shown ONLY on the main 'study' tab so it never crowds Library or Assessments */}
+      {/* 1A. Compact 1-Line Contextual Strip for 'library' or 'assessments' so content starts immediately at the top */}
+      {(internalTab === 'library' || internalTab === 'assessments') && (
+        <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 flex items-center justify-between gap-2 text-xs shadow-sm">
+          <div className="flex items-center gap-2 min-w-0 overflow-hidden">
+            <GraduationCap className="w-4 h-4 text-teal-400 shrink-0" />
+            <span className="font-bold text-[var(--text-primary)] truncate">{currentUniversityName}</span>
+            <span className="text-[var(--text-muted)] shrink-0">·</span>
+            <span className="px-2 py-0.5 rounded-md bg-teal-500/15 text-teal-400 border border-teal-500/30 font-bold text-[11px] shrink-0 tabular-nums">
+              {currentLevelLabel}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            <select
+              value={activeEnrollment.universityId}
+              onChange={(e) => handleQuickUniversityChange(e.target.value)}
+              className="hidden sm:block px-2 py-1 rounded-lg bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] text-[11px] font-bold focus:outline-none focus:border-teal-500 max-w-[155px] truncate"
+              title="تغيير الجامعة"
+            >
+              {YEMEN_UNIVERSITIES_OPTIONS.map((u) => (
+                <option key={u.id} value={u.id}>{u.nameArabic}</option>
+              ))}
+            </select>
+
+            <select
+              value={activeEnrollment.currentStudyLevelId}
+              onChange={(e) => handleQuickLevelChange(e.target.value)}
+              className="px-2 py-1 rounded-lg bg-[var(--bg-input)] border border-[var(--border-color)] text-teal-400 text-[11px] font-bold focus:outline-none focus:border-teal-500 tabular-nums"
+              title="تغيير المستوى الدراسي"
+            >
+              <option value="lvl-1">المستوى 1</option>
+              <option value="lvl-2">المستوى 2</option>
+              <option value="lvl-3">المستوى 3</option>
+              <option value="lvl-4">المستوى 4</option>
+              <option value="lvl-5">المستوى 5</option>
+              <option value="lvl-6">المستوى 6</option>
+              <option value="lvl-internship">الامتياز</option>
+            </select>
+          </div>
+        </div>
+      )}
+
+      {/* 1B. Full Welcome Banner with Merged 4-Metric Indicator Strip — Shown ONLY on the main 'study' tab */}
       {internalTab === 'study' && (
-        <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-3.5 sm:p-4 shadow-sm overflow-hidden">
+        <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-3.5 sm:p-4 shadow-sm overflow-hidden space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <button
@@ -555,7 +624,7 @@ export default function StudentDashboard({
                     {isInternship ? 'سنة الامتياز السريرية' : `دفعة المستوى ${activeEnrollment.currentStudyLevelId.replace('lvl-', '')}`}
                   </span>
                 </div>
-                <p className="text-[11px] sm:text-xs text-[var(--text-muted)] mt-0.5">
+                <p className="text-[11px] sm:text-xs text-[var(--text-muted)] mt-0.5 truncate">
                   {currentUniversityName} · {currentSpecialtyArabic}
                 </p>
               </div>
@@ -598,19 +667,40 @@ export default function StudentDashboard({
             </div>
           </div>
 
-          {showOptionalEnrollmentModal && uid && uid !== 'visitor' && (
-            <div className="mt-4 pt-4 border-t border-[var(--border-color)]">
-              <RegisterEnrollment
-                uid={uid}
-                studentNameArabic={displayNameArabic}
-                onEnrollmentComplete={(newEnr) => {
-                  setEnrollment(newEnr);
-                  setShowOptionalEnrollmentModal(false);
-                  loadStudentData(false, newEnr);
-                }}
-              />
+          {/* Merged 4-Metric Indicator Strip inside the Welcome Banner */}
+          <div className="pt-2.5 border-t border-[var(--border-color)] grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs tabular-nums">
+            <button
+              type="button"
+              onClick={() => studyPeriods.length > 0 && setShowBlockPopup(true)}
+              className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] border border-[var(--border-color)] transition-colors text-right"
+            >
+              <span className="text-[11px] text-[var(--text-muted)] font-semibold">البلوكات الدراسية</span>
+              <span className="font-mono font-extrabold text-teal-400 text-sm">{studyPeriods.length}</span>
+            </button>
+
+            <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)]">
+              <span className="text-[11px] text-[var(--text-muted)] font-semibold">مقررات البلوك</span>
+              <span className="font-mono font-extrabold text-emerald-400 text-sm">{courses.length}</span>
             </div>
-          )}
+
+            <button
+              type="button"
+              onClick={() => switchSection('library')}
+              className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] border border-[var(--border-color)] transition-colors text-right"
+            >
+              <span className="text-[11px] text-[var(--text-muted)] font-semibold">المحاضرات والمراجع</span>
+              <span className="font-mono font-extrabold text-sky-400 text-sm">{levelResources.length}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => switchSection('assessments')}
+              className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] border border-[var(--border-color)] transition-colors text-right"
+            >
+              <span className="text-[11px] text-[var(--text-muted)] font-semibold">الاختبارات والمسابقات</span>
+              <span className="font-mono font-extrabold text-amber-400 text-sm">{levelAssessments.length}</span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -662,93 +752,120 @@ export default function StudentDashboard({
             studyLevelId={activeEnrollment.currentStudyLevelId}
             uid={uid || 'visitor'}
             studentNameArabic={displayNameArabic}
-            initialAssessmentType={assessmentNavTarget?.assessmentType}
-            highlightedAssessmentId={assessmentNavTarget?.assessmentId}
-            navigationTimestamp={assessmentNavTarget?.timestamp}
+            initialAssessmentType={effectiveAssessmentTarget?.assessmentType}
+            highlightedAssessmentId={effectiveAssessmentTarget?.assessmentId}
+            navigationTimestamp={effectiveAssessmentTarget?.timestamp}
           />
         </React.Suspense>
       )}
 
-      {/* SECTION: STUDY DASHBOARD (Batch Notifications, Blocks, Courses & Doctors) */}
+      {/* SECTION: STUDY DASHBOARD (Batch Notifications, Blocks, Courses & 3 Sub-Tabs per Course) */}
       {internalTab === 'study' && (
         <div className="space-y-4">
 
-          {/* BATCH NOTIFICATIONS & SHARED DATA FROM BATCH REP / ADMIN */}
+          {/* COLLAPSIBLE BATCH NOTIFICATIONS (Shows latest 2 posts by default + "عرض كل المنشورات") */}
           {batchNotifications.length > 0 && (
             <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-4 sm:p-5 shadow-sm space-y-3">
-              <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-2.5">
-                <div className="flex items-center gap-2">
-                  <Bell className="w-4 h-4 text-amber-400" />
-                  <h3 className="text-xs sm:text-sm font-bold text-[var(--text-primary)] tabular-nums">
-                    إشعارات الدفعة والبيانات المشتركة ({batchNotifications.length})
+              <div className="flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsBatchPostsCollapsed(prev => !prev)}
+                  className="flex items-center gap-2 text-right group"
+                >
+                  <Bell className="w-4 h-4 text-amber-400 shrink-0" />
+                  <h3 className="text-xs sm:text-sm font-bold text-[var(--text-primary)] group-hover:text-teal-400 transition-colors tabular-nums">
+                    منشورات وإشعارات الدفعة ({batchNotifications.length})
                   </h3>
-                </div>
-                <span className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 font-semibold">
-                  مخصص لدفعتك فقط
-                </span>
-              </div>
+                  {isBatchPostsCollapsed ? (
+                    <ChevronDown className="w-4 h-4 text-[var(--text-muted)]" />
+                  ) : (
+                    <ChevronUp className="w-4 h-4 text-[var(--text-muted)]" />
+                  )}
+                </button>
 
-              <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
-                {batchNotifications.slice(0, 6).map((notif) => (
-                  <div
-                    key={notif.id}
-                    className={`p-3.5 rounded-xl border text-xs space-y-2 transition-all hover:border-teal-500/40 cursor-pointer ${
-                      notif.category === 'urgent'
-                        ? 'bg-rose-500/10 border-rose-500/30'
-                        : notif.category === 'exam'
-                        ? 'bg-amber-500/10 border-amber-500/30'
-                        : 'bg-[var(--bg-input)] border-[var(--border-color)]'
-                    }`}
-                    onClick={() => setActiveBatchNotifModal(notif)}
+                <div className="flex items-center gap-2">
+                  {!isBatchPostsCollapsed && batchNotifications.length > 2 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAllBatchPosts(prev => !prev)}
+                      className="text-[11px] px-2.5 py-1 rounded-lg bg-teal-500/15 hover:bg-teal-500/25 text-teal-400 border border-teal-500/30 font-bold transition-colors tabular-nums"
+                    >
+                      {showAllBatchPosts ? 'عرض آخر منشورين فقط' : `عرض كل المنشورات (${batchNotifications.length})`}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setIsBatchPostsCollapsed(prev => !prev)}
+                    className="text-[11px] px-2.5 py-1 rounded-lg bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] text-[var(--text-secondary)] border border-[var(--border-color)] font-semibold transition-colors"
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            notif.category === 'urgent'
-                              ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
-                              : notif.category === 'exam'
-                              ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-                              : 'bg-teal-500/20 text-teal-400 border border-teal-500/30'
-                          }`}
-                        >
-                          {notif.category === 'urgent'
-                            ? 'عاجل'
-                            : notif.category === 'exam'
-                            ? 'اختبار / مسابقة'
-                            : notif.category === 'data_shared'
-                            ? 'داتا مشتركة'
-                            : 'إشعار الدفعة'}
-                        </span>
-                        <h4 className="font-bold text-[var(--text-primary)] text-xs sm:text-sm">{notif.title}</h4>
-                      </div>
-                      <span className="text-[10px] text-[var(--text-muted)] font-mono tabular-nums">
-                        {new Date(notif.createdAt).toLocaleDateString('ar-EG-u-nu-latn', { year: 'numeric', month: 'short', day: 'numeric' })}
-                      </span>
-                    </div>
-
-                    <p className="text-[var(--text-secondary)] leading-relaxed line-clamp-2">{notif.message}</p>
-
-                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-[var(--border-color)] text-[11px]">
-                      <span className="text-[var(--text-muted)]">
-                        المرسل: <strong className="text-teal-400">{notif.authorNameArabic}</strong>
-                      </span>
-
-                      <div className="flex items-center gap-2">
-                        {notif.attachmentUrl && (
-                          <span className="px-2 py-0.5 rounded bg-teal-500/15 text-teal-400 border border-teal-500/30 text-[10px] font-bold">
-                            يحتوي مرفقاً 📎
-                          </span>
-                        )}
-                        <span className="text-teal-400 font-bold text-[11px] flex items-center gap-1">
-                          <span>عرض كامل الإشعار</span>
-                          <ChevronRight className="w-3 h-3 rotate-180" />
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                    {isBatchPostsCollapsed ? 'فتح المنشورات' : 'طي القسم'}
+                  </button>
+                </div>
               </div>
+
+              {!isBatchPostsCollapsed && (
+                <div className="space-y-2.5 pt-2 border-t border-[var(--border-color)] max-h-80 overflow-y-auto pr-1">
+                  {(showAllBatchPosts ? batchNotifications : batchNotifications.slice(0, 2)).map((notif) => (
+                    <div
+                      key={notif.id}
+                      className={`p-3.5 rounded-xl border text-xs space-y-2 transition-all hover:border-teal-500/40 cursor-pointer ${
+                        notif.category === 'urgent'
+                          ? 'bg-rose-500/10 border-rose-500/30'
+                          : notif.category === 'exam'
+                          ? 'bg-amber-500/10 border-amber-500/30'
+                          : 'bg-[var(--bg-input)] border-[var(--border-color)]'
+                      }`}
+                      onClick={() => setActiveBatchNotifModal(notif)}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              notif.category === 'urgent'
+                                ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
+                                : notif.category === 'exam'
+                                ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                                : 'bg-teal-500/20 text-teal-400 border border-teal-500/30'
+                            }`}
+                          >
+                            {notif.category === 'urgent'
+                              ? 'عاجل'
+                              : notif.category === 'exam'
+                              ? 'اختبار / مسابقة'
+                              : notif.category === 'data_shared'
+                              ? 'داتا مشتركة'
+                              : 'منشور الدفعة'}
+                          </span>
+                          <h4 className="font-bold text-[var(--text-primary)] text-xs sm:text-sm">{notif.title}</h4>
+                        </div>
+                        <span className="text-[10px] text-[var(--text-muted)] font-mono tabular-nums">
+                          {new Date(notif.createdAt).toLocaleDateString('ar-EG-u-nu-latn', { year: 'numeric', month: 'short', day: 'numeric' })}
+                        </span>
+                      </div>
+
+                      <p className="text-[var(--text-secondary)] leading-relaxed line-clamp-2">{notif.message}</p>
+
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-[var(--border-color)] text-[11px]">
+                        <span className="text-[var(--text-muted)]">
+                          المرسل: <strong className="text-teal-400">{notif.authorNameArabic}</strong>
+                        </span>
+
+                        <div className="flex items-center gap-2">
+                          {notif.attachmentUrl && (
+                            <span className="px-2 py-0.5 rounded bg-teal-500/15 text-teal-400 border border-teal-500/30 text-[10px] font-bold">
+                              يحتوي مرفقاً 📎
+                            </span>
+                          )}
+                          <span className="text-teal-400 font-bold text-[11px] flex items-center gap-1">
+                            <span>عرض التفاصيل</span>
+                            <ChevronRight className="w-3 h-3 rotate-180" />
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           
@@ -833,24 +950,24 @@ export default function StudentDashboard({
             </div>
           )}
 
-          {/* Courses & Assigned Theoretical / Practical Doctors Grid */}
+          {/* Courses Grid with Expandable 3 Compact Sub-Tabs: [المحاضرات | الداتا السريرية والمراجع | الاختبارات والمسابقات] */}
           <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-4 sm:p-5 shadow-sm space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[var(--border-color)]">
               <div>
                 <h3 className="text-sm sm:text-base font-bold text-[var(--text-primary)] flex items-center gap-2">
                   <BookOpen className="w-4 h-4 text-teal-400 shrink-0" />
-                  <span>المقررات ودكاترة المواد (النظري والعملي)</span>
+                  <span>المقررات الدراسية ومحتوياتها المقسمة</span>
                   {selectedPeriod && <span className="text-xs text-teal-400 font-mono">({selectedPeriod.titleArabic})</span>}
                 </h3>
                 <p className="text-[11px] sm:text-xs text-[var(--text-muted)] mt-0.5">
-                  استعراض المحاضرات النظرية والتدريب العملي ودكاترة كل مادة في دفعتك
+                  اضغط على أي مقرر لتصفح تبويباته الثلاثة: المحاضرات، الداتا السريرية والمراجع، والاختبارات والمسابقات
                 </p>
               </div>
               <button
                 onClick={() => switchSection('library')}
                 className="px-3 py-1.5 rounded-xl bg-teal-600/15 hover:bg-teal-600/25 text-teal-400 border border-teal-500/30 text-xs font-bold transition-colors shrink-0"
               >
-                فتح المكتبة الرقمية
+                فتح المكتبة الرقمية الشاملة
               </button>
             </div>
 
@@ -863,119 +980,283 @@ export default function StudentDashboard({
                 </p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="space-y-3">
                 {courses.map((course) => {
+                  const isExpanded = expandedCourseId === course.id;
+                  const currentSubTab: CourseSubTab = activeCourseSubTab[course.id] || 'lectures';
+
                   const courseDoctors = instructors.filter(i => i.courseOfferingId === course.id);
-                  const courseLecturesCount = levelResources.filter(r => r.courseOfferingId === course.id).length;
-                  const courseExamsCount = levelAssessments.filter(a => a.courseOfferingId === course.id).length;
+                  const courseAllResources = levelResources.filter(r => r.courseOfferingId === course.id);
+
+                  // 1) Lectures (theoretical & general PDF/audio/video lectures)
+                  const courseLectures = courseAllResources.filter(
+                    r => !r.sectionType || r.sectionType === 'theoretical' || r.sectionType === 'general'
+                  );
+                  // 2) Clinical Data & References (practical/lab slides, links, references)
+                  const courseClinicalRefs = courseAllResources.filter(
+                    r => r.sectionType === 'practical' || r.resourceType === 'image' || r.resourceType === 'link'
+                  );
+                  // 3) Assessments & Competitions for this course (or level-wide if courseOfferingId matches or not set)
+                  const courseAssessments = levelAssessments.filter(
+                    a => a.courseOfferingId === course.id || !a.courseOfferingId
+                  );
+
                   return (
                     <div
                       key={course.id}
-                      onClick={() => {
-                        setSelectedCourseFilter({ id: course.id, title: course.titleArabic });
-                        switchSection('library');
-                      }}
-                      className="cursor-pointer p-4 bg-[var(--bg-input)] text-[var(--text-primary)] rounded-xl border border-[var(--border-color)] text-xs space-y-2.5 hover:border-teal-500/50 transition-colors overflow-hidden flex flex-col justify-between"
+                      className={`p-4 bg-[var(--bg-input)] text-[var(--text-primary)] rounded-2xl border text-xs transition-all overflow-hidden ${
+                        isExpanded
+                          ? 'border-teal-500/60 shadow-md'
+                          : 'border-[var(--border-color)] hover:border-teal-500/40'
+                      }`}
                     >
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between gap-2 flex-wrap">
-                          <span className="font-mono text-teal-400 font-bold px-2 py-0.5 rounded bg-[var(--bg-elevated)] border border-[var(--border-color)] tabular-nums">
-                            {course.code}
-                          </span>
-                          <span className="text-[var(--text-muted)] text-[11px] font-mono tabular-nums">{course.creditHours ?? 3} ساعات</span>
-                        </div>
-
-                        <div>
-                          <div className="font-bold text-[var(--text-primary)] text-sm">{course.titleArabic}</div>
-                          <div className="text-[11px] text-[var(--text-muted)] mt-0.5" dir="ltr">{course.titleEnglish}</div>
-                        </div>
-
-                        {/* Clean Hairline-Separated Instructors Strip (No Nested Card Box) */}
-                        {(courseDoctors.length > 0 || course.instructorNameArabic) ? (
-                          <div className="py-2 border-y border-[var(--border-color)] space-y-1.5">
-                            {course.instructorNameArabic && !courseDoctors.some(d => `${d.academicTitle || 'د.'} ${d.instructorNameArabic}`.trim() === course.instructorNameArabic?.trim() || d.instructorNameArabic.trim() === course.instructorNameArabic?.trim()) && (
-                              <div className="flex items-center justify-between gap-2 flex-wrap text-[11px]">
-                                <span className="text-[var(--text-primary)] font-bold inline-flex items-center gap-1.5">
-                                  <Stethoscope className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-                                  <span>{course.instructorNameArabic}</span>
+                      {/* Course Card Header (Click to toggle open/close) */}
+                      <div
+                        onClick={() => setExpandedCourseId(isExpanded ? null : course.id)}
+                        className="cursor-pointer flex flex-wrap items-start justify-between gap-3"
+                      >
+                        <div className="space-y-1.5 min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono text-teal-400 font-bold px-2 py-0.5 rounded bg-[var(--bg-elevated)] border border-[var(--border-color)] tabular-nums">
+                              {course.code}
+                            </span>
+                            <span className="text-[var(--text-muted)] text-[11px] font-mono tabular-nums">
+                              {course.creditHours ?? 3} ساعات معتمدة
+                            </span>
+                            {courseDoctors.length > 0 || course.instructorNameArabic ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] text-teal-400 font-bold">
+                                <Stethoscope className="w-3.5 h-3.5 shrink-0" />
+                                <span>
+                                  {course.instructorNameArabic ||
+                                    courseDoctors.map(d => `${d.academicTitle || 'د.'} ${d.instructorNameArabic}`).join(' ، ')}
                                 </span>
-                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-teal-500/15 text-teal-400 border border-teal-500/30">
-                                  مدرس المقرر
-                                </span>
-                              </div>
+                              </span>
+                            ) : null}
+                          </div>
+
+                          <div>
+                            <h4 className="font-extrabold text-[var(--text-primary)] text-sm sm:text-base">{course.titleArabic}</h4>
+                            {course.titleEnglish && (
+                              <div className="text-[11px] text-[var(--text-muted)]" dir="ltr">{course.titleEnglish}</div>
                             )}
-                            {courseDoctors.map(docItem => (
-                              <div key={docItem.id} className="flex items-center justify-between gap-2 flex-wrap text-[11px]">
-                                <span className="text-[var(--text-primary)] font-bold inline-flex items-center gap-1.5">
-                                  <Stethoscope className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-                                  <span>{docItem.academicTitle || 'د.'} {docItem.instructorNameArabic}</span>
-                                </span>
-                                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
-                                  docItem.teachingType === 'theoretical'
-                                    ? 'bg-teal-500/15 text-teal-400 border-teal-500/30'
-                                    : docItem.teachingType === 'practical'
-                                    ? 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30'
-                                    : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
-                                }`}>
-                                  {docItem.teachingType === 'theoretical'
-                                    ? 'مادة نظرية'
-                                    : docItem.teachingType === 'practical'
-                                    ? 'مادة عملية / سريرية'
-                                    : 'نظري + عملي'}
-                                </span>
-                              </div>
-                            ))}
                           </div>
-                        ) : (
-                          <div className="py-2 border-y border-[var(--border-color)] text-[11px] text-[var(--text-muted)] flex items-center gap-1.5">
-                            <Stethoscope className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-                            <span>هيئة التدريس بالكلية</span>
-                          </div>
-                        )}
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="px-2.5 py-1 rounded-lg bg-teal-500/15 border border-teal-500/30 text-teal-400 text-[11px] font-bold tabular-nums">
+                            {courseAllResources.length} ملفات
+                          </span>
+                          <button
+                            type="button"
+                            className="p-1.5 rounded-lg bg-[var(--bg-elevated)] border border-[var(--border-color)] text-[var(--text-secondary)]"
+                            aria-label="توسيع أو طي المقرر"
+                          >
+                            {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                          </button>
+                        </div>
                       </div>
 
-                      <div className="pt-1 flex flex-wrap items-center justify-between gap-2 text-[11px] tabular-nums">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="px-2 py-0.5 rounded bg-teal-500/15 border border-teal-500/30 text-teal-400 text-[10px] font-bold">
-                            {courseLecturesCount > 0 ? `${courseLecturesCount} محاضرات / ملفات` : 'محاضرات المادة'}
-                          </span>
-                          {courseExamsCount > 0 && (
-                            <span className="px-2 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-bold">
-                              {courseExamsCount} اختبارات
-                            </span>
+                      {/* Inside Opened Course Card: 3 Compact Sub-Tabs */}
+                      {isExpanded && (
+                        <div className="mt-4 pt-3.5 border-t border-[var(--border-color)] space-y-3">
+                          {/* 3 Compact Sub-Tabs Switcher */}
+                          <div className="grid grid-cols-3 gap-1.5 p-1 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)]">
+                            <button
+                              type="button"
+                              onClick={() => setActiveCourseSubTab(prev => ({ ...prev, [course.id]: 'lectures' }))}
+                              className={`py-2 px-2 rounded-lg text-[11px] sm:text-xs font-bold transition-all flex items-center justify-center gap-1.5 tabular-nums ${
+                                currentSubTab === 'lectures'
+                                  ? 'bg-teal-600 text-white shadow-sm'
+                                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                              }`}
+                            >
+                              <FileText className="w-3.5 h-3.5 shrink-0" />
+                              <span className="truncate">المحاضرات ({courseLectures.length})</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setActiveCourseSubTab(prev => ({ ...prev, [course.id]: 'clinical_refs' }))}
+                              className={`py-2 px-2 rounded-lg text-[11px] sm:text-xs font-bold transition-all flex items-center justify-center gap-1.5 tabular-nums ${
+                                currentSubTab === 'clinical_refs'
+                                  ? 'bg-indigo-600 text-white shadow-sm'
+                                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                              }`}
+                            >
+                              <FlaskConical className="w-3.5 h-3.5 shrink-0" />
+                              <span className="truncate">الداتا السريرية والمراجع ({courseClinicalRefs.length})</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setActiveCourseSubTab(prev => ({ ...prev, [course.id]: 'assessments' }))}
+                              className={`py-2 px-2 rounded-lg text-[11px] sm:text-xs font-bold transition-all flex items-center justify-center gap-1.5 tabular-nums ${
+                                currentSubTab === 'assessments'
+                                  ? 'bg-amber-600 text-white shadow-sm'
+                                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                              }`}
+                            >
+                              <Trophy className="w-3.5 h-3.5 shrink-0" />
+                              <span className="truncate">الاختبارات والمسابقات ({courseAssessments.length})</span>
+                            </button>
+                          </div>
+
+                          {/* Sub-Tab 1: Lectures */}
+                          {currentSubTab === 'lectures' && (
+                            <div className="space-y-2">
+                              {courseLectures.length === 0 ? (
+                                <div className="p-4 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] text-center text-[var(--text-muted)] text-xs">
+                                  لا توجد محاضرات نظرية مرفوعة لهذا المقرر حالياً.
+                                </div>
+                              ) : (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                  {courseLectures.slice(0, 6).map((res) => (
+                                    <div
+                                      key={res.id}
+                                      onClick={() => setPreviewResourceModal(res)}
+                                      className="p-3 rounded-xl bg-[var(--bg-card)] hover:border-teal-500/50 border border-[var(--border-color)] flex items-center justify-between gap-2 cursor-pointer transition-colors"
+                                    >
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <FileText className="w-4 h-4 text-teal-400 shrink-0" />
+                                        <div className="min-w-0">
+                                          <div className="font-bold text-[var(--text-primary)] truncate">{res.title}</div>
+                                          <div className="text-[10px] text-[var(--text-muted)] font-mono">
+                                            {res.fileSizeLabel || 'PDF'} · محاضرة
+                                          </div>
+                                        </div>
+                                      </div>
+                                      <span className="px-2.5 py-1 rounded-lg bg-teal-600/15 text-teal-400 text-[11px] font-bold shrink-0 flex items-center gap-1">
+                                        <Eye className="w-3 h-3" />
+                                        <span>معاينة</span>
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              <div className="flex justify-end pt-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedCourseFilter({ id: course.id, title: course.titleArabic });
+                                    switchSection('library');
+                                  }}
+                                  className="px-3 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors"
+                                >
+                                  <span>عرض كافة محاضرات {course.titleArabic} في المكتبة</span>
+                                  <ChevronRight className="w-3.5 h-3.5 rotate-180" />
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Sub-Tab 2: Clinical Data & References */}
+                          {currentSubTab === 'clinical_refs' && (
+                            <div className="space-y-2">
+                              {courseClinicalRefs.length === 0 ? (
+                                <div className="p-4 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] text-center text-[var(--text-muted)] text-xs">
+                                  لا توجد داتا سريرية أو شرائح معملية مضافة لهذا المقرر بعد.
+                                </div>
+                              ) : (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                  {courseClinicalRefs.slice(0, 6).map((res) => (
+                                    <div
+                                      key={res.id}
+                                      onClick={() => setPreviewResourceModal(res)}
+                                      className="p-3 rounded-xl bg-[var(--bg-card)] hover:border-indigo-500/50 border border-[var(--border-color)] flex items-center justify-between gap-2 cursor-pointer transition-colors"
+                                    >
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <Layers className="w-4 h-4 text-indigo-400 shrink-0" />
+                                        <div className="min-w-0">
+                                          <div className="font-bold text-[var(--text-primary)] truncate">{res.title}</div>
+                                          <div className="text-[10px] text-[var(--text-muted)]">
+                                            {res.sectionType === 'practical' ? 'عملي / سريري' : 'مرجع طبي'} · {res.fileSizeLabel || 'ملف'}
+                                          </div>
+                                        </div>
+                                      </div>
+                                      <span className="px-2.5 py-1 rounded-lg bg-indigo-500/15 text-indigo-400 text-[11px] font-bold shrink-0 flex items-center gap-1">
+                                        <Eye className="w-3 h-3" />
+                                        <span>فتح</span>
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              <div className="flex justify-end pt-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedCourseFilter({ id: course.id, title: course.titleArabic });
+                                    switchSection('library');
+                                  }}
+                                  className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors"
+                                >
+                                  <span>فتح المراجع والشرائح العملية في المكتبة</span>
+                                  <ChevronRight className="w-3.5 h-3.5 rotate-180" />
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Sub-Tab 3: Assessments & Competitions */}
+                          {currentSubTab === 'assessments' && (
+                            <div className="space-y-2">
+                              {courseAssessments.length === 0 ? (
+                                <div className="p-4 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] text-center text-[var(--text-muted)] text-xs">
+                                  لا توجد اختبارات أو مسابقات منشورة لهذا المقرر حالياً.
+                                </div>
+                              ) : (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                  {courseAssessments.slice(0, 4).map((asmnt) => (
+                                    <div
+                                      key={asmnt.id}
+                                      onClick={() => {
+                                        setLocalAssessmentJump({
+                                          assessmentType: asmnt.assessmentType,
+                                          assessmentId: asmnt.id,
+                                          timestamp: Date.now()
+                                        });
+                                        switchSection('assessments');
+                                      }}
+                                      className="p-3 rounded-xl bg-[var(--bg-card)] hover:border-amber-500/50 border border-[var(--border-color)] flex items-center justify-between gap-2 cursor-pointer transition-colors"
+                                    >
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <Trophy className="w-4 h-4 text-amber-400 shrink-0" />
+                                        <div className="min-w-0">
+                                          <div className="font-bold text-[var(--text-primary)] truncate">{asmnt.titleArabic}</div>
+                                          <div className="text-[10px] text-[var(--text-muted)] font-mono tabular-nums">
+                                            {asmnt.assessmentType === 'competition' ? 'مسابقة تنافسية' : 'اختبار مقرر'} · {asmnt.totalPoints} نقطة
+                                          </div>
+                                        </div>
+                                      </div>
+                                      <span className="px-2.5 py-1 rounded-lg bg-amber-500/15 text-amber-400 text-[11px] font-bold shrink-0">
+                                        بدء الحل
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              <div className="flex justify-end pt-1">
+                                <button
+                                  type="button"
+                                  onClick={() => switchSection('assessments')}
+                                  className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors"
+                                >
+                                  <span>الانتقال لمركز الاختبارات والمسابقات</span>
+                                  <ChevronRight className="w-3.5 h-3.5 rotate-180" />
+                                </button>
+                              </div>
+                            </div>
                           )}
                         </div>
-
-                        <span className="text-teal-400 font-bold flex items-center gap-1 text-[10px]">
-                          <span>فتح محاضرات المادة</span>
-                          <ChevronRight className="w-3 h-3 rotate-180" />
-                        </span>
-                      </div>
+                      )}
                     </div>
                   );
                 })}
               </div>
             )}
-          </div>
-
-          {/* Quick Access to Exams & Competitions */}
-          <div className="umed-card p-4 sm:p-5 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl text-xs flex flex-wrap items-center justify-between gap-4">
-            <div className="space-y-1">
-              <span className="font-bold text-[var(--text-primary)] text-sm flex items-center gap-2">
-                <Trophy className="w-4 h-4 text-amber-400 shrink-0" />
-                <span>الاختبارات الدورية والمسابقات الطبية التفاعلية</span>
-              </span>
-              <p className="text-[var(--text-secondary)] leading-relaxed text-[11px]">
-                ابدأ اختبارات البلوكات والمسابقات السريرية المخصصة لدفعتك في {currentUniversityName} مع التصحيح الفوري وتحميل ملف الاختبار بعد الانتهاء.
-              </p>
-            </div>
-            <button
-              onClick={() => switchSection('assessments')}
-              className="px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs transition-colors shadow-md flex items-center gap-2 shrink-0"
-            >
-              <span>عرض وبدء الاختبارات الآن</span>
-              <ChevronRight className="w-4 h-4 rotate-180" />
-            </button>
           </div>
 
         </div>
@@ -1072,6 +1353,14 @@ export default function StudentDashboard({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Direct Resource Preview Modal when opened from inside a Course Sub-Tab */}
+      {previewResourceModal && (
+        <ResourcePreviewModal
+          resource={previewResourceModal}
+          onClose={() => setPreviewResourceModal(null)}
+        />
       )}
 
     </div>

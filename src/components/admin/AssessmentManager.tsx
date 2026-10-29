@@ -101,8 +101,10 @@ import {
   sanitizeOptionTextForDisplay,
   extractOptionAndExplanation
 } from '../../services/mcqBulkParser.ts';
-import BulkQuestionImportModal from './BulkQuestionImportModal.tsx';
 import ExamTakingModal from '../assessment/ExamTakingModal.tsx';
+import { renderBiDiRoleLabel } from '../../utils/roleHelpers.tsx';
+
+const BulkQuestionImportModal = React.lazy(() => import('./BulkQuestionImportModal.tsx'));
 
 interface AssessmentManagerProps {
   universityId: string;
@@ -1087,41 +1089,6 @@ export default function AssessmentManager({
     }
   };
 
-  const renderBiDiRoleBadge = (role?: UserRole) => {
-    switch (role) {
-      case 'platform_owner':
-        return (
-          <>
-            مالك المنصة العام <span dir="ltr" className="inline-block">(Platform Owner)</span>
-          </>
-        );
-      case 'university_admin':
-        return (
-          <>
-            مالك / مشرف الجامعة <span dir="ltr" className="inline-block">(University Owner)</span>
-          </>
-        );
-      case 'batch_rep':
-        return (
-          <>
-            مندوب الدفعة / المستوى <span dir="ltr" className="inline-block">(Batch Representative)</span>
-          </>
-        );
-      case 'department_head':
-        return (
-          <>
-            رئيس قسم أو مادة <span dir="ltr" className="inline-block">(Department / Subject Head)</span>
-          </>
-        );
-      default:
-        return (
-          <>
-            طالب طب بشري <span dir="ltr" className="inline-block">(Student)</span>
-          </>
-        );
-    }
-  };
-
   const handleConvertBankToAssessment = (bank: QuestionBank, targetType: AssessmentType) => {
     setSelectedBankForAssessment(bank.id);
     setAssessmentType(targetType);
@@ -1161,7 +1128,7 @@ export default function AssessmentManager({
           <div className="space-y-1">
             <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
               <span className="text-amber-300 font-bold">
-                {renderBiDiRoleBadge(userRole)}
+                {renderBiDiRoleLabel(userRole)}
               </span>
               {isBatchScoped && assignedStudyLevelId && (
                 <>
@@ -3238,41 +3205,53 @@ export default function AssessmentManager({
         </div>
       )}
 
-      {/* MODAL: BULK QUESTION IMPORT (OFFLINE-FIRST + DIRECT SINGLE-MODE PUBLISHING) */}
+      {/* MODAL: BULK QUESTION IMPORT (LAZY LOADED ON DEMAND + OFFLINE-FIRST + DIRECT SINGLE-MODE PUBLISHING) */}
       {showBulkImportModal && selectedBank && (
-        <BulkQuestionImportModal
-          bank={selectedBank}
-          existingQuestions={bankQuestions}
-          userRole={userRole}
-          studyLevels={studyLevels}
-          defaultStudyLevelId={studyLevelId}
-          onClose={() => setShowBulkImportModal(false)}
-          onSaved={(result) => {
-            setBankQuestions(result.savedQuestions);
-            if (result.publishedAssessment) {
-              setAssessments((prev) => [
-                result.publishedAssessment!,
-                ...prev.filter((a) => a.id !== result.publishedAssessment!.id)
-              ]);
-            }
+        <React.Suspense
+          fallback={
+            <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-xs flex items-center justify-center p-4" dir="rtl">
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-sm w-full text-center space-y-3 shadow-2xl">
+                <RefreshCw className="w-7 h-7 text-teal-400 animate-spin mx-auto" />
+                <div className="text-sm font-bold text-white">جاري فتح معالج الاستيراد الجماعي للأسئلة...</div>
+                <div className="text-xs text-slate-400">تحميل المحلل الذكي وقوالب الأسئلة</div>
+              </div>
+            </div>
+          }
+        >
+          <BulkQuestionImportModal
+            bank={selectedBank}
+            existingQuestions={bankQuestions}
+            userRole={userRole}
+            studyLevels={studyLevels}
+            defaultStudyLevelId={studyLevelId}
+            onClose={() => setShowBulkImportModal(false)}
+            onSaved={(result) => {
+              setBankQuestions(result.savedQuestions);
+              if (result.publishedAssessment) {
+                setAssessments((prev) => [
+                  result.publishedAssessment!,
+                  ...prev.filter((a) => a.id !== result.publishedAssessment!.id)
+                ]);
+              }
 
-            const modeSummary =
-              result.publishMode === 'exam_only' && result.publishedAssessment
-                ? `وتم نشره كـ "اختبار أكاديمي فقط" بعنوان (${result.publishedAssessment.titleArabic})`
-                : result.publishMode === 'competition_only' && result.publishedAssessment
-                ? `وتم نشره كـ "مسابقة طبية فقط" بعنوان (${result.publishedAssessment.titleArabic})`
-                : 'في بنك الأسئلة فقط';
+              const modeSummary =
+                result.publishMode === 'exam_only' && result.publishedAssessment
+                  ? `وتم نشره كـ "اختبار أكاديمي فقط" بعنوان (${result.publishedAssessment.titleArabic})`
+                  : result.publishMode === 'competition_only' && result.publishedAssessment
+                  ? `وتم نشره كـ "مسابقة طبية فقط" بعنوان (${result.publishedAssessment.titleArabic})`
+                  : 'في بنك الأسئلة فقط';
 
-            setStatusMsg({
-              type: 'success',
-              text: `تم اعتماد الدفعة بنجاح (${result.createdCount} جديد، ${result.updatedCount} محدّث) ${modeSummary} — ${
-                result.syncedImmediately
-                  ? 'تمت المزامنة السحابية فوراً ✓'
-                  : 'محفوظ محلياً وسيتم مزامنته تلقائياً فور توفر الإنترنت'
-              }`
-            });
-          }}
-        />
+              setStatusMsg({
+                type: 'success',
+                text: `تم اعتماد الدفعة بنجاح (${result.createdCount} جديد، ${result.updatedCount} محدّث) ${modeSummary} — ${
+                  result.syncedImmediately
+                    ? 'تمت المزامنة السحابية فوراً ✓'
+                    : 'محفوظ محلياً وسيتم مزامنته تلقائياً فور توفر الإنترنت'
+                }`
+              });
+            }}
+          />
+        </React.Suspense>
       )}
 
       {/* MODAL: OFFLINE/ONLINE LIVE EXAM TESTING & PREVIEW FOR ADMIN/OWNER */}

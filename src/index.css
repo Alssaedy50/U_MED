@@ -190,7 +190,7 @@
 /* ============================================================================
    SCOPED THEME COMPATIBILITY RULES FOR LEGACY / ADMIN PANELS
    Ensures any remaining hardcoded slate classes adapt to Light, Medical & Gold
-   without overriding semantic CSS variable tokens.
+   without overriding semantic CSS variable tokens or colored buttons/badges.
    ============================================================================ */
 
 /* Fixed modal overlays use the theme's translucent backdrop */
@@ -320,13 +320,14 @@
   border-color: #7dd3fc !important;
 }
 
-/* High-Contrast Typography in Light & Medical */
-[data-theme="light"] .text-white,
-[data-theme="light"] .text-slate-100,
-[data-theme="light"] .text-slate-200,
-[data-theme="medical"] .text-white,
-[data-theme="medical"] .text-slate-100,
-[data-theme="medical"] .text-slate-200 {
+/* High-Contrast Typography in Light & Medical (Excludes colored buttons, badges & gradients) */
+[data-theme="light"] .text-white:not([class*="bg-teal-"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not([class*="bg-indigo-"]):not([class*="bg-rose-"]):not([class*="bg-red-"]):not([class*="bg-amber-"]):not([class*="bg-purple-"]):not([class*="bg-cyan-"]):not([class*="from-"]),
+[data-theme="medical"] .text-white:not([class*="bg-teal-"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not([class*="bg-indigo-"]):not([class*="bg-rose-"]):not([class*="bg-red-"]):not([class*="bg-amber-"]):not([class*="bg-purple-"]):not([class*="bg-cyan-"]):not([class*="from-"]) {
+  color: var(--text-primary) !important;
+}
+
+[data-theme="light"] :is(.text-slate-100, .text-slate-200):not([class*="bg-teal-"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not([class*="bg-indigo-"]):not([class*="bg-rose-"]):not([class*="bg-red-"]):not([class*="bg-amber-"]):not([class*="bg-purple-"]):not([class*="bg-cyan-"]):not([class*="from-"]),
+[data-theme="medical"] :is(.text-slate-100, .text-slate-200):not([class*="bg-teal-"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not([class*="bg-indigo-"]):not([class*="bg-rose-"]):not([class*="bg-red-"]):not([class*="bg-amber-"]):not([class*="bg-purple-"]):not([class*="bg-cyan-"]):not([class*="from-"]) {
   color: var(--text-primary) !important;
 }
 
@@ -342,11 +343,9 @@
   color: var(--text-muted) !important;
 }
 
-/* Preserve white text on solid vibrant buttons in Light & Medical */
-[data-theme="light"] :is(.bg-teal-600, .bg-teal-500, .bg-emerald-600, .bg-emerald-500, .bg-cyan-600, .bg-sky-600, .bg-indigo-600, .bg-indigo-500, .bg-blue-600, .bg-rose-600, .bg-rose-500, .bg-amber-600, .bg-amber-500),
-[data-theme="light"] :is(.bg-teal-600, .bg-teal-500, .bg-emerald-600, .bg-emerald-500, .bg-cyan-600, .bg-sky-600, .bg-indigo-600, .bg-indigo-500, .bg-blue-600, .bg-rose-600, .bg-rose-500, .bg-amber-600, .bg-amber-500) *,
-[data-theme="medical"] :is(.bg-teal-600, .bg-teal-500, .bg-emerald-600, .bg-emerald-500, .bg-cyan-600, .bg-sky-600, .bg-indigo-600, .bg-indigo-500, .bg-blue-600, .bg-rose-600, .bg-rose-500, .bg-amber-600, .bg-amber-500),
-[data-theme="medical"] :is(.bg-teal-600, .bg-teal-500, .bg-emerald-600, .bg-emerald-500, .bg-cyan-600, .bg-sky-600, .bg-indigo-600, .bg-indigo-500, .bg-blue-600, .bg-rose-600, .bg-rose-500, .bg-amber-600, .bg-amber-500) * {
+/* Preserve crisp white text on solid vibrant buttons and badges across all themes */
+:is(.bg-teal-600, .bg-teal-500, .bg-emerald-600, .bg-emerald-500, .bg-cyan-600, .bg-sky-600, .bg-indigo-600, .bg-indigo-500, .bg-blue-600, .bg-rose-600, .bg-rose-500, .bg-red-600, .bg-amber-600, .bg-amber-500, .bg-purple-600).text-white,
+:is(.bg-teal-600, .bg-teal-500, .bg-emerald-600, .bg-emerald-500, .bg-cyan-600, .bg-sky-600, .bg-indigo-600, .bg-indigo-500, .bg-blue-600, .bg-rose-600, .bg-rose-500, .bg-red-600, .bg-amber-600, .bg-amber-500, .bg-purple-600).text-white * {
   color: #ffffff !important;
 }
 
@@ -400,7 +399,8 @@
   background-color: var(--bg-elevated) !important;
 }
 
-[data-theme="gold"] :is(.text-white, .text-slate-100, .text-slate-200) {
+[data-theme="gold"] .text-white:not([class*="bg-teal-"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not([class*="bg-indigo-"]):not([class*="bg-rose-"]):not([class*="bg-red-"]):not([class*="bg-amber-"]):not([class*="bg-purple-"]):not([class*="bg-cyan-"]):not([class*="from-"]),
+[data-theme="gold"] :is(.text-slate-100, .text-slate-200):not([class*="bg-teal-"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not([class*="bg-indigo-"]):not([class*="bg-rose-"]):not([class*="bg-red-"]):not([class*="bg-amber-"]):not([class*="bg-purple-"]):not([class*="bg-cyan-"]):not([class*="from-"]) {
   color: var(--text-primary) !important;
 }
 
@@ -414,10 +414,4 @@
 
 [data-theme="gold"] :is([class*="border-slate-800"], [class*="border-slate-700"], [class*="border-slate-900"]) {
   border-color: var(--border-color) !important;
-}
-
-[data-theme="gold"] :is(.bg-teal-600, .bg-amber-600, .bg-amber-500),
-[data-theme="gold"] :is(.bg-teal-600, .bg-amber-600, .bg-amber-500) * {
-  background-color: var(--accent-primary) !important;
-  color: var(--accent-text) !important;
 }

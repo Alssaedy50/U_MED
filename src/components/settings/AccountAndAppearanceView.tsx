@@ -1,4 +1,17 @@
-import React, { useState, useEffect } from 'react';
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * UMED AccountAndAppearanceView Component
+ * Focused on:
+ * 1. Appearance & Theme Selection
+ * 2. Student Academic Profile Summary Card (navigates to 'student_profile' instead of duplicating the form)
+ * 3. Password & Security Management
+ * 4. Account & Login Sessions Management (hiding technical UID & cloud sync internals from regular students)
+ */
+
+import React, { useState } from 'react';
+import { updatePassword } from 'firebase/auth';
 import {
   CheckCircle2,
   AlertCircle,
@@ -10,22 +23,21 @@ import {
   Trash2,
   ShieldAlert,
   Sparkles,
-  AtSign,
-  Edit3,
-  Camera,
-  Upload
+  User,
+  Lock,
+  ShieldCheck,
+  Smartphone,
+  ChevronLeft,
+  Building2,
+  GraduationCap
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import {
+  auth,
   isPrimaryOwnerEmail,
   getDeviceFingerprint,
-  YEMEN_UNIVERSITIES_OPTIONS,
-  MEDICAL_SPECIALTIES_OPTIONS,
-  STUDY_LEVELS_OPTIONS,
-  MEDICAL_PRESET_AVATARS,
-  compressAndReadProfileImage
+  STUDY_LEVELS_OPTIONS
 } from '../../lib/firebase.ts';
-import { saveUserAcademicContext } from '../../services/academicService.ts';
 import { PlatformBrandingAndPolicies } from '../../services/platformSettingsService.ts';
 import {
   PlatformLogoBadge,
@@ -61,7 +73,6 @@ export default function AccountAndAppearanceView({
     user,
     roleDoc,
     userProfile,
-    updateFullProfile,
     logout,
     deleteOwnAccount,
     activeRole,
@@ -69,90 +80,73 @@ export default function AccountAndAppearanceView({
     isAuthorizedAdmin
   } = useAuth();
 
-  const [profileUsernameEdit, setProfileUsernameEdit] = useState<string>('');
-  const [profileDisplayNameEdit, setProfileDisplayNameEdit] = useState<string>('');
-  const [profileAvatarEdit, setProfileAvatarEdit] = useState<string>('');
-  const [profileUniversityEdit, setProfileUniversityEdit] = useState<string>('univ-dar-al-salam');
-  const [profileSpecialtyEdit, setProfileSpecialtyEdit] = useState<string>('الطب البشري والجراحة العامة (MBBS)');
-  const [profileStudyLevelEdit, setProfileStudyLevelEdit] = useState<string>('lvl-4');
-  const [profileUpdateLoading, setProfileUpdateLoading] = useState<boolean>(false);
-  const [profileUpdateMessage, setProfileUpdateMessage] = useState<{
+  // Password & Security State
+  const [newPassword, setNewPassword] = useState<string>('');
+  const [confirmPassword, setConfirmPassword] = useState<string>('');
+  const [passwordSaving, setPasswordSaving] = useState<boolean>(false);
+  const [passwordFeedback, setPasswordFeedback] = useState<{
     type: 'success' | 'error';
     text: string;
   } | null>(null);
 
+  // Account Deletion Modal State
   const [showDeleteAccountModal, setShowDeleteAccountModal] = useState<boolean>(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState<string>('');
   const [deleteAccountLoading, setDeleteAccountLoading] = useState<boolean>(false);
   const [deleteAccountError, setDeleteAccountError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (userProfile?.username) setProfileUsernameEdit(userProfile.username);
-    if (userProfile?.displayNameArabic) setProfileDisplayNameEdit(userProfile.displayNameArabic);
-    if (userProfile?.avatarUrl !== undefined) setProfileAvatarEdit(userProfile.avatarUrl || '');
-    if (userProfile?.universityId) setProfileUniversityEdit(userProfile.universityId);
-    if (userProfile?.specialtyArabic) setProfileSpecialtyEdit(userProfile.specialtyArabic);
-    if (userProfile?.studyLevelId) setProfileStudyLevelEdit(userProfile.studyLevelId);
-  }, [
-    userProfile?.username,
-    userProfile?.displayNameArabic,
-    userProfile?.avatarUrl,
-    userProfile?.universityId,
-    userProfile?.specialtyArabic,
-    userProfile?.studyLevelId
-  ]);
-
-  const handleSettingsPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setProfileUpdateMessage(null);
-    try {
-      const dataUrl = await compressAndReadProfileImage(file);
-      setProfileAvatarEdit(dataUrl);
-    } catch (err: any) {
-      setProfileUpdateMessage({
-        type: 'error',
-        text: err?.message || 'تعذر قراءة الصورة الشخصية'
-      });
-    }
-  };
-
-  const handleUpdateCloudUsername = async (e: React.FormEvent) => {
+  const handleUpdatePassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user) return;
-    setProfileUpdateLoading(true);
-    setProfileUpdateMessage(null);
+    setPasswordFeedback(null);
+
+    if (newPassword.trim().length < 6) {
+      setPasswordFeedback({
+        type: 'error',
+        text: 'يجب أن تتكون كلمة المرور الجديدة من 6 أحرف أو أرقام على الأقل.'
+      });
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordFeedback({
+        type: 'error',
+        text: 'كلمتا المرور غير متطابقتين، يرجى التأكد من كتابتهما بشكل متطابق.'
+      });
+      return;
+    }
+
+    if (!auth.currentUser) {
+      setPasswordFeedback({
+        type: 'error',
+        text: 'يرجى تسجيل الدخول مجدداً لتحديث كلمة المرور.'
+      });
+      return;
+    }
+
+    setPasswordSaving(true);
     try {
-      const univObj = YEMEN_UNIVERSITIES_OPTIONS.find((u) => u.id === profileUniversityEdit);
-      const univNameArabic = univObj?.nameArabic || 'جامعة دار السلام الدولية للعلوم والتكنولوجيا';
-
-      const res = await updateFullProfile({
-        newUsername: profileUsernameEdit.trim(),
-        displayNameArabic: profileDisplayNameEdit.trim() || undefined,
-        avatarUrl: profileAvatarEdit,
-        universityId: profileUniversityEdit,
-        universityNameArabic: univNameArabic,
-        specialtyArabic: profileSpecialtyEdit,
-        studyLevelId: profileStudyLevelEdit
-      });
-
-      saveUserAcademicContext({
-        universityId: profileUniversityEdit,
-        universityNameArabic: univNameArabic,
-        studyLevelId: profileStudyLevelEdit
-      });
-
-      setProfileUpdateMessage({
+      await updatePassword(auth.currentUser, newPassword.trim());
+      setNewPassword('');
+      setConfirmPassword('');
+      setPasswordFeedback({
         type: 'success',
-        text: res.message
+        text: 'تم تحديث كلمة المرور وتأمين حسابك بنجاح ✓'
       });
     } catch (err: any) {
-      setProfileUpdateMessage({
-        type: 'error',
-        text: err.message || 'تعذر تحديث بياناتك في السحابة'
-      });
+      const code = String(err?.code || err?.message || '');
+      if (code.includes('requires-recent-login')) {
+        setPasswordFeedback({
+          type: 'error',
+          text: 'لأسباب أمنية، يرجى تسجيل الخروج ثم الدخول مجدداً قبل تغيير كلمة المرور.'
+        });
+      } else {
+        setPasswordFeedback({
+          type: 'error',
+          text: err?.message || 'تعذر تحديث كلمة المرور في الوقت الحالي.'
+        });
+      }
     } finally {
-      setProfileUpdateLoading(false);
+      setPasswordSaving(false);
     }
   };
 
@@ -169,14 +163,18 @@ export default function AccountAndAppearanceView({
       setShowDeleteAccountModal(false);
       setDeleteConfirmText('');
     } catch (err: any) {
-      setDeleteAccountError(err.message || 'تعذر حذف الحساب من السحابة');
+      setDeleteAccountError(err.message || 'تعذر حذف الحساب');
     } finally {
       setDeleteAccountLoading(false);
     }
   };
 
+  const currentLevelLabel =
+    STUDY_LEVELS_OPTIONS.find((l) => l.id === (userProfile?.studyLevelId || 'lvl-4'))?.nameArabic ||
+    'المستوى الرابع';
+
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    <div className="max-w-3xl mx-auto space-y-6" dir="rtl">
       {!user && (
         <StudentOnboardingGate
           platformSettings={platformSettings}
@@ -199,7 +197,9 @@ export default function AccountAndAppearanceView({
         <div className="flex items-center gap-3">
           <PlatformLogoBadge settings={platformSettings} size="md" />
           <div>
-            <h3 className="text-sm font-bold text-[var(--text-primary)]">{platformSettings.platformNameArabic}</h3>
+            <h3 className="text-sm font-bold text-[var(--text-primary)]">
+              {platformSettings.platformNameArabic}
+            </h3>
             <p className="text-[11px] text-[var(--text-muted)]">
               {platformSettings.platformTaglineArabic}
             </p>
@@ -233,15 +233,15 @@ export default function AccountAndAppearanceView({
       {/* 0. Installable App (PWA) & Offline Auto-Sync Panel */}
       <PWASettingsCard />
 
-      {/* 1. Theme & Appearance Settings (4 ثيمات احترافية) */}
+      {/* 1. Theme & Appearance Settings */}
       <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-5 sm:p-6 shadow-sm space-y-4">
         <div className="pb-3 border-b border-[var(--border-color)]">
           <h2 className="text-base font-bold text-[var(--text-primary)] flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-teal-400" />
-            <span>إعدادات المظهر والثيمات (طبي / ذهبي / نهاري / غامق)</span>
+            <span>المظهر واختيار الثيم</span>
           </h2>
           <p className="text-xs text-[var(--text-muted)] mt-0.5">
-            اختر المظهر اللوني المفضل لديك مع تباين كامل للنصوص والبطاقات وحفظ تلقائي لاختيارك
+            اختر المظهر اللوني المفضل لديك مع تباين واضح للنصوص والبطاقات وحفظ تلقائي لاختيارك
           </p>
         </div>
 
@@ -324,7 +324,9 @@ export default function AccountAndAppearanceView({
               </button>
             )}
 
-            {(roleDoc?.role === 'platform_owner' || roleDoc?.role === 'university_admin' || roleDoc?.role === 'batch_rep') && (
+            {(roleDoc?.role === 'platform_owner' ||
+              roleDoc?.role === 'university_admin' ||
+              roleDoc?.role === 'batch_rep') && (
               <button
                 onClick={() => {
                   setActiveRole('batch_rep');
@@ -376,222 +378,179 @@ export default function AccountAndAppearanceView({
         </div>
       )}
 
-      {/* 3. Cloud Unique Username (@username), Profile Picture & Academic Details (When Logged In) */}
+      {/* 3. Academic Profile Summary Card (Redirects to 'student_profile') */}
       {user && (
-        <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-5 sm:p-6 shadow-sm space-y-5">
-          <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[var(--border-color)]">
-            <h2 className="text-base font-bold text-[var(--text-primary)] flex items-center gap-2">
-              <AtSign className="w-5 h-5 text-teal-400" />
-              <span>اسم المستخدم الفريد (@username)، الصورة الشخصية، والبيانات الأكاديمية</span>
-            </h2>
-            <span className="text-xs px-2.5 py-1 rounded border font-semibold bg-emerald-500/15 text-emerald-400 border-emerald-500/30">
-              مُزامن سحابياً ✓
-            </span>
-          </div>
-
-          <form onSubmit={handleUpdateCloudUsername} className="p-4 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] space-y-4 text-xs">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="font-bold text-teal-400 flex items-center gap-1.5">
-                <Edit3 className="w-3.5 h-3.5" />
-                <span>تعديل صورتك الشخصية، اسم المستخدم (@username)، الجامعة، التخصص، والمستوى:</span>
-              </span>
-              {userProfile?.username && (
-                <span className="font-mono text-teal-400 bg-teal-500/10 px-2.5 py-0.5 rounded border border-teal-500/20" dir="ltr">
-                  @{userProfile.username}
-                </span>
+        <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-5 sm:p-6 shadow-sm space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-3.5 min-w-0">
+              {userProfile?.avatarUrl ? (
+                <img
+                  src={userProfile.avatarUrl}
+                  alt={userProfile.displayNameArabic || 'صورة الطالب'}
+                  className="w-14 h-14 rounded-2xl object-cover border-2 border-teal-500/40 shrink-0"
+                />
+              ) : (
+                <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center text-white font-black text-xl shrink-0">
+                  {(userProfile?.displayNameArabic || user.displayName || 'ط').trim().charAt(0)}
+                </div>
               )}
-            </div>
 
-            {profileUpdateMessage && (
-              <div
-                className={`p-2.5 rounded-xl font-bold border ${
-                  profileUpdateMessage.type === 'success'
-                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400'
-                    : 'bg-rose-500/15 border-rose-500/40 text-rose-400'
-                }`}
-              >
-                {profileUpdateMessage.text}
-              </div>
-            )}
-
-            {/* Avatar Upload & Presets */}
-            <div className="p-3 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] space-y-2.5">
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <span className="font-bold text-[var(--text-primary)] flex items-center gap-1.5">
-                  <Camera className="w-4 h-4 text-teal-400" />
-                  <span>صورة الملف الشخصي:</span>
-                </span>
-                {profileAvatarEdit && (
-                  <button
-                    type="button"
-                    onClick={() => setProfileAvatarEdit('')}
-                    className="text-[11px] text-rose-400 hover:underline font-semibold"
-                  >
-                    حذف الصورة الحالية
-                  </button>
-                )}
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="w-14 h-14 rounded-2xl bg-[var(--bg-input)] border-2 border-teal-500/40 flex items-center justify-center overflow-hidden shrink-0">
-                  {profileAvatarEdit ? (
-                    <img
-                      src={profileAvatarEdit}
-                      alt="الصورة الشخصية"
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <Stethoscope className="w-6 h-6 text-teal-400" />
+              <div className="min-w-0 space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-base font-extrabold text-[var(--text-primary)] truncate">
+                    د. {userProfile?.displayNameArabic || user.displayName || 'طالب الطب البشري'}
+                  </h2>
+                  {userProfile?.username && (
+                    <span
+                      className="px-2 py-0.5 rounded-lg bg-teal-500/15 border border-teal-500/30 text-teal-400 font-mono text-xs font-bold"
+                      dir="ltr"
+                    >
+                      @{userProfile.username}
+                    </span>
                   )}
                 </div>
-
-                <label className="cursor-pointer px-3.5 py-2 rounded-xl bg-teal-600/15 hover:bg-teal-600/25 border border-teal-500/40 text-teal-400 font-bold text-xs flex items-center gap-1.5 transition-colors">
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>رفع صورة من الهاتف</span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handleSettingsPhotoUpload}
-                    className="hidden"
-                  />
-                </label>
-
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  {MEDICAL_PRESET_AVATARS.map((presetUrl, idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => setProfileAvatarEdit(presetUrl)}
-                      title={`رمزية طبية ${idx + 1}`}
-                      className={`w-9 h-9 rounded-xl overflow-hidden border-2 transition-all ${
-                        profileAvatarEdit === presetUrl
-                          ? 'border-teal-400 scale-105 shadow-md'
-                          : 'border-[var(--border-color)] opacity-75 hover:opacity-100'
-                      }`}
-                    >
-                      <img src={presetUrl} alt={`Avatar ${idx + 1}`} className="w-full h-full object-cover" />
-                    </button>
-                  ))}
-                </div>
+                <p className="text-xs text-[var(--text-muted)] flex flex-wrap items-center gap-2">
+                  <span className="flex items-center gap-1">
+                    <Building2 className="w-3.5 h-3.5 text-teal-400" />
+                    <span>
+                      {userProfile?.universityNameArabic ||
+                        'جامعة دار السلام الدولية للعلوم والتكنولوجيا'}
+                    </span>
+                  </span>
+                  <span>•</span>
+                  <span className="flex items-center gap-1 text-teal-400 font-semibold">
+                    <Stethoscope className="w-3.5 h-3.5" />
+                    <span>
+                      {userProfile?.specialtyArabic || 'الطب البشري والجراحة العامة (MBBS)'}
+                    </span>
+                  </span>
+                  <span>•</span>
+                  <span className="flex items-center gap-1 text-amber-400 font-semibold">
+                    <GraduationCap className="w-3.5 h-3.5" />
+                    <span>{currentLevelLabel}</span>
+                  </span>
+                </p>
               </div>
             </div>
 
+            <button
+              type="button"
+              onClick={() => setActiveTab('student_profile')}
+              className="px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-xs shrink-0"
+            >
+              <User className="w-4 h-4" />
+              <span>الانتقال إلى ملفي الأكاديمي لتعديل البيانات</span>
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 4. Password & Security Management */}
+      {user && (
+        <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-5 sm:p-6 shadow-sm space-y-4">
+          <div className="pb-3 border-b border-[var(--border-color)]">
+            <h2 className="text-base font-bold text-[var(--text-primary)] flex items-center gap-2">
+              <Lock className="w-5 h-5 text-teal-400" />
+              <span>كلمة المرور والأمان</span>
+            </h2>
+            <p className="text-xs text-[var(--text-muted)] mt-0.5">
+              تعيين أو تحديث كلمة المرور الخاصة بحسابك لتأمين الدخول من أي متصفح
+            </p>
+          </div>
+
+          {passwordFeedback && (
+            <div
+              className={`p-3 rounded-xl text-xs font-bold border flex items-center gap-2 ${
+                passwordFeedback.type === 'success'
+                  ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
+                  : 'bg-rose-500/15 border-rose-500/30 text-rose-400'
+              }`}
+            >
+              {passwordFeedback.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+              ) : (
+                <AlertCircle className="w-4 h-4 shrink-0" />
+              )}
+              <span>{passwordFeedback.text}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleUpdatePassword} className="space-y-3 text-xs">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-[var(--text-muted)] mb-1">
-                  اسم المستخدم الفريد (@username — 4 أحرف إنجليزية على الأقل، الكبير = الصغير):
+                <label className="block text-[var(--text-secondary)] font-semibold mb-1">
+                  كلمة المرور الجديدة:
                 </label>
-                <div className="relative" dir="ltr">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-teal-400 font-mono font-bold">@</span>
-                  <input
-                    type="text"
-                    required
-                    value={profileUsernameEdit}
-                    onChange={(e) => setProfileUsernameEdit(e.target.value.replace(/[^a-zA-Z0-9_.-]/g, ''))}
-                    placeholder="ahmedmed"
-                    className="w-full pl-7 pr-3 py-2 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono focus:outline-none focus:border-teal-500"
-                  />
-                </div>
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="6 أحرف أو أرقام على الأقل"
+                  className="w-full px-3 py-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono focus:outline-none focus:border-teal-500"
+                  dir="ltr"
+                />
               </div>
               <div>
-                <label className="block text-[var(--text-muted)] mb-1">الاسم المعروض في المنصة:</label>
+                <label className="block text-[var(--text-secondary)] font-semibold mb-1">
+                  تأكيد كلمة المرور الجديدة:
+                </label>
                 <input
-                  type="text"
-                  value={profileDisplayNameEdit}
-                  onChange={(e) => setProfileDisplayNameEdit(e.target.value)}
-                  placeholder="د. أحمد محمد"
-                  className="w-full px-3 py-2 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-teal-500"
+                  type="password"
+                  required
+                  minLength={6}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="أعد كتابة كلمة المرور"
+                  className="w-full px-3 py-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono focus:outline-none focus:border-teal-500"
+                  dir="ltr"
                 />
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                <label className="block text-[var(--text-muted)] mb-1">الجامعة:</label>
-                <select
-                  value={profileUniversityEdit}
-                  onChange={(e) => setProfileUniversityEdit(e.target.value)}
-                  className="w-full px-2.5 py-2 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-teal-500"
-                >
-                  {YEMEN_UNIVERSITIES_OPTIONS.map((u) => (
-                    <option key={u.id} value={u.id}>{u.nameArabic}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-[var(--text-muted)] mb-1">التخصص:</label>
-                <select
-                  value={profileSpecialtyEdit}
-                  onChange={(e) => setProfileSpecialtyEdit(e.target.value)}
-                  className="w-full px-2.5 py-2 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none focus:border-teal-500"
-                >
-                  {MEDICAL_SPECIALTIES_OPTIONS.map((sp) => (
-                    <option key={sp.id} value={sp.nameArabic}>{sp.nameArabic}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-[var(--text-muted)] mb-1">المستوى الدراسي:</label>
-                <select
-                  value={profileStudyLevelEdit}
-                  onChange={(e) => setProfileStudyLevelEdit(e.target.value)}
-                  className="w-full px-2.5 py-2 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] text-teal-400 font-bold focus:outline-none focus:border-teal-500"
-                >
-                  {STUDY_LEVELS_OPTIONS.map((lvl) => (
-                    <option key={lvl.id} value={lvl.id}>{lvl.nameArabic}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-              <span className="text-[11px] text-[var(--text-muted)]">
-                عند تغيير اسم المستخدم يتم حذف الاسم القديم من السحابة فوراً وحجز الاسم الجديد بدون تكرار أو تشابه.
-              </span>
+            <div className="flex justify-end pt-1">
               <button
                 type="submit"
-                disabled={profileUpdateLoading}
-                className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white font-bold text-xs transition-colors"
+                disabled={passwordSaving || !newPassword.trim()}
+                className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 transition-colors"
               >
-                {profileUpdateLoading ? 'جارٍ الحفظ في السحابة...' : 'حفظ وتحديث جميع البيانات في السحابة'}
+                {passwordSaving && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                <span>حفظ كلمة المرور الجديدة</span>
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* 5. Account & Login Sessions Management */}
+      {user && (
+        <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-5 sm:p-6 shadow-sm space-y-4">
+          <div className="pb-3 border-b border-[var(--border-color)]">
+            <h2 className="text-base font-bold text-[var(--text-primary)] flex items-center gap-2">
+              <ShieldCheck className="w-5 h-5 text-teal-400" />
+              <span>إدارة الحساب وجلسات الدخول</span>
+            </h2>
+            <p className="text-xs text-[var(--text-muted)] mt-0.5">
+              تفاصيل الجلسة النشطة على هذا الجهاز وخيارات تسجيل الخروج أو إغلاق الحساب
+            </p>
+          </div>
 
           <div className="p-4 bg-[var(--bg-input)] rounded-xl border border-[var(--border-color)] space-y-2.5 text-xs">
             <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-[var(--border-color)]">
-              <span className="text-[var(--text-muted)]">الاسم المعروض:</span>
-              <strong className="text-[var(--text-primary)]">{userProfile?.displayNameArabic || user.displayName || 'مستخدم مسجل'}</strong>
-            </div>
-            <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-[var(--border-color)]">
-              <span className="text-[var(--text-muted)]">اسم المستخدم الفريد (@username):</span>
-              <span className="font-mono text-teal-400 font-bold" dir="ltr">
-                {userProfile?.username ? `@${userProfile.username}` : 'غير محدد بعد'}
+              <span className="text-[var(--text-muted)] flex items-center gap-1.5">
+                <Smartphone className="w-3.5 h-3.5 text-teal-400" />
+                <span>الجهاز الموثق للجلسة الحالية:</span>
+              </span>
+              <span className="font-mono text-emerald-400 text-[11px] font-bold" dir="ltr">
+                نشط وموثق ({(userProfile?.deviceId || getDeviceFingerprint().deviceId).slice(-8)}) ✓
               </span>
             </div>
-            <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-[var(--border-color)]">
-              <span className="text-[var(--text-muted)]">الجامعة والتخصص:</span>
-              <span className="text-[var(--text-primary)] font-semibold">
-                {userProfile?.universityNameArabic || 'جامعة دار السلام الدولية للعلوم والتكنولوجيا'} · {userProfile?.specialtyArabic || 'الطب البشري والجراحة العامة (MBBS)'}
-              </span>
-            </div>
-            <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-[var(--border-color)]">
-              <span className="text-[var(--text-muted)]">بصمة الجهاز الموثقة (حساب واحد لكل هاتف):</span>
-              <span className="font-mono text-emerald-400 text-[11px] tabular-nums" dir="ltr">
-                {userProfile?.deviceId || getDeviceFingerprint().deviceId} ✓
-              </span>
-            </div>
-            <div className="flex flex-wrap justify-between items-center gap-2 pb-2 border-b border-[var(--border-color)]">
-              <span className="text-[var(--text-muted)]">معرف المستخدم السحابي (UID):</span>
-              <span className="font-mono text-[var(--text-muted)] text-[11px] break-all" dir="ltr">{user.uid}</span>
-            </div>
+
             <div className="flex flex-wrap justify-between items-center gap-2">
-              <span className="text-[var(--text-muted)]">الوضع والصلاحية النشطة:</span>
-              <span className="font-bold text-amber-400">
-                {renderBiDiRoleLabel(activeRole)}
-              </span>
+              <span className="text-[var(--text-muted)]">نوع الحساب والصلاحية:</span>
+              <span className="font-bold text-amber-400">{renderBiDiRoleLabel(activeRole)}</span>
             </div>
           </div>
 
@@ -615,21 +574,21 @@ export default function AccountAndAppearanceView({
                 className="py-2.5 px-4 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/40 text-xs font-bold flex items-center justify-center gap-2 transition-colors"
               >
                 <Trash2 className="w-4 h-4" />
-                <span>حذف الحساب نهائياً من السحابة</span>
+                <span>حذف الحساب نهائياً</span>
               </button>
             )}
           </div>
         </div>
       )}
 
-      {/* Self-Account Cloud Deletion Confirmation Modal */}
+      {/* Self-Account Deletion Confirmation Modal */}
       {user && showDeleteAccountModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto overscroll-contain">
           <div className="umed-card max-w-md w-full my-auto bg-[var(--bg-card)] border border-rose-500/50 rounded-2xl p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-[var(--border-color)]">
               <h3 className="text-sm font-bold text-rose-400 flex items-center gap-2">
                 <ShieldAlert className="w-5 h-5 text-rose-400" />
-                <span>تأكيد حذف الحساب نهائياً من السحابة</span>
+                <span>تأكيد حذف الحساب نهائياً</span>
               </h3>
               <button
                 onClick={() => setShowDeleteAccountModal(false)}
@@ -640,9 +599,9 @@ export default function AccountAndAppearanceView({
             </div>
 
             <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-400 space-y-1.5 leading-relaxed">
-              <div className="font-bold">تحذير هام — هذا الإجراء يحذف بياناتك فوراً من السحابة:</div>
+              <div className="font-bold">تحذير هام — هذا الإجراء نهائي ولا يمكن التراجع عنه:</div>
               <p className="text-[11px] text-[var(--text-secondary)]">
-                سيتم حذف حسابك بالكامل من السحابة مباشرةً (ملف المستخدم، اسم المستخدم الفريد @username، صلاحيات الدور، سجل القيد، ونتائج الاختبارات) بحيث لا تبقى أي نسخة منه في السحابة.
+                سيتم حذف حسابك بالكامل (ملف المستخدم، اسم المستخدم الفريد @username، سجل القيد، ونتائج الاختبارات) بشكل نهائي.
               </p>
             </div>
 
@@ -656,7 +615,8 @@ export default function AccountAndAppearanceView({
             <form onSubmit={handleConfirmDeleteOwnAccount} className="space-y-3 text-xs">
               <div>
                 <label className="block text-[var(--text-secondary)] mb-1.5 font-semibold">
-                  لتأكيد الحذف النهائي من السحابة، اكتب العبارة التالية: <code className="text-rose-400 font-bold">حذف حسابي</code>
+                  لتأكيد الحذف النهائي، اكتب العبارة التالية:{' '}
+                  <code className="text-rose-400 font-bold">حذف حسابي</code>
                 </label>
                 <input
                   type="text"
@@ -679,7 +639,7 @@ export default function AccountAndAppearanceView({
                   ) : (
                     <Trash2 className="w-4 h-4" />
                   )}
-                  <span>تأكيد الحذف الفوري من السحابة</span>
+                  <span>تأكيد الحذف النهائي</span>
                 </button>
                 <button
                   type="button"

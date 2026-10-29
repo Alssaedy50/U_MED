@@ -586,7 +586,7 @@ export default function TeleDriveBotStudioModal({
       apiId: '2040',
       apiHash: 'b18441a1ff607e10a989891a5462e627',
       sessionString: '',
-      botToken: '8787910034:AAF_TcpLPwj1m74jtY9XFaeeNv7bAD0aiD8',
+      botToken: '',
       targetGroupId: '-1003664858401',
       adminTelegramId: '1905553456',
       defaultUniversityId,

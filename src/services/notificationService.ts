@@ -29,6 +29,7 @@ export interface AppNotification {
   category: NotificationCategoryType;
   createdAt: string;
   read: boolean;
+  targetId?: string;
   actionTab?: string;
   actionPayload?: Record<string, unknown>;
   authorName?: string;
@@ -668,6 +669,7 @@ export function syncNotificationsForAssessments(
       createdAt: eventTs,
       actionTab: 'student_assessments',
       actionPayload: {
+        targetId: data.id,
         assessmentId: data.id,
         assessmentType: isCompetition ? 'competition' : 'exam',
         universityId: data.universityId,

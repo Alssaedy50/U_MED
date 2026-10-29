@@ -1197,7 +1197,7 @@ API_HASH=${cfg.apiHash || 'b18441a1ff607e10a989891a5462e627'}
 
 # 2. Dual Telegram Clients (UserBot Group Listener + Bot Admin Notifier)
 SESSION_STRING=${cfg.sessionString || 'BQAA...your_pyrogram_mtproto_session_string'}
-BOT_TOKEN=${cfg.botToken || '8787910034:AAF_TcpLPwj1m74jtY9XFaeeNv7bADOaiD8'}
+BOT_TOKEN=${cfg.botToken || ''}
 
 # 3. Target Student Batch Group & Admin Notification Recipient
 TARGET_GROUP_ID=${cfg.targetGroupId || '-1003664858401'}
