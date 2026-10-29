@@ -606,21 +606,24 @@ export default function StudentMedicalLibrary({
 
           {/* Optional Description */}
           {res.description && (
-            <p className="text-slate-400 text-[11px] line-clamp-2 leading-relaxed mb-3">
+            <p className="text-slate-400 text-[11px] line-clamp-2 leading-relaxed mb-2.5">
               {res.description}
             </p>
           )}
 
-          {/* Course & Instructor Line */}
+          {/* Unboxed Course & Instructor Inline Metadata Line */}
           {(linkedCourse || courseDoctor) && (
-            <div className="mb-3 px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
+            <div className="mb-2.5 pt-2 border-t border-[var(--border-color)]/60 flex flex-wrap items-center gap-1.5 text-[11px]">
               {linkedCourse && (
-                <span className="font-bold text-teal-400 truncate max-w-[60%]">
+                <span className="font-bold text-teal-400 truncate max-w-[65%]">
                   {linkedCourse.titleArabic}
                 </span>
               )}
+              {linkedCourse && courseDoctor && (
+                <span className="text-slate-500" aria-hidden="true">·</span>
+              )}
               {courseDoctor && (
-                <span className="inline-flex items-center gap-1 text-[var(--text-primary)] font-semibold truncate">
+                <span className="inline-flex items-center gap-1 text-slate-300 font-semibold truncate">
                   <Stethoscope className="w-3 h-3 text-teal-400 shrink-0" />
                   <span className="truncate">{courseDoctor}</span>
                 </span>
@@ -630,17 +633,29 @@ export default function StudentMedicalLibrary({
         </div>
 
         {/* Card Footer & Actions */}
-        <div className="pt-3 border-t border-[var(--border-color)] mt-2 space-y-2.5">
+        <div className="pt-2.5 border-t border-[var(--border-color)] mt-2 space-y-2.5">
           <div className="flex items-center justify-between text-[11px] text-slate-400 tabular-nums">
             <span>تاريخ النشر</span>
-            <span className="font-mono">{new Date(res.createdAt).toLocaleDateString('ar-YE')}</span>
+            <span className="font-mono">
+              {(() => {
+                try {
+                  return new Date(res.createdAt).toLocaleDateString('ar-EG-u-nu-latn', {
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit'
+                  });
+                } catch {
+                  return res.createdAt;
+                }
+              })()}
+            </span>
           </div>
 
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => setActivePreviewResource(res)}
-              className="flex-1 min-h-[44px] py-2 px-3.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm active:scale-[0.98] whitespace-nowrap"
+              className="flex-1 min-h-[42px] py-2 px-3.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm active:scale-[0.98] whitespace-nowrap"
             >
               <Eye className="w-4 h-4 shrink-0" />
               <span>
@@ -653,7 +668,7 @@ export default function StudentMedicalLibrary({
                 href={res.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="min-h-[44px] min-w-[44px] p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors border border-slate-700 flex items-center justify-center shrink-0 active:scale-[0.98]"
+                className="min-h-[42px] min-w-[42px] p-2 rounded-xl bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] text-[var(--text-primary)] transition-colors border border-[var(--border-color)] flex items-center justify-center shrink-0 active:scale-[0.98]"
                 title="فتح الرابط الأصلي"
               >
                 <ExternalLink className="w-4 h-4" />
@@ -666,35 +681,35 @@ export default function StudentMedicalLibrary({
   };
 
   return (
-    <div className="space-y-4 max-w-full overflow-hidden" dir="rtl">
-      {/* 1. Library Header Bar with View Switcher & Refresh */}
-      <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl px-4 py-3.5 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5 flex-wrap min-w-0">
-          <div className="w-9 h-9 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-400 shrink-0">
+    <div className="space-y-3.5 max-w-full overflow-hidden" dir="rtl">
+      {/* 1. Compact Library Header Bar with View Switcher & Refresh */}
+      <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl px-3.5 py-3 flex flex-wrap items-center justify-between gap-2.5">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="w-8 h-8 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-400 shrink-0">
             <BookOpen className="w-4 h-4" />
           </div>
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-sm sm:text-base font-extrabold text-[var(--text-primary)]">
-                المكتبة الطبية الرقمية والأرفف المنهجية
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <h2 className="text-sm sm:text-base font-extrabold text-[var(--text-primary)] truncate">
+                المكتبة الطبية الرقمية
               </h2>
-              <span className="text-xs text-slate-400 font-mono tabular-nums">
-                ({courseScopedResources.length} مادة علمية)
+              <span className="text-xs text-teal-400 font-mono font-bold tabular-nums">
+                ({courseScopedResources.length})
               </span>
             </div>
-            <p className="text-[11px] text-slate-400 mt-0.5">
+            <p className="hidden sm:block text-[11px] text-slate-400 mt-0.5">
               اختر المقرر الدراسي ثم القسم (نظري أو عملي) وتصفح أرفف الكتب والملخصات، الشرائح والفيديوهات، والتسجيلات الصوتية
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1.5 shrink-0">
           {/* Toggle between Horizontal Shelves and Grid */}
-          <div className="flex items-center p-1 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-xs">
+          <div className="flex items-center p-0.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-xs">
             <button
               type="button"
               onClick={() => setViewLayout('shelves')}
-              className={`min-h-[36px] px-3 py-1 rounded-lg font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap ${
+              className={`min-h-[34px] px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 transition-colors whitespace-nowrap ${
                 viewLayout === 'shelves'
                   ? 'bg-teal-600 text-white shadow-sm'
                   : 'text-slate-400 hover:text-[var(--text-primary)]'
@@ -702,12 +717,12 @@ export default function StudentMedicalLibrary({
               title="عرض الأرفف الأفقية المقسمة"
             >
               <Rows3 className="w-3.5 h-3.5 shrink-0" />
-              <span>أرفف أفقية</span>
+              <span>أرفف</span>
             </button>
             <button
               type="button"
               onClick={() => setViewLayout('grid')}
-              className={`min-h-[36px] px-3 py-1 rounded-lg font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap ${
+              className={`min-h-[34px] px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 transition-colors whitespace-nowrap ${
                 viewLayout === 'grid'
                   ? 'bg-teal-600 text-white shadow-sm'
                   : 'text-slate-400 hover:text-[var(--text-primary)]'
@@ -723,10 +738,10 @@ export default function StudentMedicalLibrary({
             type="button"
             onClick={() => loadResources(true)}
             disabled={loading}
-            className="min-h-[38px] py-1.5 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition-colors border border-slate-700 shrink-0 whitespace-nowrap"
+            className="min-h-[36px] py-1.5 px-3 rounded-xl bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] text-[var(--text-primary)] text-xs font-semibold flex items-center gap-1.5 transition-colors border border-[var(--border-color)] shrink-0 whitespace-nowrap"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-teal-400' : ''}`} />
-            <span>تحديث</span>
+            <span className="hidden xs:inline">تحديث</span>
           </button>
         </div>
       </div>
@@ -1122,23 +1137,23 @@ export default function StudentMedicalLibrary({
       {/* 5. Filter & Sort Modal Sheet (Smooth Mobile Bottom Sheet) */}
       {showFilterModal && (
         <div
-          className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto overscroll-contain"
+          className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto overscroll-contain"
           dir="rtl"
         >
-          <div className="bg-slate-900 border border-slate-800 sm:rounded-2xl rounded-t-3xl max-w-md w-full max-h-[85dvh] flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom sm:slide-in-from-bottom-0 sm:fade-in duration-200">
+          <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] sm:rounded-2xl rounded-t-3xl max-w-md w-full max-h-[85dvh] flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom sm:slide-in-from-bottom-0 sm:fade-in duration-200">
             {/* Mobile Drag Handle */}
-            <div className="w-10 h-1.5 bg-slate-700 rounded-full mx-auto mt-2.5 sm:hidden" />
+            <div className="w-10 h-1.5 bg-[var(--border-color)] rounded-full mx-auto mt-2.5 sm:hidden" />
 
             {/* Modal Header */}
-            <div className="p-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+            <div className="p-4 bg-[var(--bg-input)] border-b border-[var(--border-color)] flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <SlidersHorizontal className="w-4 h-4 text-teal-400" />
-                <h3 className="text-sm font-bold text-white">تصفية وترتيب المواد الطبية</h3>
+                <h3 className="text-sm font-bold text-[var(--text-primary)]">تصفية وترتيب المواد الطبية</h3>
               </div>
               <button
                 type="button"
                 onClick={() => setShowFilterModal(false)}
-                className="min-h-[36px] min-w-[36px] p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 flex items-center justify-center"
+                className="min-h-[36px] min-w-[36px] p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-elevated)] flex items-center justify-center"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1148,7 +1163,7 @@ export default function StudentMedicalLibrary({
             <div className="p-5 overflow-y-auto space-y-5 text-xs">
               {/* Section Type Filter */}
               <div className="space-y-2">
-                <label className="text-slate-300 font-bold block">القسم الأكاديمي (نظري / عملي):</label>
+                <label className="text-[var(--text-secondary)] font-bold block">القسم الأكاديمي (نظري / عملي):</label>
                 <div className="grid grid-cols-3 gap-2">
                   {[
                     { id: 'all', label: 'الكل (نظري وعملي)' },
@@ -1161,8 +1176,8 @@ export default function StudentMedicalLibrary({
                       onClick={() => setSelectedSection(s.id as any)}
                       className={`min-h-[42px] p-2.5 rounded-xl border font-bold text-center transition-all ${
                         selectedSection === s.id
-                          ? 'bg-teal-600/20 border-teal-500 text-teal-300 ring-1 ring-teal-500/50'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                          ? 'bg-teal-600/20 border-teal-500 text-teal-400 ring-1 ring-teal-500/50'
+                          : 'bg-[var(--bg-input)] border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'
                       }`}
                     >
                       {s.label}
@@ -1173,7 +1188,7 @@ export default function StudentMedicalLibrary({
 
               {/* Exact File Type Filter */}
               <div className="space-y-2">
-                <label className="text-slate-300 font-bold block">تحديد نوع ملف دقيق:</label>
+                <label className="text-[var(--text-secondary)] font-bold block">تحديد نوع ملف دقيق:</label>
                 <div className="grid grid-cols-3 gap-2">
                   {[
                     { id: 'all', label: 'جميع الأنواع' },
@@ -1189,8 +1204,8 @@ export default function StudentMedicalLibrary({
                       onClick={() => setSelectedType(t.id as any)}
                       className={`min-h-[40px] p-2 rounded-xl border font-bold text-center transition-all ${
                         selectedType === t.id
-                          ? 'bg-teal-600/20 border-teal-500 text-teal-300 ring-1 ring-teal-500/50'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                          ? 'bg-teal-600/20 border-teal-500 text-teal-400 ring-1 ring-teal-500/50'
+                          : 'bg-[var(--bg-input)] border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'
                       }`}
                     >
                       {t.label}
@@ -1201,7 +1216,7 @@ export default function StudentMedicalLibrary({
 
               {/* Sort Order */}
               <div className="space-y-2">
-                <label className="text-slate-300 font-bold block">ترتيب المخرجات داخل الأرفف حسب:</label>
+                <label className="text-[var(--text-secondary)] font-bold block">ترتيب المخرجات داخل الأرفف حسب:</label>
                 <div className="grid grid-cols-2 gap-2">
                   {[
                     { id: 'newest', label: 'الأحدث إضافة أولاً' },
@@ -1215,8 +1230,8 @@ export default function StudentMedicalLibrary({
                       onClick={() => setSortBy(sortItem.id as SortOption)}
                       className={`min-h-[42px] p-2.5 rounded-xl border font-bold text-center transition-all ${
                         sortBy === sortItem.id
-                          ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300 ring-1 ring-indigo-500/50'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                          ? 'bg-indigo-600/20 border-indigo-500 text-indigo-400 ring-1 ring-indigo-500/50'
+                          : 'bg-[var(--bg-input)] border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'
                       }`}
                     >
                       {sortItem.label}
@@ -1227,7 +1242,7 @@ export default function StudentMedicalLibrary({
             </div>
 
             {/* Modal Footer */}
-            <div className="p-4 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-3">
+            <div className="p-4 bg-[var(--bg-input)] border-t border-[var(--border-color)] flex items-center justify-between gap-3">
               <button
                 type="button"
                 onClick={() => {
@@ -1235,14 +1250,14 @@ export default function StudentMedicalLibrary({
                   setSelectedType('all');
                   setSortBy('newest');
                 }}
-                className="min-h-[42px] py-2 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold"
+                className="min-h-[42px] py-2 px-4 rounded-xl bg-[var(--bg-elevated)] hover:opacity-90 border border-[var(--border-color)] text-[var(--text-primary)] text-xs font-semibold"
               >
                 إعادة ضبط
               </button>
               <button
                 type="button"
                 onClick={() => setShowFilterModal(false)}
-                className="min-h-[42px] py-2.5 px-6 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold shadow-md shadow-teal-900/40"
+                className="min-h-[42px] py-2.5 px-6 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold shadow-md"
               >
                 تطبيق التصفية
               </button>

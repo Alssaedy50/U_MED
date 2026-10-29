@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* ============================================================================
-   UMED 4-THEME DESIGN SYSTEM ARCHITECTURE
+   UMED 4-THEME SEMANTIC DESIGN SYSTEM ARCHITECTURE
    Themes: 'medical' (default) | 'gold' | 'light' | 'dark'
    Applied via document.documentElement.setAttribute('data-theme', theme)
    ============================================================================ */
@@ -12,13 +12,15 @@
   --bg-card: #ffffff;
   --bg-elevated: #e0f2fe;
   --bg-input: #f0f9ff;
+  --surface-hover: #bae6fd;
   --text-primary: #082f49;
   --text-secondary: #0369a1;
   --text-muted: #475569;
   --border-color: #7dd3fc;
   --accent-primary: #0284c7;
   --accent-text: #ffffff;
-  --card-shadow: 0 4px 14px rgba(2, 132, 199, 0.08);
+  --card-shadow: 0 2px 10px rgba(2, 132, 199, 0.07);
+  --modal-backdrop: rgba(8, 47, 73, 0.58);
   color-scheme: light;
 }
 
@@ -27,13 +29,15 @@
   --bg-card: #16120a;
   --bg-elevated: #241d10;
   --bg-input: #1c160c;
+  --surface-hover: #362b16;
   --text-primary: #fef3c7;
   --text-secondary: #fbbf24;
   --text-muted: #d6c39c;
   --border-color: #5c471c;
   --accent-primary: #eab308;
   --accent-text: #0c0a06;
-  --card-shadow: 0 6px 20px rgba(234, 179, 8, 0.12);
+  --card-shadow: 0 4px 16px rgba(234, 179, 8, 0.12);
+  --modal-backdrop: rgba(12, 10, 6, 0.85);
   color-scheme: dark;
 }
 
@@ -42,13 +46,15 @@
   --bg-card: #ffffff;
   --bg-elevated: #e2e8f0;
   --bg-input: #f8fafc;
+  --surface-hover: #cbd5e1;
   --text-primary: #0f172a;
   --text-secondary: #334155;
   --text-muted: #64748b;
   --border-color: #cbd5e1;
   --accent-primary: #0d9488;
   --accent-text: #ffffff;
-  --card-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+  --card-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
+  --modal-backdrop: rgba(15, 23, 42, 0.55);
   color-scheme: light;
 }
 
@@ -57,13 +63,15 @@
   --bg-card: #0f172a;
   --bg-elevated: #1e293b;
   --bg-input: #090e1a;
+  --surface-hover: #334155;
   --text-primary: #f8fafc;
   --text-secondary: #38bdf8;
   --text-muted: #94a3b8;
   --border-color: #334155;
   --accent-primary: #10b981;
   --accent-text: #060b14;
-  --card-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  --card-shadow: 0 4px 16px rgba(0, 0, 0, 0.42);
+  --modal-backdrop: rgba(6, 11, 20, 0.82);
   color-scheme: dark;
 }
 
@@ -71,13 +79,19 @@
   html,
   body {
     font-family: 'Cairo', 'IBM Plex Sans Arabic', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background-color: var(--bg-app) !important;
-    color: var(--text-primary) !important;
+    background-color: var(--bg-app);
+    color: var(--text-primary);
     overflow-x: hidden;
     max-width: 100vw;
     min-height: 100dvh;
     -webkit-text-size-adjust: 100%;
     transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  /* Enforce Latin tabular numerals across mono and numeric elements */
+  .font-mono,
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
   }
 
   select,
@@ -91,39 +105,41 @@
 
   input::placeholder,
   textarea::placeholder {
-    color: var(--text-muted) !important;
-    opacity: 0.85 !important;
+    color: var(--text-muted);
+    opacity: 0.85;
   }
 }
 
-/* Semantic Theme Utility Classes */
+/* ============================================================================
+   SEMANTIC COMPONENT UTILITY CLASSES
+   ============================================================================ */
 .umed-app-shell {
-  background-color: var(--bg-app) !important;
-  color: var(--text-primary) !important;
+  background-color: var(--bg-app);
+  color: var(--text-primary);
 }
 
 .umed-card {
-  background-color: var(--bg-card) !important;
-  color: var(--text-primary) !important;
-  border: 1px solid var(--border-color) !important;
-  box-shadow: var(--card-shadow) !important;
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--card-shadow);
 }
 
 .umed-elevated {
-  background-color: var(--bg-elevated) !important;
-  color: var(--text-primary) !important;
-  border: 1px solid var(--border-color) !important;
+  background-color: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
 }
 
 .umed-input {
-  background-color: var(--bg-input) !important;
-  color: var(--text-primary) !important;
-  border: 1px solid var(--border-color) !important;
+  background-color: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
 }
 
 .umed-btn-accent {
-  background-color: var(--accent-primary) !important;
-  color: var(--accent-text) !important;
+  background-color: var(--accent-primary);
+  color: var(--accent-text);
 }
 
 /* Safe modal scroll container utility: prevents flex items-center from clipping top content on mobile viewports */
@@ -137,6 +153,7 @@
   align-items: flex-start;
   justify-content: center;
   padding: 0.75rem;
+  background-color: var(--modal-backdrop);
 }
 
 @media (min-width: 640px) {
@@ -171,18 +188,17 @@
 }
 
 /* ============================================================================
-   GLOBAL SAFEGUARD OVERRIDES FOR LIGHT & MEDICAL THEMES
-   Automatically transforms hardcoded dark Tailwind utilities & gradients so text
-   & cards never vanish or turn dark on light or clinical cyan surfaces
+   SCOPED THEME COMPATIBILITY RULES FOR LEGACY / ADMIN PANELS
+   Ensures any remaining hardcoded slate classes adapt to Light, Medical & Gold
+   without overriding semantic CSS variable tokens.
    ============================================================================ */
 
-[data-theme="light"],
-[data-theme="medical"] {
-  background-color: var(--bg-app) !important;
-  color: var(--text-primary) !important;
+/* Fixed modal overlays use the theme's translucent backdrop */
+.fixed.inset-0[class*="bg-slate-950"] {
+  background-color: var(--modal-backdrop) !important;
 }
 
-/* 1. App Canvas & Deep Backgrounds -> var(--bg-input) */
+/* Light & Medical Theme Adaptations */
 [data-theme="light"] [class*="bg-slate-950"]:not(.fixed),
 [data-theme="light"] .bg-\[\#0a0f1d\],
 [data-theme="light"] .bg-black\/40,
@@ -193,13 +209,6 @@
   color: var(--text-primary) !important;
 }
 
-/* Fixed modal overlays keep a translucent dark backdrop in all themes */
-[data-theme="light"] .fixed.inset-0[class*="bg-slate-950"],
-[data-theme="medical"] .fixed.inset-0[class*="bg-slate-950"] {
-  background-color: rgba(8, 47, 73, 0.55) !important;
-}
-
-/* 2. Cards, Modals, Sidebars & Headers (all opacity variants /85, /80, /70, etc.) -> var(--bg-card) */
 [data-theme="light"] [class*="bg-slate-900"],
 [data-theme="light"] .bg-gray-900,
 [data-theme="medical"] [class*="bg-slate-900"],
@@ -210,7 +219,6 @@
   box-shadow: var(--card-shadow) !important;
 }
 
-/* 3. Elevated Controls & Secondary Buttons (all opacity variants) -> var(--bg-elevated) */
 [data-theme="light"] [class*="bg-slate-800"],
 [data-theme="medical"] [class*="bg-slate-800"] {
   background-color: var(--bg-elevated) !important;
@@ -218,35 +226,28 @@
 }
 
 [data-theme="light"] .hover\:bg-slate-800:hover,
-[data-theme="light"] .hover\:bg-slate-700:hover {
-  background-color: #cbd5e1 !important;
-}
-
+[data-theme="light"] .hover\:bg-slate-700:hover,
 [data-theme="medical"] .hover\:bg-slate-800:hover,
 [data-theme="medical"] .hover\:bg-slate-700:hover {
-  background-color: #bae6fd !important;
+  background-color: var(--surface-hover) !important;
 }
 
-/* 4. Dark Gradient Cards -> Clean White/Sky Surface in Light & Medical */
 [data-theme="light"] [class*="from-slate-9"],
 [data-theme="light"] [class*="via-slate-9"],
 [data-theme="light"] [class*="to-slate-9"],
 [data-theme="light"] [class*="from-teal-950"],
 [data-theme="light"] [class*="from-indigo-950"],
-[data-theme="light"] [class*="to-indigo-950"],
 [data-theme="medical"] [class*="from-slate-9"],
 [data-theme="medical"] [class*="via-slate-9"],
 [data-theme="medical"] [class*="to-slate-9"],
 [data-theme="medical"] [class*="from-teal-950"],
-[data-theme="medical"] [class*="from-indigo-950"],
-[data-theme="medical"] [class*="to-indigo-950"] {
+[data-theme="medical"] [class*="from-indigo-950"] {
   background-image: linear-gradient(135deg, var(--bg-elevated), var(--bg-card)) !important;
   background-color: var(--bg-card) !important;
   color: var(--text-primary) !important;
   border-color: var(--border-color) !important;
 }
 
-/* Preserve vibrant CTA gradients (from-teal-500 to-emerald-600) */
 [data-theme="light"] .from-teal-500,
 [data-theme="medical"] .from-teal-500 {
   background-image: linear-gradient(to right, #0284c7, #0d9488) !important;
@@ -257,7 +258,7 @@
   color: #ffffff !important;
 }
 
-/* Tinted surfaces & Semantic Soft Badges in Light & Medical */
+/* Semantic Soft Badges in Light & Medical */
 [data-theme="light"] [class*="bg-teal-950"],
 [data-theme="light"] [class*="bg-teal-500/1"],
 [data-theme="light"] [class*="bg-teal-500/2"],
@@ -318,13 +319,8 @@
   color: #0284c7 !important;
   border-color: #7dd3fc !important;
 }
-[data-theme="light"] [class*="bg-purple-950"],
-[data-theme="medical"] [class*="bg-purple-950"] {
-  background-color: #f3e8ff !important;
-  color: #6b21a8 !important;
-}
 
-/* 5. Typography & High-Contrast Text Overrides */
+/* High-Contrast Typography in Light & Medical */
 [data-theme="light"] .text-white,
 [data-theme="light"] .text-slate-100,
 [data-theme="light"] .text-slate-200,
@@ -346,232 +342,53 @@
   color: var(--text-muted) !important;
 }
 
-[data-theme="light"] .hover\:text-white:hover,
-[data-theme="light"] .hover\:text-slate-200:hover,
-[data-theme="medical"] .hover\:text-white:hover,
-[data-theme="medical"] .hover\:text-slate-200:hover {
-  color: var(--text-primary) !important;
-}
-
-/* Keep crisp white text on solid vibrant action buttons & badges */
-[data-theme="light"] .bg-teal-600,
-[data-theme="light"] .bg-teal-600\/90,
-[data-theme="light"] .bg-teal-700,
-[data-theme="light"] .bg-teal-500,
-[data-theme="light"] .bg-emerald-600,
-[data-theme="light"] .bg-emerald-500,
-[data-theme="light"] .bg-cyan-600,
-[data-theme="light"] .bg-sky-600,
-[data-theme="light"] .bg-indigo-600,
-[data-theme="light"] .bg-indigo-500,
-[data-theme="light"] .bg-blue-600,
-[data-theme="light"] .bg-rose-600,
-[data-theme="light"] .bg-rose-500,
-[data-theme="light"] .bg-amber-600,
-[data-theme="light"] .bg-amber-500,
-[data-theme="medical"] .bg-teal-600,
-[data-theme="medical"] .bg-teal-600\/90,
-[data-theme="medical"] .bg-teal-700,
-[data-theme="medical"] .bg-teal-500,
-[data-theme="medical"] .bg-emerald-600,
-[data-theme="medical"] .bg-emerald-500,
-[data-theme="medical"] .bg-cyan-600,
-[data-theme="medical"] .bg-sky-600,
-[data-theme="medical"] .bg-indigo-600,
-[data-theme="medical"] .bg-indigo-500,
-[data-theme="medical"] .bg-blue-600,
-[data-theme="medical"] .bg-rose-600,
-[data-theme="medical"] .bg-rose-500,
-[data-theme="medical"] .bg-amber-600,
-[data-theme="medical"] .bg-amber-500 {
+/* Preserve white text on solid vibrant buttons in Light & Medical */
+[data-theme="light"] :is(.bg-teal-600, .bg-teal-500, .bg-emerald-600, .bg-emerald-500, .bg-cyan-600, .bg-sky-600, .bg-indigo-600, .bg-indigo-500, .bg-blue-600, .bg-rose-600, .bg-rose-500, .bg-amber-600, .bg-amber-500),
+[data-theme="light"] :is(.bg-teal-600, .bg-teal-500, .bg-emerald-600, .bg-emerald-500, .bg-cyan-600, .bg-sky-600, .bg-indigo-600, .bg-indigo-500, .bg-blue-600, .bg-rose-600, .bg-rose-500, .bg-amber-600, .bg-amber-500) *,
+[data-theme="medical"] :is(.bg-teal-600, .bg-teal-500, .bg-emerald-600, .bg-emerald-500, .bg-cyan-600, .bg-sky-600, .bg-indigo-600, .bg-indigo-500, .bg-blue-600, .bg-rose-600, .bg-rose-500, .bg-amber-600, .bg-amber-500),
+[data-theme="medical"] :is(.bg-teal-600, .bg-teal-500, .bg-emerald-600, .bg-emerald-500, .bg-cyan-600, .bg-sky-600, .bg-indigo-600, .bg-indigo-500, .bg-blue-600, .bg-rose-600, .bg-rose-500, .bg-amber-600, .bg-amber-500) * {
   color: #ffffff !important;
 }
 
-[data-theme="light"] .bg-teal-600 *,
-[data-theme="light"] .bg-teal-600\/90 *,
-[data-theme="light"] .bg-teal-700 *,
-[data-theme="light"] .bg-teal-500 *,
-[data-theme="light"] .bg-emerald-600 *,
-[data-theme="light"] .bg-emerald-500 *,
-[data-theme="light"] .bg-sky-600 *,
-[data-theme="light"] .bg-indigo-600 *,
-[data-theme="light"] .bg-indigo-500 *,
-[data-theme="light"] .bg-blue-600 *,
-[data-theme="light"] .bg-rose-600 *,
-[data-theme="light"] .bg-rose-500 *,
-[data-theme="light"] .bg-amber-600 *,
-[data-theme="light"] .bg-amber-500 *,
-[data-theme="medical"] .bg-teal-600 *,
-[data-theme="medical"] .bg-teal-600\/90 *,
-[data-theme="medical"] .bg-teal-700 *,
-[data-theme="medical"] .bg-teal-500 *,
-[data-theme="medical"] .bg-emerald-600 *,
-[data-theme="medical"] .bg-emerald-500 *,
-[data-theme="medical"] .bg-sky-600 *,
-[data-theme="medical"] .bg-indigo-600 *,
-[data-theme="medical"] .bg-indigo-500 *,
-[data-theme="medical"] .bg-blue-600 *,
-[data-theme="medical"] .bg-rose-600 *,
-[data-theme="medical"] .bg-rose-500 *,
-[data-theme="medical"] .bg-amber-600 *,
-[data-theme="medical"] .bg-amber-500 * {
-  color: #ffffff !important;
-}
-
-/* Semantic Accent Text Contrast on Light & Medical Backgrounds */
-[data-theme="light"] .text-teal-200,
-[data-theme="light"] .text-teal-300,
-[data-theme="light"] .text-teal-400,
-[data-theme="medical"] .text-teal-200,
-[data-theme="medical"] .text-teal-300,
-[data-theme="medical"] .text-teal-400 {
+/* Semantic Accent Text Contrast on Light & Medical Surfaces */
+[data-theme="light"] :is(.text-teal-200, .text-teal-300, .text-teal-400),
+[data-theme="medical"] :is(.text-teal-200, .text-teal-300, .text-teal-400) {
   color: #0369a1 !important;
 }
 
-[data-theme="light"] .text-sky-200,
-[data-theme="light"] .text-sky-300,
-[data-theme="light"] .text-sky-400,
-[data-theme="medical"] .text-sky-200,
-[data-theme="medical"] .text-sky-300,
-[data-theme="medical"] .text-sky-400 {
+[data-theme="light"] :is(.text-sky-200, .text-sky-300, .text-sky-400),
+[data-theme="medical"] :is(.text-sky-200, .text-sky-300, .text-sky-400) {
   color: #0284c7 !important;
 }
 
-[data-theme="light"] .text-emerald-100,
-[data-theme="light"] .text-emerald-200,
-[data-theme="light"] .text-emerald-300,
-[data-theme="light"] .text-emerald-400,
-[data-theme="medical"] .text-emerald-100,
-[data-theme="medical"] .text-emerald-200,
-[data-theme="medical"] .text-emerald-300,
-[data-theme="medical"] .text-emerald-400 {
+[data-theme="light"] :is(.text-emerald-100, .text-emerald-200, .text-emerald-300, .text-emerald-400),
+[data-theme="medical"] :is(.text-emerald-100, .text-emerald-200, .text-emerald-300, .text-emerald-400) {
   color: #047857 !important;
 }
 
-[data-theme="light"] .text-amber-200,
-[data-theme="light"] .text-amber-300,
-[data-theme="light"] .text-amber-400,
-[data-theme="medical"] .text-amber-200,
-[data-theme="medical"] .text-amber-300,
-[data-theme="medical"] .text-amber-400 {
+[data-theme="light"] :is(.text-amber-200, .text-amber-300, .text-amber-400),
+[data-theme="medical"] :is(.text-amber-200, .text-amber-300, .text-amber-400) {
   color: #b45309 !important;
 }
 
-[data-theme="light"] .text-rose-100,
-[data-theme="light"] .text-rose-200,
-[data-theme="light"] .text-rose-300,
-[data-theme="light"] .text-rose-400,
-[data-theme="medical"] .text-rose-100,
-[data-theme="medical"] .text-rose-200,
-[data-theme="medical"] .text-rose-300,
-[data-theme="medical"] .text-rose-400 {
+[data-theme="light"] :is(.text-rose-100, .text-rose-200, .text-rose-300, .text-rose-400),
+[data-theme="medical"] :is(.text-rose-100, .text-rose-200, .text-rose-300, .text-rose-400) {
   color: #be123c !important;
 }
 
-[data-theme="light"] .text-indigo-200,
-[data-theme="light"] .text-indigo-300,
-[data-theme="light"] .text-indigo-400,
-[data-theme="medical"] .text-indigo-200,
-[data-theme="medical"] .text-indigo-300,
-[data-theme="medical"] .text-indigo-400 {
+[data-theme="light"] :is(.text-indigo-200, .text-indigo-300, .text-indigo-400),
+[data-theme="medical"] :is(.text-indigo-200, .text-indigo-300, .text-indigo-400) {
   color: #3730a3 !important;
 }
 
-[data-theme="light"] .text-purple-200,
-[data-theme="light"] .text-purple-300,
-[data-theme="light"] .text-purple-400,
-[data-theme="medical"] .text-purple-200,
-[data-theme="medical"] .text-purple-300,
-[data-theme="medical"] .text-purple-400 {
-  color: #6b21a8 !important;
-}
-
-[data-theme="light"] .text-blue-300,
-[data-theme="medical"] .text-blue-300 {
-  color: #1d4ed8 !important;
-}
-
-/* 6. Explicit Borders & Dividers in Light & Medical */
-[data-theme="light"] [class*="border-slate-800"],
-[data-theme="light"] [class*="border-slate-700"],
-[data-theme="light"] [class*="border-slate-900"],
-[data-theme="light"] [class*="border-white/10"],
-[data-theme="medical"] [class*="border-slate-800"],
-[data-theme="medical"] [class*="border-slate-700"],
-[data-theme="medical"] [class*="border-slate-900"],
-[data-theme="medical"] [class*="border-white/10"] {
+[data-theme="light"] :is([class*="border-slate-800"], [class*="border-slate-700"], [class*="border-slate-900"], [class*="border-white/10"]),
+[data-theme="medical"] :is([class*="border-slate-800"], [class*="border-slate-700"], [class*="border-slate-900"], [class*="border-white/10"]) {
   border-color: var(--border-color) !important;
 }
 
-[data-theme="light"] [class*="border-teal-800"],
-[data-theme="light"] [class*="border-teal-700"],
-[data-theme="light"] [class*="border-teal-500/30"],
-[data-theme="light"] [class*="border-teal-500/40"],
-[data-theme="medical"] [class*="border-teal-800"],
-[data-theme="medical"] [class*="border-teal-700"],
-[data-theme="medical"] [class*="border-teal-500/30"],
-[data-theme="medical"] [class*="border-teal-500/40"] {
-  border-color: #38bdf8 !important;
-}
-
-[data-theme="light"] [class*="border-emerald-800"],
-[data-theme="light"] [class*="border-emerald-700"],
-[data-theme="medical"] [class*="border-emerald-800"],
-[data-theme="medical"] [class*="border-emerald-700"] {
-  border-color: #6ee7b7 !important;
-}
-
-[data-theme="light"] [class*="border-amber-800"],
-[data-theme="light"] [class*="border-amber-700"],
-[data-theme="medical"] [class*="border-amber-800"],
-[data-theme="medical"] [class*="border-amber-700"] {
-  border-color: #fcd34d !important;
-}
-
-[data-theme="light"] [class*="border-rose-800"],
-[data-theme="light"] [class*="border-rose-700"],
-[data-theme="medical"] [class*="border-rose-800"],
-[data-theme="medical"] [class*="border-rose-700"] {
-  border-color: #fda4af !important;
-}
-
-[data-theme="light"] [class*="border-indigo-800"],
-[data-theme="light"] [class*="border-indigo-700"],
-[data-theme="light"] [class*="border-indigo-900"],
-[data-theme="medical"] [class*="border-indigo-800"],
-[data-theme="medical"] [class*="border-indigo-700"],
-[data-theme="medical"] [class*="border-indigo-900"] {
-  border-color: #a5b4fc !important;
-}
-
-/* 7. Inputs, Selects & Textareas in Light & Medical */
-[data-theme="light"] input,
-[data-theme="light"] select,
-[data-theme="light"] textarea,
-[data-theme="medical"] input,
-[data-theme="medical"] select,
-[data-theme="medical"] textarea {
-  background-color: var(--bg-input) !important;
-  color: var(--text-primary) !important;
-  border-color: var(--border-color) !important;
-}
-
-/* ============================================================================
-   GLOBAL SAFEGUARD OVERRIDES FOR GOLD THEME (Royal Luxury Obsidian & Gold)
-   Ensures antique gold borders, warm obsidian cards, and dark text on gold buttons
-   ============================================================================ */
-
-[data-theme="gold"] {
-  background-color: var(--bg-app) !important;
-  color: var(--text-primary) !important;
-}
-
+/* Gold Theme Adaptations */
 [data-theme="gold"] [class*="bg-slate-950"]:not(.fixed) {
   background-color: var(--bg-app) !important;
-}
-
-[data-theme="gold"] .fixed.inset-0[class*="bg-slate-950"] {
-  background-color: rgba(12, 10, 6, 0.85) !important;
 }
 
 [data-theme="gold"] [class*="bg-slate-900"] {
@@ -583,14 +400,7 @@
   background-color: var(--bg-elevated) !important;
 }
 
-[data-theme="gold"] .hover\:bg-slate-800:hover,
-[data-theme="gold"] .hover\:bg-slate-700:hover {
-  background-color: #362b16 !important;
-}
-
-[data-theme="gold"] .text-white,
-[data-theme="gold"] .text-slate-100,
-[data-theme="gold"] .text-slate-200 {
+[data-theme="gold"] :is(.text-white, .text-slate-100, .text-slate-200) {
   color: var(--text-primary) !important;
 }
 
@@ -598,72 +408,16 @@
   color: var(--text-secondary) !important;
 }
 
-[data-theme="gold"] .text-slate-400,
-[data-theme="gold"] .text-slate-500 {
+[data-theme="gold"] :is(.text-slate-400, .text-slate-500) {
   color: var(--text-muted) !important;
 }
 
-[data-theme="gold"] [class*="border-slate-800"],
-[data-theme="gold"] [class*="border-slate-700"],
-[data-theme="gold"] [class*="border-slate-900"] {
+[data-theme="gold"] :is([class*="border-slate-800"], [class*="border-slate-700"], [class*="border-slate-900"]) {
   border-color: var(--border-color) !important;
 }
 
-[data-theme="gold"] input,
-[data-theme="gold"] select,
-[data-theme="gold"] textarea {
-  background-color: var(--bg-input) !important;
-  color: var(--text-primary) !important;
-  border-color: var(--border-color) !important;
-}
-
-/* Primary action buttons in Gold Theme use royal gold with dark obsidian text */
-[data-theme="gold"] .bg-teal-600,
-[data-theme="gold"] .bg-teal-600\/90,
-[data-theme="gold"] .bg-amber-600,
-[data-theme="gold"] .bg-amber-500 {
+[data-theme="gold"] :is(.bg-teal-600, .bg-amber-600, .bg-amber-500),
+[data-theme="gold"] :is(.bg-teal-600, .bg-amber-600, .bg-amber-500) * {
   background-color: var(--accent-primary) !important;
   color: var(--accent-text) !important;
 }
-
-[data-theme="gold"] .bg-teal-600 *,
-[data-theme="gold"] .bg-teal-600\/90 *,
-[data-theme="gold"] .bg-amber-600 *,
-[data-theme="gold"] .bg-amber-500 * {
-  color: var(--accent-text) !important;
-}
-
-/* ============================================================================
-   GLOBAL SAFEGUARD OVERRIDES FOR DARK THEME (Deep Midnight Slate)
-   ============================================================================ */
-
-[data-theme="dark"] {
-  background-color: var(--bg-app) !important;
-  color: var(--text-primary) !important;
-}
-
-[data-theme="dark"] [class*="bg-slate-950"]:not(.fixed) {
-  background-color: var(--bg-app) !important;
-}
-
-[data-theme="dark"] [class*="bg-slate-900"] {
-  background-color: var(--bg-card) !important;
-  box-shadow: var(--card-shadow) !important;
-}
-
-[data-theme="dark"] [class*="bg-slate-800"] {
-  background-color: var(--bg-elevated) !important;
-}
-
-[data-theme="dark"] [class*="border-slate-800"] {
-  border-color: var(--border-color) !important;
-}
-
-[data-theme="dark"] input,
-[data-theme="dark"] select,
-[data-theme="dark"] textarea {
-  background-color: var(--bg-input) !important;
-  color: var(--text-primary) !important;
-  border-color: var(--border-color) !important;
-}
-

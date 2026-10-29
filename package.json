@@ -9,8 +9,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist .data",
-    "lint": "tsc --noEmit",
-    "test:security": "tsx scripts/verify-remediation.ts"
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

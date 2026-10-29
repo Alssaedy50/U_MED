@@ -515,13 +515,13 @@ export default function StudentDashboard({
       
       {/* 1. Academic Summary Banner — Shown ONLY on the main 'study' tab so it never crowds Library or Assessments */}
       {internalTab === 'study' && (
-        <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-4 sm:p-5 shadow-sm overflow-hidden">
+        <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-3.5 sm:p-4 shadow-sm overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <button
                 type="button"
                 onClick={() => switchSection('profile')}
-                className="w-12 h-12 rounded-2xl bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center text-white shadow-lg shadow-teal-500/20 font-black text-xl flex-shrink-0 overflow-hidden border border-teal-400/40 hover:scale-105 transition-transform"
+                className="w-11 h-11 rounded-2xl bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center text-white shadow-md shadow-teal-500/20 font-black text-lg flex-shrink-0 overflow-hidden border border-teal-400/40 hover:scale-105 transition-transform"
                 title="تعديل الصورة والملف الأكاديمي"
               >
                 {userProfile?.avatarUrl ? (
@@ -535,28 +535,28 @@ export default function StudentDashboard({
                 )}
               </button>
               <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex items-center gap-1.5 flex-wrap">
                   <h2 className="font-extrabold text-sm sm:text-base text-[var(--text-primary)]">
                     د. {userProfile?.displayNameArabic || displayNameArabic}
                   </h2>
                   {userProfile?.username && (
                     <span
-                      className="px-2 py-0.5 rounded-full bg-teal-500/15 text-teal-300 border border-teal-500/30 text-[11px] font-mono font-bold"
+                      className="px-2 py-0.5 rounded-md bg-teal-500/15 text-teal-400 border border-teal-500/30 text-[11px] font-mono font-bold tabular-nums"
                       dir="ltr"
                     >
                       @{userProfile.username}
                     </span>
                   )}
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                  <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border tabular-nums ${
                     isInternship 
-                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' 
-                      : 'bg-teal-500/20 text-teal-300 border-teal-500/30'
+                      ? 'bg-amber-500/15 text-amber-400 border-amber-500/30' 
+                      : 'bg-teal-500/15 text-teal-400 border-teal-500/30'
                   }`}>
                     {isInternship ? 'سنة الامتياز السريرية' : `دفعة المستوى ${activeEnrollment.currentStudyLevelId.replace('lvl-', '')}`}
                   </span>
                 </div>
-                <p className="text-xs text-[var(--text-secondary)] mt-1">
-                  {currentUniversityName} • {currentSpecialtyArabic}
+                <p className="text-[11px] sm:text-xs text-[var(--text-muted)] mt-0.5">
+                  {currentUniversityName} · {currentSpecialtyArabic}
                 </p>
               </div>
             </div>
@@ -565,7 +565,7 @@ export default function StudentDashboard({
               <select
                 value={activeEnrollment.universityId}
                 onChange={(e) => handleQuickUniversityChange(e.target.value)}
-                className="px-2.5 py-1.5 rounded-xl bg-slate-950 border border-slate-700 text-slate-200 text-xs font-bold focus:outline-none focus:border-teal-500 max-w-[180px] truncate"
+                className="px-2.5 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] text-xs font-bold focus:outline-none focus:border-teal-500 max-w-[180px] truncate"
                 title="تغيير الجامعة"
               >
                 {YEMEN_UNIVERSITIES_OPTIONS.map((u) => (
@@ -576,7 +576,7 @@ export default function StudentDashboard({
               <select
                 value={activeEnrollment.currentStudyLevelId}
                 onChange={(e) => handleQuickLevelChange(e.target.value)}
-                className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-700 text-teal-300 text-xs font-bold focus:outline-none focus:border-teal-500"
+                className="px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-teal-400 text-xs font-bold focus:outline-none focus:border-teal-500 tabular-nums"
                 title="تغيير المستوى الدراسي / الدفعة"
               >
                 <option value="lvl-1">المستوى الأول (Year 1)</option>
@@ -591,15 +591,15 @@ export default function StudentDashboard({
               <button
                 type="button"
                 onClick={() => switchSection('profile')}
-                className="px-3 py-1.5 rounded-xl bg-teal-600/20 hover:bg-teal-600/30 border border-teal-500/40 text-teal-300 text-xs font-bold transition-colors"
+                className="px-3 py-1.5 rounded-xl bg-teal-600/15 hover:bg-teal-600/25 border border-teal-500/40 text-teal-400 text-xs font-bold transition-colors"
               >
-                تعديل صورتي وبياناتي
+                تعديل بياناتي
               </button>
             </div>
           </div>
 
           {showOptionalEnrollmentModal && uid && uid !== 'visitor' && (
-            <div className="mt-4 pt-4 border-t border-slate-800">
+            <div className="mt-4 pt-4 border-t border-[var(--border-color)]">
               <RegisterEnrollment
                 uid={uid}
                 studentNameArabic={displayNameArabic}
@@ -618,16 +618,16 @@ export default function StudentDashboard({
       {internalTab === 'library' && (
         <React.Suspense
           fallback={
-            <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-6 space-y-4 animate-pulse" dir="rtl">
-              <div className="h-5 w-48 bg-slate-800 rounded-lg" />
+            <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-6 space-y-4 animate-pulse" dir="rtl">
+              <div className="h-5 w-48 bg-[var(--bg-elevated)] rounded-lg" />
               <div className="flex gap-2 overflow-hidden">
-                <div className="h-9 w-28 bg-slate-800 rounded-xl shrink-0" />
-                <div className="h-9 w-28 bg-slate-800 rounded-xl shrink-0" />
-                <div className="h-9 w-28 bg-slate-800 rounded-xl shrink-0" />
+                <div className="h-9 w-28 bg-[var(--bg-elevated)] rounded-xl shrink-0" />
+                <div className="h-9 w-28 bg-[var(--bg-elevated)] rounded-xl shrink-0" />
+                <div className="h-9 w-28 bg-[var(--bg-elevated)] rounded-xl shrink-0" />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="h-28 bg-slate-800/70 rounded-xl" />
-                <div className="h-28 bg-slate-800/70 rounded-xl" />
+                <div className="h-28 bg-[var(--bg-input)] rounded-xl" />
+                <div className="h-28 bg-[var(--bg-input)] rounded-xl" />
               </div>
             </div>
           }
@@ -648,11 +648,11 @@ export default function StudentDashboard({
       {internalTab === 'assessments' && (
         <React.Suspense
           fallback={
-            <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-6 space-y-4 animate-pulse" dir="rtl">
-              <div className="h-5 w-52 bg-slate-800 rounded-lg" />
+            <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-6 space-y-4 animate-pulse" dir="rtl">
+              <div className="h-5 w-52 bg-[var(--bg-elevated)] rounded-lg" />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="h-32 bg-slate-800/70 rounded-xl" />
-                <div className="h-32 bg-slate-800/70 rounded-xl" />
+                <div className="h-32 bg-[var(--bg-input)] rounded-xl" />
+                <div className="h-32 bg-[var(--bg-input)] rounded-xl" />
               </div>
             </div>
           }
@@ -671,19 +671,19 @@ export default function StudentDashboard({
 
       {/* SECTION: STUDY DASHBOARD (Batch Notifications, Blocks, Courses & Doctors) */}
       {internalTab === 'study' && (
-        <div className="space-y-5">
+        <div className="space-y-4">
 
           {/* BATCH NOTIFICATIONS & SHARED DATA FROM BATCH REP / ADMIN */}
           {batchNotifications.length > 0 && (
-            <div className="bg-slate-900/90 border border-indigo-500/30 rounded-2xl p-4 sm:p-5 shadow-xl space-y-3">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+            <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-4 sm:p-5 shadow-sm space-y-3">
+              <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-2.5">
                 <div className="flex items-center gap-2">
                   <Bell className="w-4 h-4 text-amber-400" />
-                  <h3 className="text-xs sm:text-sm font-bold text-white">
+                  <h3 className="text-xs sm:text-sm font-bold text-[var(--text-primary)] tabular-nums">
                     إشعارات الدفعة والبيانات المشتركة ({batchNotifications.length})
                   </h3>
                 </div>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-semibold">
+                <span className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 font-semibold">
                   مخصص لدفعتك فقط
                 </span>
               </div>
@@ -692,12 +692,12 @@ export default function StudentDashboard({
                 {batchNotifications.slice(0, 6).map((notif) => (
                   <div
                     key={notif.id}
-                    className={`p-3.5 rounded-xl border text-xs space-y-2 transition-all hover:border-slate-700 cursor-pointer ${
+                    className={`p-3.5 rounded-xl border text-xs space-y-2 transition-all hover:border-teal-500/40 cursor-pointer ${
                       notif.category === 'urgent'
-                        ? 'bg-rose-950/25 border-rose-800/60'
+                        ? 'bg-rose-500/10 border-rose-500/30'
                         : notif.category === 'exam'
-                        ? 'bg-amber-950/20 border-amber-800/50'
-                        : 'bg-slate-950 border-slate-800/80'
+                        ? 'bg-amber-500/10 border-amber-500/30'
+                        : 'bg-[var(--bg-input)] border-[var(--border-color)]'
                     }`}
                     onClick={() => setActiveBatchNotifModal(notif)}
                   >
@@ -706,10 +706,10 @@ export default function StudentDashboard({
                         <span
                           className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                             notif.category === 'urgent'
-                              ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                              ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
                               : notif.category === 'exam'
-                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                              : 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
+                              ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                              : 'bg-teal-500/20 text-teal-400 border border-teal-500/30'
                           }`}
                         >
                           {notif.category === 'urgent'
@@ -720,27 +720,27 @@ export default function StudentDashboard({
                             ? 'داتا مشتركة'
                             : 'إشعار الدفعة'}
                         </span>
-                        <h4 className="font-bold text-white text-xs sm:text-sm">{notif.title}</h4>
+                        <h4 className="font-bold text-[var(--text-primary)] text-xs sm:text-sm">{notif.title}</h4>
                       </div>
-                      <span className="text-[10px] text-slate-400 font-mono">
-                        {new Date(notif.createdAt).toLocaleString('ar-YE')}
+                      <span className="text-[10px] text-[var(--text-muted)] font-mono tabular-nums">
+                        {new Date(notif.createdAt).toLocaleDateString('ar-EG-u-nu-latn', { year: 'numeric', month: 'short', day: 'numeric' })}
                       </span>
                     </div>
 
-                    <p className="text-slate-300 leading-relaxed line-clamp-2">{notif.message}</p>
+                    <p className="text-[var(--text-secondary)] leading-relaxed line-clamp-2">{notif.message}</p>
 
-                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-slate-800/80 text-[11px]">
-                      <span className="text-slate-400">
-                        المرسل: <strong className="text-teal-300">{notif.authorNameArabic}</strong>
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-[var(--border-color)] text-[11px]">
+                      <span className="text-[var(--text-muted)]">
+                        المرسل: <strong className="text-teal-400">{notif.authorNameArabic}</strong>
                       </span>
 
                       <div className="flex items-center gap-2">
                         {notif.attachmentUrl && (
-                          <span className="px-2 py-0.5 rounded bg-teal-950 text-teal-300 border border-teal-800 text-[10px] font-bold">
+                          <span className="px-2 py-0.5 rounded bg-teal-500/15 text-teal-400 border border-teal-500/30 text-[10px] font-bold">
                             يحتوي مرفقاً 📎
                           </span>
                         )}
-                        <span className="text-teal-400 hover:text-teal-300 font-bold text-[11px] flex items-center gap-1">
+                        <span className="text-teal-400 font-bold text-[11px] flex items-center gap-1">
                           <span>عرض كامل الإشعار</span>
                           <ChevronRight className="w-3 h-3 rotate-180" />
                         </span>
@@ -753,18 +753,18 @@ export default function StudentDashboard({
           )}
           
           {studyPeriods.length > 0 && (
-            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-3.5 sm:p-4 flex flex-wrap items-center justify-between gap-3">
               <div>
-                <span className="text-[11px] font-bold text-slate-400 block">
+                <span className="text-[11px] font-bold text-[var(--text-muted)] block tabular-nums">
                   البلوك الدراسي النشط حالياً في دفعتك ({studyPeriods.length} بلوكات متاحة):
                 </span>
                 <button
                   type="button"
                   onClick={() => setShowBlockPopup(true)}
-                  className="mt-1 text-sm sm:text-base font-black text-white hover:text-teal-300 flex items-center gap-2 transition-colors text-right"
+                  className="mt-1 text-sm sm:text-base font-black text-[var(--text-primary)] hover:text-teal-400 flex items-center gap-2 transition-colors text-right"
                 >
                   <span>{selectedPeriod ? `${selectedPeriod.titleArabic} (${selectedPeriod.code})` : 'اختر البلوك الدراسي'}</span>
-                  <span className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-teal-600 text-teal-300 hover:text-white text-xs font-bold transition-colors">
+                  <span className="px-2.5 py-1 rounded-lg bg-[var(--bg-input)] hover:bg-teal-600 border border-[var(--border-color)] text-teal-400 hover:text-white text-xs font-bold transition-colors">
                     تبديل البلوك ▾
                   </span>
                 </button>
@@ -773,26 +773,26 @@ export default function StudentDashboard({
               <button
                 type="button"
                 onClick={() => setShowBlockPopup(true)}
-                className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-teal-300 text-xs font-bold transition-colors"
+                className="px-3.5 py-2 rounded-xl bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] border border-[var(--border-color)] text-teal-400 text-xs font-bold transition-colors tabular-nums"
               >
-                عرض جميع بلوكات الدفعة ({studyPeriods.length})
+                عرض جميع البلوكات ({studyPeriods.length})
               </button>
             </div>
           )}
 
           {/* Standalone Popup Modal for Selecting Study Block */}
           {showBlockPopup && (
-            <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-start sm:items-center justify-center p-3 sm:p-4 overflow-y-auto" dir="rtl">
-              <div className="bg-slate-900 border border-teal-500/40 rounded-2xl max-w-lg w-full max-h-[85dvh] flex flex-col shadow-2xl my-auto overflow-hidden">
-                <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/90">
+            <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-start sm:items-center justify-center p-3 sm:p-4 overflow-y-auto" dir="rtl">
+              <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl max-w-lg w-full max-h-[85dvh] flex flex-col shadow-2xl my-auto overflow-hidden">
+                <div className="px-5 py-4 border-b border-[var(--border-color)] flex items-center justify-between bg-[var(--bg-input)]">
                   <div>
-                    <h3 className="text-sm font-black text-white">اختيار البلوك الدراسي ({studyPeriods.length})</h3>
-                    <p className="text-[11px] text-slate-400 mt-0.5">اختر البلوك لعرض مقرراته ومحاضراته الخاصة بدفعتك</p>
+                    <h3 className="text-sm font-black text-[var(--text-primary)] tabular-nums">اختيار البلوك الدراسي ({studyPeriods.length})</h3>
+                    <p className="text-[11px] text-[var(--text-muted)] mt-0.5">اختر البلوك لعرض مقرراته ومحاضراته الخاصة بدفعتك</p>
                   </div>
                   <button
                     type="button"
                     onClick={() => setShowBlockPopup(false)}
-                    className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 hover:text-white text-xs"
+                    className="px-2.5 py-1 rounded-lg bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-xs font-bold"
                   >
                     إغلاق
                   </button>
@@ -814,15 +814,15 @@ export default function StudentDashboard({
                         }}
                         className={`w-full text-right p-3.5 rounded-xl border text-xs transition-all flex items-center justify-between gap-2 ${
                           isSelected
-                            ? 'bg-teal-500/20 border-teal-500 text-white font-bold shadow-md'
-                            : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                            ? 'bg-teal-500/15 border-teal-500 text-[var(--text-primary)] font-bold shadow-sm'
+                            : 'bg-[var(--bg-input)] border-[var(--border-color)] text-[var(--text-secondary)] hover:border-teal-500/40'
                         }`}
                       >
                         <div>
-                          <div className="text-sm font-bold text-white">{period.titleArabic}</div>
-                          <div className="text-[11px] text-slate-400" dir="ltr">{period.titleEnglish}</div>
+                          <div className="text-sm font-bold text-[var(--text-primary)]">{period.titleArabic}</div>
+                          <div className="text-[11px] text-[var(--text-muted)]" dir="ltr">{period.titleEnglish}</div>
                         </div>
-                        <span className="px-2 py-0.5 rounded bg-slate-900 text-teal-300 font-mono text-[11px]">
+                        <span className="px-2 py-0.5 rounded bg-[var(--bg-elevated)] border border-[var(--border-color)] text-teal-400 font-mono text-[11px] tabular-nums">
                           {period.code}
                         </span>
                       </button>
@@ -834,28 +834,28 @@ export default function StudentDashboard({
           )}
 
           {/* Courses & Assigned Theoretical / Practical Doctors Grid */}
-          <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+          <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-4 sm:p-5 shadow-sm space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[var(--border-color)]">
               <div>
-                <h3 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
-                  <BookOpen className="w-4 h-4 text-teal-400" />
+                <h3 className="text-sm sm:text-base font-bold text-[var(--text-primary)] flex items-center gap-2">
+                  <BookOpen className="w-4 h-4 text-teal-400 shrink-0" />
                   <span>المقررات ودكاترة المواد (النظري والعملي)</span>
-                  {selectedPeriod && <span className="text-xs text-teal-300 font-mono">({selectedPeriod.titleArabic})</span>}
+                  {selectedPeriod && <span className="text-xs text-teal-400 font-mono">({selectedPeriod.titleArabic})</span>}
                 </h3>
-                <p className="text-xs text-slate-400 mt-0.5">
+                <p className="text-[11px] sm:text-xs text-[var(--text-muted)] mt-0.5">
                   استعراض المحاضرات النظرية والتدريب العملي ودكاترة كل مادة في دفعتك
                 </p>
               </div>
               <button
                 onClick={() => switchSection('library')}
-                className="px-3 py-1.5 rounded-xl bg-teal-600/20 hover:bg-teal-600/30 text-teal-300 border border-teal-500/30 text-xs font-bold transition-colors"
+                className="px-3 py-1.5 rounded-xl bg-teal-600/15 hover:bg-teal-600/25 text-teal-400 border border-teal-500/30 text-xs font-bold transition-colors shrink-0"
               >
                 فتح المكتبة الرقمية
               </button>
             </div>
 
             {courses.length === 0 ? (
-              <div className="text-center py-6 text-slate-400 text-xs">
+              <div className="text-center py-6 text-[var(--text-muted)] text-xs">
                 <p>
                   {studyPeriods.length === 0
                     ? 'لم تقم الإدارة أو مندوب الدفعة بإنشاء بلوكات أو مقررات دراسية لهذا المستوى بعد. ستظهر هنا تلقائياً فور إضافتها.'
@@ -875,72 +875,72 @@ export default function StudentDashboard({
                         setSelectedCourseFilter({ id: course.id, title: course.titleArabic });
                         switchSection('library');
                       }}
-                      className="umed-card cursor-pointer p-4 bg-[var(--bg-card)] text-[var(--text-primary)] rounded-xl border border-[var(--border-color)] text-xs space-y-2.5 hover:border-teal-500/50 transition-colors overflow-hidden"
+                      className="cursor-pointer p-4 bg-[var(--bg-input)] text-[var(--text-primary)] rounded-xl border border-[var(--border-color)] text-xs space-y-2.5 hover:border-teal-500/50 transition-colors overflow-hidden flex flex-col justify-between"
                     >
-                      <div className="flex items-center justify-between gap-2 flex-wrap">
-                        <span className="font-mono text-teal-300 font-bold px-2 py-0.5 rounded bg-[var(--bg-elevated)] border border-[var(--border-color)]">
-                          {course.code}
-                        </span>
-                        <span className="text-[var(--text-muted)] text-[11px] font-mono">{course.creditHours ?? 3} ساعات</span>
-                      </div>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <span className="font-mono text-teal-400 font-bold px-2 py-0.5 rounded bg-[var(--bg-elevated)] border border-[var(--border-color)] tabular-nums">
+                            {course.code}
+                          </span>
+                          <span className="text-[var(--text-muted)] text-[11px] font-mono tabular-nums">{course.creditHours ?? 3} ساعات</span>
+                        </div>
 
-                      <div>
-                        <div className="font-bold text-[var(--text-primary)] text-sm">{course.titleArabic}</div>
-                        <div className="text-[11px] text-[var(--text-muted)] mt-0.5" dir="ltr">{course.titleEnglish}</div>
-                      </div>
+                        <div>
+                          <div className="font-bold text-[var(--text-primary)] text-sm">{course.titleArabic}</div>
+                          <div className="text-[11px] text-[var(--text-muted)] mt-0.5" dir="ltr">{course.titleEnglish}</div>
+                        </div>
 
-                      {/* Assigned Theoretical & Practical Doctors for this Course */}
-                      {(courseDoctors.length > 0 || course.instructorNameArabic) ? (
-                        <div className="p-2.5 rounded-lg bg-[var(--bg-elevated)] border border-[var(--border-color)] space-y-1.5">
-                          <div className="text-[10px] font-bold text-[var(--text-secondary)] flex items-center gap-1">
-                            <Stethoscope className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-                            <span>دكتور المادة / مدرسو المقرر:</span>
+                        {/* Clean Hairline-Separated Instructors Strip (No Nested Card Box) */}
+                        {(courseDoctors.length > 0 || course.instructorNameArabic) ? (
+                          <div className="py-2 border-y border-[var(--border-color)] space-y-1.5">
+                            {course.instructorNameArabic && !courseDoctors.some(d => `${d.academicTitle || 'د.'} ${d.instructorNameArabic}`.trim() === course.instructorNameArabic?.trim() || d.instructorNameArabic.trim() === course.instructorNameArabic?.trim()) && (
+                              <div className="flex items-center justify-between gap-2 flex-wrap text-[11px]">
+                                <span className="text-[var(--text-primary)] font-bold inline-flex items-center gap-1.5">
+                                  <Stethoscope className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                                  <span>{course.instructorNameArabic}</span>
+                                </span>
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-teal-500/15 text-teal-400 border border-teal-500/30">
+                                  مدرس المقرر
+                                </span>
+                              </div>
+                            )}
+                            {courseDoctors.map(docItem => (
+                              <div key={docItem.id} className="flex items-center justify-between gap-2 flex-wrap text-[11px]">
+                                <span className="text-[var(--text-primary)] font-bold inline-flex items-center gap-1.5">
+                                  <Stethoscope className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                                  <span>{docItem.academicTitle || 'د.'} {docItem.instructorNameArabic}</span>
+                                </span>
+                                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                                  docItem.teachingType === 'theoretical'
+                                    ? 'bg-teal-500/15 text-teal-400 border-teal-500/30'
+                                    : docItem.teachingType === 'practical'
+                                    ? 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30'
+                                    : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                                }`}>
+                                  {docItem.teachingType === 'theoretical'
+                                    ? 'مادة نظرية'
+                                    : docItem.teachingType === 'practical'
+                                    ? 'مادة عملية / سريرية'
+                                    : 'نظري + عملي'}
+                                </span>
+                              </div>
+                            ))}
                           </div>
-                          {course.instructorNameArabic && !courseDoctors.some(d => `${d.academicTitle || 'د.'} ${d.instructorNameArabic}`.trim() === course.instructorNameArabic?.trim() || d.instructorNameArabic.trim() === course.instructorNameArabic?.trim()) && (
-                            <div className="flex items-center justify-between gap-2 flex-wrap text-[11px]">
-                              <span className="text-[var(--text-primary)] font-bold">
-                                {course.instructorNameArabic}
-                              </span>
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-teal-950 text-teal-300 border border-teal-800">
-                                مدرس المقرر
-                              </span>
-                            </div>
-                          )}
-                          {courseDoctors.map(docItem => (
-                            <div key={docItem.id} className="flex items-center justify-between gap-2 flex-wrap text-[11px]">
-                              <span className="text-[var(--text-primary)] font-bold">
-                                {docItem.academicTitle || 'د.'} {docItem.instructorNameArabic}
-                              </span>
-                              <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                                docItem.teachingType === 'theoretical'
-                                  ? 'bg-teal-950 text-teal-300 border border-teal-800'
-                                  : docItem.teachingType === 'practical'
-                                  ? 'bg-indigo-950 text-indigo-300 border border-indigo-800'
-                                  : 'bg-amber-950 text-amber-300 border border-amber-800'
-                              }`}>
-                                {docItem.teachingType === 'theoretical'
-                                  ? 'مادة نظرية'
-                                  : docItem.teachingType === 'practical'
-                                  ? 'مادة عملية / سريرية'
-                                  : 'نظري + عملي'}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="text-[11px] text-[var(--text-muted)] flex items-center gap-1">
-                          <Stethoscope className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-                          <span>هيئة التدريس بالكلية</span>
-                        </div>
-                      )}
+                        ) : (
+                          <div className="py-2 border-y border-[var(--border-color)] text-[11px] text-[var(--text-muted)] flex items-center gap-1.5">
+                            <Stethoscope className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                            <span>هيئة التدريس بالكلية</span>
+                          </div>
+                        )}
+                      </div>
 
-                      <div className="pt-2 border-t border-[var(--border-color)] flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                      <div className="pt-1 flex flex-wrap items-center justify-between gap-2 text-[11px] tabular-nums">
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="px-2 py-0.5 rounded bg-teal-950 border border-teal-800 text-teal-300 text-[10px] font-bold">
+                          <span className="px-2 py-0.5 rounded bg-teal-500/15 border border-teal-500/30 text-teal-400 text-[10px] font-bold">
                             {courseLecturesCount > 0 ? `${courseLecturesCount} محاضرات / ملفات` : 'محاضرات المادة'}
                           </span>
                           {courseExamsCount > 0 && (
-                            <span className="px-2 py-0.5 rounded bg-amber-950 border border-amber-800 text-amber-300 text-[10px] font-bold">
+                            <span className="px-2 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-bold">
                               {courseExamsCount} اختبارات
                             </span>
                           )}
@@ -959,19 +959,19 @@ export default function StudentDashboard({
           </div>
 
           {/* Quick Access to Exams & Competitions */}
-          <div className="p-5 bg-gradient-to-r from-indigo-950/40 via-slate-900 to-teal-950/40 border border-indigo-500/30 rounded-2xl text-xs flex flex-wrap items-center justify-between gap-4">
+          <div className="umed-card p-4 sm:p-5 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl text-xs flex flex-wrap items-center justify-between gap-4">
             <div className="space-y-1">
-              <span className="font-bold text-white text-sm flex items-center gap-2">
-                <Trophy className="w-4 h-4 text-amber-400" />
+              <span className="font-bold text-[var(--text-primary)] text-sm flex items-center gap-2">
+                <Trophy className="w-4 h-4 text-amber-400 shrink-0" />
                 <span>الاختبارات الدورية والمسابقات الطبية التفاعلية</span>
               </span>
-              <p className="text-slate-300 leading-relaxed text-[11px]">
+              <p className="text-[var(--text-secondary)] leading-relaxed text-[11px]">
                 ابدأ اختبارات البلوكات والمسابقات السريرية المخصصة لدفعتك في {currentUniversityName} مع التصحيح الفوري وتحميل ملف الاختبار بعد الانتهاء.
               </p>
             </div>
             <button
               onClick={() => switchSection('assessments')}
-              className="px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs transition-colors shadow-lg flex items-center gap-2"
+              className="px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs transition-colors shadow-md flex items-center gap-2 shrink-0"
             >
               <span>عرض وبدء الاختبارات الآن</span>
               <ChevronRight className="w-4 h-4 rotate-180" />
@@ -983,18 +983,18 @@ export default function StudentDashboard({
 
       {/* Detailed Batch Notification Sheet Modal */}
       {activeBatchNotifModal && (
-        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto overscroll-contain" dir="rtl">
-          <div className="bg-slate-900 border border-indigo-500/40 sm:rounded-2xl rounded-t-2xl max-w-lg w-full max-h-[88dvh] flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom sm:slide-in-from-bottom-0 sm:fade-in duration-200">
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto overscroll-contain" dir="rtl">
+          <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] sm:rounded-2xl rounded-t-2xl max-w-lg w-full max-h-[88dvh] flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom sm:slide-in-from-bottom-0 sm:fade-in duration-200">
             {/* Header */}
-            <div className="p-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3">
+            <div className="p-4 bg-[var(--bg-input)] border-b border-[var(--border-color)] flex items-center justify-between gap-3">
               <div className="flex items-center gap-2 min-w-0">
                 <span
                   className={`px-2 py-0.5 rounded text-[10px] font-bold shrink-0 ${
                     activeBatchNotifModal.category === 'urgent'
-                      ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                      ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
                       : activeBatchNotifModal.category === 'exam'
-                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                      : 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
+                      ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                      : 'bg-teal-500/20 text-teal-400 border border-teal-500/30'
                   }`}
                 >
                   {activeBatchNotifModal.category === 'urgent'
@@ -1005,12 +1005,12 @@ export default function StudentDashboard({
                     ? 'داتا مشتركة'
                     : 'إشعار الدفعة'}
                 </span>
-                <h3 className="text-sm font-bold text-white truncate">{activeBatchNotifModal.title}</h3>
+                <h3 className="text-sm font-bold text-[var(--text-primary)] truncate">{activeBatchNotifModal.title}</h3>
               </div>
               <button
                 type="button"
                 onClick={() => setActiveBatchNotifModal(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-elevated)]"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1018,22 +1018,22 @@ export default function StudentDashboard({
 
             {/* Content */}
             <div className="p-5 overflow-y-auto space-y-4 text-xs">
-              <div className="flex items-center justify-between text-[11px] text-slate-400 pb-2 border-b border-slate-800/80">
+              <div className="flex items-center justify-between text-[11px] text-[var(--text-muted)] pb-2 border-b border-[var(--border-color)]">
                 <span>
-                  المرسل: <strong className="text-teal-300 font-semibold">{activeBatchNotifModal.authorNameArabic}</strong>
+                  المرسل: <strong className="text-teal-400 font-semibold">{activeBatchNotifModal.authorNameArabic}</strong>
                 </span>
-                <span className="font-mono text-slate-400">
-                  {new Date(activeBatchNotifModal.createdAt).toLocaleString('ar-YE')}
+                <span className="font-mono text-[var(--text-muted)] tabular-nums">
+                  {new Date(activeBatchNotifModal.createdAt).toLocaleDateString('ar-EG-u-nu-latn', { year: 'numeric', month: 'short', day: 'numeric' })}
                 </span>
               </div>
 
-              <div className="bg-slate-950/80 p-4 rounded-xl border border-slate-800 text-slate-200 text-xs sm:text-sm leading-relaxed whitespace-pre-line">
+              <div className="bg-[var(--bg-input)] p-4 rounded-xl border border-[var(--border-color)] text-[var(--text-primary)] text-xs sm:text-sm leading-relaxed whitespace-pre-line">
                 {activeBatchNotifModal.message}
               </div>
 
               {activeBatchNotifModal.attachmentUrl && (
-                <div className="p-3.5 rounded-xl bg-teal-950/30 border border-teal-800/50 space-y-2">
-                  <div className="text-[11px] font-bold text-teal-300 flex items-center gap-1.5">
+                <div className="p-3.5 rounded-xl bg-teal-500/10 border border-teal-500/30 space-y-2">
+                  <div className="text-[11px] font-bold text-teal-400 flex items-center gap-1.5">
                     <Download className="w-3.5 h-3.5 text-teal-400" />
                     <span>الملف أو الرابط المرفق مع هذا الإشعار:</span>
                   </div>
@@ -1041,7 +1041,7 @@ export default function StudentDashboard({
                     type="button"
                     disabled={downloadingNotifId === activeBatchNotifModal.id}
                     onClick={() => handleOpenNotificationAttachment(activeBatchNotifModal)}
-                    className="w-full py-2.5 px-4 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-md shadow-teal-900/30 transition-all"
+                    className="w-full py-2.5 px-4 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-md transition-all"
                   >
                     {activeBatchNotifModal.attachmentType === 'link' ? (
                       <ExternalLink className="w-4 h-4" />
@@ -1061,11 +1061,11 @@ export default function StudentDashboard({
             </div>
 
             {/* Footer */}
-            <div className="p-3.5 bg-slate-950 border-t border-slate-800 flex justify-end">
+            <div className="p-3.5 bg-[var(--bg-input)] border-t border-[var(--border-color)] flex justify-end">
               <button
                 type="button"
                 onClick={() => setActiveBatchNotifModal(null)}
-                className="py-2 px-5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold"
+                className="py-2 px-5 rounded-xl bg-[var(--bg-elevated)] hover:opacity-90 border border-[var(--border-color)] text-[var(--text-primary)] text-xs font-semibold"
               >
                 إغلاق
               </button>
