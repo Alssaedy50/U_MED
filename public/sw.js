@@ -4,12 +4,13 @@
  * UMED PWA Service Worker - Network-First with Offline Fallback
  */
 
-const CACHE_NAME = 'umed-v2.4.0';
+const CACHE_NAME = 'umed-v2.5.0';
 const FONT_CACHE_NAME = 'umed-fonts-v1';
 const STATIC_SHELL = [
   '/',
   '/index.html',
   '/manifest.json',
+  '/api/pwa-manifest',
   '/icon.svg'
 ];
 
@@ -68,6 +69,34 @@ self.addEventListener('fetch', (event) => {
             })
             .catch(() => cached || new Response('', { status: 504 }));
         });
+      })
+    );
+    return;
+  }
+
+  // 1b. Dynamic PWA Manifest & Icon Endpoints: Network-First with cache fallback
+  if (
+    url.origin === self.location.origin &&
+    (url.pathname === '/api/pwa-manifest' || url.pathname === '/api/pwa-icon')
+  ) {
+    event.respondWith(
+      caches.open(CACHE_NAME).then((cache) => {
+        return fetch(req)
+          .then((networkRes) => {
+            if (networkRes && networkRes.status === 200) {
+              cache.put(req, networkRes.clone()).catch(() => {});
+            }
+            return networkRes;
+          })
+          .catch(() => {
+            return cache.match(req).then((cached) => {
+              if (cached) return cached;
+              if (url.pathname === '/api/pwa-manifest') {
+                return cache.match('/manifest.json');
+              }
+              return cache.match('/icon.svg');
+            });
+          });
       })
     );
     return;
@@ -195,8 +224,8 @@ self.addEventListener('push', (event) => {
 
   const options = {
     body: data.body,
-    icon: '/icon.svg',
-    badge: '/icon.svg',
+    icon: '/api/pwa-icon?size=192',
+    badge: '/api/pwa-icon?size=192',
     dir: 'rtl',
     lang: 'ar',
     vibrate: [200, 100, 200],

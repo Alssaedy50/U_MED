@@ -188,9 +188,12 @@ export default function BulkQuestionImportModal({
   );
 
   // Direct Approval & Single-Mode Publishing State (Strictly Bank Only OR Exam Only OR Competition Only)
+  const hasArabicInBankTitle = /[\u0600-\u06FF]/.test(bank.titleArabic || '');
   const [publishMode, setPublishMode] = useState<ApprovalPublishMode>('bank_only');
   const [publishTitle, setPublishTitle] = useState<string>(
-    bank.language === 'en' ? `Exam: ${bank.titleEnglish || bank.titleArabic}` : `اختبار ${bank.titleArabic}`
+    bank.language === 'en' && !hasArabicInBankTitle && bank.titleEnglish
+      ? `Exam: ${bank.titleEnglish}`
+      : `اختبار: ${bank.titleArabic.replace(/^(?:اختبار|Exam)\s*[:\-]?\s*/i, '')}`
   );
   const [publishStudyLevelId, setPublishStudyLevelId] = useState<string>(
     initialAcademicResolution.studyLevelId
@@ -438,12 +441,13 @@ export default function BulkQuestionImportModal({
   // Update default title & duration when switching between Exam Only and Competition Only
   const handleSelectPublishMode = (mode: ApprovalPublishMode) => {
     setPublishMode(mode);
+    const cleanArabicTitle = bank.titleArabic.replace(/^(?:اختبار|مسابقة|Exam|Competition)\s*[:\-]?\s*/i, '');
     if (mode === 'exam_only') {
       setPublishTitle((prev) =>
-        !prev.trim() || prev.startsWith('مسابقة ') || prev.startsWith('Competition:')
-          ? examLanguage === 'en'
-            ? `Exam: ${bank.titleEnglish || bank.titleArabic}`
-            : `اختبار ${bank.titleArabic}`
+        !prev.trim() || prev.startsWith('مسابقة') || prev.startsWith('Competition:') || prev.startsWith('Exam:')
+          ? examLanguage === 'en' && !hasArabicInBankTitle && bank.titleEnglish
+            ? `Exam: ${bank.titleEnglish}`
+            : `اختبار: ${cleanArabicTitle}`
           : prev
       );
       const sec = publishQuestionSeconds > 0 ? publishQuestionSeconds : 45;
@@ -457,10 +461,10 @@ export default function BulkQuestionImportModal({
       setPublishDurationMinutes(synced.durationMinutes);
     } else if (mode === 'competition_only') {
       setPublishTitle((prev) =>
-        !prev.trim() || prev.startsWith('اختبار ') || prev.startsWith('Exam:')
-          ? examLanguage === 'en'
-            ? `Competition: ${bank.titleEnglish || bank.titleArabic}`
-            : `مسابقة ${bank.titleArabic}`
+        !prev.trim() || prev.startsWith('اختبار') || prev.startsWith('Exam:') || prev.startsWith('Competition:')
+          ? examLanguage === 'en' && !hasArabicInBankTitle && bank.titleEnglish
+            ? `Competition: ${bank.titleEnglish}`
+            : `مسابقة: ${cleanArabicTitle}`
           : prev
       );
       const sec = publishQuestionSeconds > 0 ? publishQuestionSeconds : 30;
@@ -1216,12 +1220,12 @@ export default function BulkQuestionImportModal({
             assessmentType: strictAssessmentType,
             questionTypeMode,
             language: examLanguage,
-            titleArabic: publishTitle.trim(),
+            titleArabic: publishTitle.trim().replace(/^Exam:\s*/i, 'اختبار: ').replace(/^Competition:\s*/i, 'مسابقة: '),
             ...(examLanguage === 'en' ? { titleEnglish: publishTitle.trim() } : {}),
             descriptionArabic:
               strictAssessmentType === 'competition'
-                ? `مسابقة طبية تنافسية مرتبطة ببنك ${bank.titleArabic}`
-                : `اختبار أكاديمي مرتبط ببنك ${bank.titleArabic}`,
+                ? `مسابقة طبية تنافسية مرتبطة ببنك ${bank.titleArabic.replace(/^بنك\s*/i, '').trim()}`
+                : `اختبار أكاديمي مرتبط ببنك ${bank.titleArabic.replace(/^بنك\s*/i, '').trim()}`,
             universityId: publishUniversityId || bank.universityId || 'univ-dar-al-salam',
             programId: bank.programId || 'prog-mbbs',
             studyLevelId: publishStudyLevelId || bank.studyLevelId || defaultStudyLevelId || 'lvl-2',

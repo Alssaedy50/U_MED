@@ -101,67 +101,67 @@ export const PWAInstallGuideModal: React.FC<{
       className="fixed inset-0 z-[130] bg-slate-950/85 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
       dir="rtl"
     >
-      <div className="max-w-md w-full bg-slate-900 border border-teal-500/40 rounded-2xl p-5 sm:p-6 shadow-2xl space-y-4">
-        <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+      <div className="max-w-md w-full bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-5 sm:p-6 shadow-2xl space-y-4">
+        <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-3">
           <div className="flex items-center gap-2.5">
             <div className="w-10 h-10 rounded-xl bg-teal-500/20 border border-teal-500/40 flex items-center justify-center text-teal-400 shrink-0">
               <Smartphone className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-white">تثبيت تطبيق UMED على هاتفك</h3>
-              <p className="text-[11px] text-slate-400">يعمل كتطبيق مستقل أونلاين وأوفلاين بدون متجر</p>
+              <h3 className="text-sm font-bold text-[var(--text-primary)]">تثبيت تطبيق UMED على هاتفك</h3>
+              <p className="text-[11px] text-[var(--text-muted)]">يعمل كتطبيق مستقل أونلاين وأوفلاين بدون متجر</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+            className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-elevated)]"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {isIOS ? (
-          <div className="space-y-3 text-xs text-slate-200 leading-relaxed bg-slate-950 p-4 rounded-xl border border-slate-800">
-            <div className="font-bold text-teal-300">خطوات التثبيت على iPhone / iPad (متصفح Safari):</div>
-            <ol className="space-y-2.5 list-decimal list-inside text-slate-300">
+          <div className="space-y-3 text-xs text-[var(--text-primary)] leading-relaxed bg-[var(--bg-input)] p-4 rounded-xl border border-[var(--border-color)]">
+            <div className="font-bold text-teal-400">خطوات التثبيت على iPhone / iPad (متصفح Safari):</div>
+            <ol className="space-y-2.5 list-decimal list-inside text-[var(--text-secondary)]">
               <li>
-                اضغط على زر <strong className="text-white">المشاركة (Share)</strong>{' '}
+                اضغط على زر <strong className="text-[var(--text-primary)]">المشاركة (Share)</strong>{' '}
                 <Share className="w-3.5 h-3.5 inline text-sky-400 mx-0.5" /> في الشريط السفلي لمتصفح Safari.
               </li>
               <li>
                 مرّر للأسفل واختر{' '}
-                <strong className="text-teal-300">إضافة إلى الشاشة الرئيسية (Add to Home Screen)</strong>{' '}
+                <strong className="text-teal-400">إضافة إلى الشاشة الرئيسية (Add to Home Screen)</strong>{' '}
                 <PlusSquare className="w-3.5 h-3.5 inline text-teal-400 mx-0.5" />.
               </li>
               <li>
-                اضغط على <strong className="text-white">إضافة (Add)</strong> في أعلى الشاشة ليظهر تطبيق{' '}
-                <strong className="text-teal-300">UMED</strong> مباشرة بين تطبيقات هاتفك.
+                اضغط على <strong className="text-[var(--text-primary)]">إضافة (Add)</strong> في أعلى الشاشة ليظهر تطبيق{' '}
+                <strong className="text-teal-400">UMED</strong> مباشرة بين تطبيقات هاتفك.
               </li>
             </ol>
           </div>
         ) : (
-          <div className="space-y-3 text-xs text-slate-200 leading-relaxed bg-slate-950 p-4 rounded-xl border border-slate-800">
-            <div className="font-bold text-teal-300">
+          <div className="space-y-3 text-xs text-[var(--text-primary)] leading-relaxed bg-[var(--bg-input)] p-4 rounded-xl border border-[var(--border-color)]">
+            <div className="font-bold text-teal-400">
               {isAndroid
                 ? 'خطوات التثبيت السريع على أجهزة Android (متصفح Chrome):'
                 : 'خطوات تثبيت التطبيق على الهاتف أو الكمبيوتر:'}
             </div>
-            <ol className="space-y-2.5 list-decimal list-inside text-slate-300">
+            <ol className="space-y-2.5 list-decimal list-inside text-[var(--text-secondary)]">
               <li>
-                افتح قائمة المتصفح العلوية <strong className="text-white">(⋮ ثلاث نقاط)</strong> في أعلى يسار أو يمين الشاشة.
+                افتح قائمة المتصفح العلوية <strong className="text-[var(--text-primary)]">(⋮ ثلاث نقاط)</strong> في أعلى يسار أو يمين الشاشة.
               </li>
               <li>
-                اضغط على <strong className="text-teal-300">«تثبيت التطبيق» (Install App)</strong> أو{' '}
-                <strong className="text-teal-300">«الإضافة إلى الشاشة الرئيسية»</strong>.
+                اضغط على <strong className="text-teal-400">«تثبيت التطبيق» (Install App)</strong> أو{' '}
+                <strong className="text-teal-400">«الإضافة إلى الشاشة الرئيسية»</strong>.
               </li>
               <li>
-                أكد التثبيت ليتم إنشاء أيقونة تطبيق <strong className="text-white">UMED</strong> وتفعيل العمل بدون إنترنت تلقائياً.
+                أكد التثبيت ليتم إنشاء أيقونة تطبيق <strong className="text-[var(--text-primary)]">UMED</strong> وتفعيل العمل بدون إنترنت تلقائياً.
               </li>
             </ol>
           </div>
         )}
 
-        <div className="p-3 rounded-xl bg-teal-950/30 border border-teal-800/50 text-[11px] text-teal-200 flex items-center gap-2">
+        <div className="p-3 rounded-xl bg-teal-500/15 border border-teal-500/30 text-[11px] text-teal-300 flex items-center gap-2">
           <CheckCircle2 className="w-4 h-4 text-teal-400 shrink-0" />
           <span>
             ميزة التطبيق المثبت: يفتح بملء الشاشة، يحفظ المحاضرات وأسئلة الاختبارات وإجاباتك على جهازك عند انقطاع الشبكة، ويزامنها فور عودة الإنترنت.
@@ -204,7 +204,7 @@ export const PWAFloatingInstallBanner: React.FC = () => {
   return (
     <>
       <div
-        className="lg:hidden fixed bottom-16 left-3 right-3 z-30 max-w-md mx-auto bg-[var(--bg-card)]/95 backdrop-blur-md border border-teal-500/40 rounded-2xl p-2.5 px-3 shadow-xl flex items-center justify-between gap-2.5"
+        className="lg:hidden fixed bottom-20 left-3 right-3 z-30 max-w-md mx-auto bg-[var(--bg-card)]/95 backdrop-blur-md border border-teal-500/40 rounded-2xl p-2.5 px-3 shadow-xl flex items-center justify-between gap-2.5"
         dir="rtl"
       >
         <div className="flex items-center gap-2.5 min-w-0">
@@ -312,9 +312,9 @@ export const PWASidebarInstallCard: React.FC = () => {
 
   return (
     <div className="px-3 pt-1">
-      <div className="p-3 rounded-xl bg-gradient-to-br from-slate-950 to-slate-900 border border-teal-500/30 space-y-2">
+      <div className="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] space-y-2">
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 text-[11px] font-bold text-teal-300">
+          <div className="flex items-center gap-1.5 text-[11px] font-bold text-teal-400">
             <Smartphone className="w-3.5 h-3.5 text-teal-400 shrink-0" />
             <span>{isInstalled ? 'تطبيق UMED مثبت ✓' : 'تطبيق الهاتف (أونلاين/أوفلاين)'}</span>
           </div>
@@ -338,7 +338,7 @@ export const PWASidebarInstallCard: React.FC = () => {
             <span>تثبيت تطبيق UMED على الهاتف</span>
           </button>
         ) : (
-          <div className="text-[10px] text-slate-400 leading-relaxed">
+          <div className="text-[10px] text-[var(--text-muted)] leading-relaxed">
             التطبيق يعمل بوضع مستقل مع حفظ تلقائي للاختبارات والأسئلة عند انقطاع الشبكة.
           </div>
         )}
@@ -347,7 +347,7 @@ export const PWASidebarInstallCard: React.FC = () => {
           <button
             onClick={triggerManualSync}
             disabled={!isOnline || isSyncing}
-            className="w-full py-1.5 px-2.5 rounded-lg bg-sky-950/60 hover:bg-sky-900/60 border border-sky-700/50 text-sky-300 text-[10px] font-bold flex items-center justify-center gap-1.5 tabular-nums"
+            className="w-full py-1.5 px-2.5 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 text-sky-400 text-[10px] font-bold flex items-center justify-center gap-1.5 tabular-nums"
           >
             <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
             <span>
@@ -375,14 +375,14 @@ export const PWASettingsCard: React.FC = () => {
     useUnifiedOfflineSyncState();
 
   return (
-    <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-800">
+    <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-6 shadow-xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[var(--border-color)]">
         <div>
-          <h2 className="text-base font-bold text-white flex items-center gap-2">
+          <h2 className="text-base font-bold text-[var(--text-primary)] flex items-center gap-2">
             <Smartphone className="w-5 h-5 text-teal-400" />
             <span>تطبيق الهاتف والعمل دون اتصال (PWA & Offline Sync)</span>
           </h2>
-          <p className="text-xs text-slate-400 mt-0.5">
+          <p className="text-xs text-[var(--text-muted)] mt-0.5">
             تثبيت المنصة كتطبيق مستقل على الهاتف مع التخزين المحلي الذكي والمزامنة السحابية التلقائية
           </p>
         </div>
@@ -399,9 +399,9 @@ export const PWASettingsCard: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-        <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+        <div className="p-4 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-slate-400 font-semibold">حالة تثبيت التطبيق:</span>
+            <span className="text-[var(--text-secondary)] font-semibold">حالة تثبيت التطبيق:</span>
             <span
               className={`px-2 py-0.5 rounded text-[11px] font-bold ${
                 isInstalled
@@ -412,7 +412,7 @@ export const PWASettingsCard: React.FC = () => {
               {isInstalled ? 'مثبت على الجهاز ✓' : 'متاح للتثبيت المباشر'}
             </span>
           </div>
-          <p className="text-[11px] text-slate-400 leading-relaxed">
+          <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
             {isInstalled
               ? 'أنت تستخدم الآن النسخة المثبتة من تطبيق UMED مع تفعيل كامل لذاكرة التخزين دون اتصال.'
               : 'ثبّت تطبيق UMED على شاشتك الرئيسية ليفتح بسرعة فائقة ويعمل حتى عند انقطاع الإنترنت.'}
@@ -428,24 +428,24 @@ export const PWASettingsCard: React.FC = () => {
           )}
         </div>
 
-        <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+        <div className="p-4 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-slate-400 font-semibold flex items-center gap-1.5">
+            <span className="text-[var(--text-secondary)] font-semibold flex items-center gap-1.5">
               <HardDrive className="w-3.5 h-3.5 text-sky-400" />
               <span>حالة حفظ ومزامنة الإجابات والبيانات:</span>
             </span>
-            <span className="font-mono font-bold text-white tabular-nums">
+            <span className="font-mono font-bold text-[var(--text-primary)] tabular-nums">
               {totalPending === 0 ? 'مزامن 100% ✓' : `${totalPending} بانتظار المزامنة`}
             </span>
           </div>
-          <div className="text-[11px] text-slate-400 space-y-1 tabular-nums">
-            <div>• محاولات اختبارات محفوظة أوفلاين: <strong className="text-slate-200 font-mono">{pendingExams}</strong></div>
-            <div>• أسئلة مستوردة محفوظة أوفلاين: <strong className="text-slate-200 font-mono">{pendingQuestions}</strong></div>
+          <div className="text-[11px] text-[var(--text-muted)] space-y-1 tabular-nums">
+            <div>• محاولات اختبارات محفوظة أوفلاين: <strong className="text-[var(--text-primary)] font-mono">{pendingExams}</strong></div>
+            <div>• أسئلة مستوردة محفوظة أوفلاين: <strong className="text-[var(--text-primary)] font-mono">{pendingQuestions}</strong></div>
           </div>
           <button
             onClick={triggerManualSync}
             disabled={!isOnline || isSyncing || totalPending === 0}
-            className="w-full mt-2 py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
+            className="w-full mt-2 py-2 px-3 rounded-xl bg-[var(--bg-elevated)] hover:opacity-90 disabled:opacity-50 text-[var(--text-primary)] border border-[var(--border-color)] font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
           >
             {isSyncing ? (
               <RefreshCw className="w-3.5 h-3.5 animate-spin text-teal-400" />

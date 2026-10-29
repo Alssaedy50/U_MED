@@ -11,9 +11,9 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="UMED" />
-    <link rel="manifest" href="/manifest.json" />
+    <link rel="manifest" href="/api/pwa-manifest" />
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
-    <link rel="apple-touch-icon" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/api/pwa-icon?size=192" />
     <title>UMED | منصة الطب البشري الموحدة - اليمن</title>
     <script>
       (function () {
@@ -108,7 +108,7 @@
           if ('caches' in window) {
             caches.keys().then(function (names) {
               names.forEach(function (name) {
-                if (name !== 'umed-v2.4.0' && name !== 'umed-fonts-v1') {
+                if (name !== 'umed-v2.5.0' && name !== 'umed-fonts-v1') {
                   caches.delete(name);
                 }
               });
@@ -121,15 +121,56 @@
   <body class="antialiased selection:bg-sky-500 selection:text-white">
     <div id="root">
       <div id="umed-boot-splash">
-        <div style="width:56px;height:56px;border-radius:16px;background:linear-gradient(135deg,#0284c7,#0d9488);display:flex;align-items:center;justify-content:center;box-shadow:0 10px 30px rgba(2,132,199,0.28);margin-bottom:16px;font-weight:900;font-size:20px;color:#ffffff;">
+        <div id="umed-boot-splash-logo" style="width:56px;height:56px;border-radius:16px;background:linear-gradient(135deg,#0284c7,#0d9488);display:flex;align-items:center;justify-content:center;box-shadow:0 10px 30px rgba(2,132,199,0.28);margin-bottom:16px;font-weight:900;font-size:20px;color:#ffffff;overflow:hidden;">
           U
         </div>
-        <div style="font-size:16px;font-weight:700;margin-bottom:6px;">
+        <div id="umed-boot-splash-title" style="font-size:16px;font-weight:700;margin-bottom:6px;">
           منصة الطب البشري الموحدة — UMED
         </div>
         <div class="splash-subtitle">
           جاري تهيئة النظام الأكاديمي والسريري...
         </div>
+        <script>
+          (function () {
+            try {
+              var raw = localStorage.getItem('umed_platform_settings_v1');
+              if (!raw) return;
+              var parsed = JSON.parse(raw);
+              if (!parsed || typeof parsed !== 'object') return;
+              var logoBox = document.getElementById('umed-boot-splash-logo');
+              var titleBox = document.getElementById('umed-boot-splash-title');
+              if (titleBox && parsed.platformNameArabic) {
+                titleBox.textContent = parsed.platformNameArabic;
+                document.title = parsed.platformNameArabic;
+              }
+              if (logoBox && parsed.logoDataUrl) {
+                logoBox.style.width = 'auto';
+                logoBox.style.minWidth = '64px';
+                logoBox.style.maxWidth = '180px';
+                logoBox.style.height = '64px';
+                logoBox.style.padding = '6px 10px';
+                logoBox.style.background = '#ffffff';
+                logoBox.style.border = '1px solid rgba(148, 163, 184, 0.35)';
+                logoBox.innerHTML = '';
+                var img = document.createElement('img');
+                img.src = parsed.logoDataUrl;
+                img.alt = parsed.platformShortName || 'UMED';
+                img.style.maxWidth = '100%';
+                img.style.maxHeight = '100%';
+                img.style.width = 'auto';
+                img.style.height = 'auto';
+                img.style.objectFit = 'contain';
+                logoBox.appendChild(img);
+                var iconLink = document.querySelector("link[rel~='icon']");
+                if (iconLink) iconLink.href = parsed.logoDataUrl;
+                var appleIconLink = document.querySelector("link[rel='apple-touch-icon']");
+                if (appleIconLink) appleIconLink.href = parsed.logoDataUrl;
+              } else if (logoBox && parsed.platformShortName) {
+                logoBox.textContent = String(parsed.platformShortName).trim().charAt(0).toUpperCase() || 'U';
+              }
+            } catch (e) {}
+          })();
+        </script>
       </div>
     </div>
     <script type="module" src="/src/main.tsx"></script>

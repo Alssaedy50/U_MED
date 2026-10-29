@@ -47,24 +47,31 @@ export function PlatformLogoBadge({
   settings: PlatformBrandingAndPolicies;
   size?: 'sm' | 'md' | 'lg';
 }) {
-  const sizeClasses =
+  const fallbackSizeClasses =
     size === 'sm'
       ? 'w-9 h-9 rounded-xl text-base'
       : size === 'lg'
       ? 'w-14 h-14 rounded-2xl text-2xl'
       : 'w-10 h-10 rounded-xl text-lg';
 
+  const adaptiveLogoSizeClasses =
+    size === 'sm'
+      ? 'h-9 min-w-[36px] max-w-[110px] px-1.5 py-0.5 rounded-xl'
+      : size === 'lg'
+      ? 'h-14 min-w-[56px] max-w-[170px] px-2 py-1 rounded-2xl'
+      : 'h-10 min-w-[40px] max-w-[130px] px-1.5 py-0.5 rounded-xl';
+
   const initialChar = (settings.platformShortName || 'U').trim().charAt(0).toUpperCase() || 'U';
 
   if (settings.logoDataUrl) {
     return (
       <div
-        className={`${sizeClasses} bg-slate-900 border border-teal-500/40 overflow-hidden flex items-center justify-center shrink-0 shadow-lg shadow-teal-500/15`}
+        className={`${adaptiveLogoSizeClasses} bg-white border border-[var(--border-color)] shadow-sm overflow-hidden flex items-center justify-center shrink-0`}
       >
         <img
           src={settings.logoDataUrl}
           alt={settings.platformShortName || 'Logo'}
-          className="w-full h-full object-contain p-0.5"
+          className="max-h-full max-w-full w-auto h-auto object-contain"
         />
       </div>
     );
@@ -72,7 +79,7 @@ export function PlatformLogoBadge({
 
   return (
     <div
-      className={`${sizeClasses} bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center text-white font-black shrink-0 shadow-lg shadow-teal-500/20`}
+      className={`${fallbackSizeClasses} bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center text-white font-black shrink-0 shadow-lg shadow-teal-500/20`}
     >
       {initialChar}
     </div>
@@ -148,7 +155,7 @@ export function PlatformOwnerSettingsCard({
     setUploadingLogo(true);
     setFeedback(null);
     try {
-      const compressed = await compressLogoFileToDataUrl(file, 192);
+      const compressed = await compressLogoFileToDataUrl(file, 512);
       setLogoDataUrl(compressed);
       setFeedback({
         type: 'success',

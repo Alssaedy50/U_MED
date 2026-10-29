@@ -379,10 +379,25 @@ export default function StudentAssessmentList({
   const passedCertificatesCount = results.filter((r) => r.isReleased && r.percentage >= 50).length;
   const selectedLeaderboardAssessment = assessments.find((a) => a.id === selectedLeaderboardAssessmentId) || null;
 
+  const cleanAssessmentTitle = (rawTitle?: string): string => {
+    if (!rawTitle) return '';
+    return rawTitle
+      .replace(/^Exam:\s*/i, 'اختبار: ')
+      .replace(/^Competition:\s*/i, 'مسابقة: ')
+      .trim();
+  };
+
+  const cleanAssessmentDescription = (rawDesc?: string): string => {
+    if (!rawDesc) return '';
+    return rawDesc
+      .replace(/ببنك\s+بنك(\s+)/g, 'ببنك$1')
+      .trim();
+  };
+
   return (
     <div className="space-y-4" dir="rtl">
       
-      {/* 1. Top Header & 3 Primary Tabs: [الاختبارات والمسابقات المتاحة | لوحة الشرف والترتيب | سجل محاولاتي ونتائجي مع الشهادات] */}
+      {/* 1. Top Header & 3 Primary Tabs: [المتاحة | لوحة الشرف | نتائجي] */}
       <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-3.5 sm:p-4 shadow-sm space-y-3 overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
@@ -411,46 +426,44 @@ export default function StudentAssessmentList({
         </div>
 
         {/* 3 Main Tabs Bar */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 p-1 bg-[var(--bg-input)] rounded-xl border border-[var(--border-color)]">
+        <div className="grid grid-cols-3 gap-1 sm:gap-1.5 p-1 bg-[var(--bg-input)] rounded-xl border border-[var(--border-color)]">
           <button
             type="button"
             onClick={() => setMainTab('available')}
-            className={`py-2.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 tabular-nums ${
+            className={`py-2 px-1.5 sm:px-3 rounded-lg text-[11px] sm:text-xs font-bold transition-all flex items-center justify-center gap-1 sm:gap-1.5 tabular-nums ${
               mainTab === 'available'
                 ? 'bg-teal-600 text-white shadow-sm'
                 : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
             }`}
           >
-            <FileText className="w-4 h-4 shrink-0" />
-            <span className="truncate">الاختبارات والمسابقات المتاحة</span>
-            <span className="font-mono text-[11px] opacity-90">({assessments.length})</span>
+            <FileText className="w-3.5 h-3.5 shrink-0 hidden sm:inline" />
+            <span className="truncate">المتاحة ({assessments.length})</span>
           </button>
 
           <button
             type="button"
             onClick={() => setMainTab('leaderboard')}
-            className={`py-2.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 tabular-nums ${
+            className={`py-2 px-1.5 sm:px-3 rounded-lg text-[11px] sm:text-xs font-bold transition-all flex items-center justify-center gap-1 sm:gap-1.5 tabular-nums ${
               mainTab === 'leaderboard'
                 ? 'bg-amber-600 text-white shadow-sm'
                 : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
             }`}
           >
-            <Trophy className="w-4 h-4 shrink-0" />
-            <span className="truncate">لوحة الشرف والترتيب (Leaderboard)</span>
+            <Trophy className="w-3.5 h-3.5 shrink-0 hidden sm:inline" />
+            <span className="truncate">لوحة الشرف</span>
           </button>
 
           <button
             type="button"
             onClick={() => setMainTab('history_certificates')}
-            className={`py-2.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 tabular-nums ${
+            className={`py-2 px-1.5 sm:px-3 rounded-lg text-[11px] sm:text-xs font-bold transition-all flex items-center justify-center gap-1 sm:gap-1.5 tabular-nums ${
               mainTab === 'history_certificates'
                 ? 'bg-indigo-600 text-white shadow-sm'
                 : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
             }`}
           >
-            <History className="w-4 h-4 shrink-0" />
-            <span className="truncate">سجل محاولاتي ونتائجي مع الشهادات</span>
-            <span className="font-mono text-[11px] opacity-90">({results.length})</span>
+            <History className="w-3.5 h-3.5 shrink-0 hidden sm:inline" />
+            <span className="truncate">نتائجي ({results.length})</span>
           </button>
         </div>
       </div>
@@ -598,17 +611,17 @@ export default function StudentAssessmentList({
                         </div>
 
                         <span className="text-[var(--text-muted)] font-mono tabular-nums shrink-0">
-                          المحاولات: <strong className="text-[var(--text-primary)]">{attemptCount}/{assessment.maxAttempts}</strong>
+                          المحاولات: <strong className="text-[var(--text-primary)]" dir="ltr">{attemptCount}/{assessment.maxAttempts}</strong>
                         </span>
                       </div>
 
                       <div>
                         <h3 className="text-base font-extrabold text-[var(--text-primary)] leading-snug">
-                          {assessment.titleArabic}
+                          {cleanAssessmentTitle(assessment.titleArabic)}
                         </h3>
                         {assessment.descriptionArabic && (
                           <p className="text-xs text-[var(--text-secondary)] line-clamp-2 mt-1 leading-relaxed">
-                            {assessment.descriptionArabic}
+                            {cleanAssessmentDescription(assessment.descriptionArabic)}
                           </p>
                         )}
                       </div>
@@ -775,7 +788,7 @@ export default function StudentAssessmentList({
                 {assessments.map((a) => (
                   <option key={a.id} value={a.id}>
                     {a.assessmentType === 'competition' ? '🏆 ' : '📝 '}
-                    {a.titleArabic}
+                    {cleanAssessmentTitle(a.titleArabic)}
                   </option>
                 ))}
               </select>
@@ -796,7 +809,7 @@ export default function StudentAssessmentList({
             <div className="p-10 text-center text-[var(--text-muted)] space-y-3 bg-[var(--bg-input)] rounded-2xl border border-[var(--border-color)]">
               <Trophy className="w-10 h-10 mx-auto text-amber-400/60" />
               <div className="text-sm font-bold text-[var(--text-primary)]">
-                لا توجد نتائج معلنة في لوحة الشرف لـ «{selectedLeaderboardAssessment?.titleArabic}» بعد
+                لا توجد نتائج معلنة في لوحة الشرف لـ «{cleanAssessmentTitle(selectedLeaderboardAssessment?.titleArabic)}» بعد
               </div>
               <p className="text-xs text-[var(--text-muted)]">
                 كن أول من يخوض هذا التقييم ليظهر اسمك في الصدارة (#1)!
@@ -994,7 +1007,7 @@ export default function StudentAssessmentList({
                       </div>
 
                       <h4 className="text-sm sm:text-base font-extrabold text-[var(--text-primary)]">
-                        {linkedAssessment.titleArabic}
+                        {cleanAssessmentTitle(linkedAssessment.titleArabic)}
                       </h4>
 
                       {resItem.isReleased ? (

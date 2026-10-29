@@ -546,10 +546,6 @@ export default function StudentDashboard({
           <div className="flex items-center gap-2 min-w-0 overflow-hidden">
             <GraduationCap className="w-4 h-4 text-teal-400 shrink-0" />
             <span className="font-bold text-[var(--text-primary)] truncate">{currentUniversityName}</span>
-            <span className="text-[var(--text-muted)] shrink-0">·</span>
-            <span className="px-2 py-0.5 rounded-md bg-teal-500/15 text-teal-400 border border-teal-500/30 font-bold text-[11px] shrink-0 tabular-nums">
-              {currentLevelLabel}
-            </span>
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
@@ -585,56 +581,66 @@ export default function StudentDashboard({
       {/* 1B. Full Welcome Banner with Merged 4-Metric Indicator Strip — Shown ONLY on the main 'study' tab */}
       {internalTab === 'study' && (
         <div className="umed-card bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-color)] rounded-2xl p-3.5 sm:p-4 shadow-sm overflow-hidden space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start sm:items-center justify-between gap-2 w-full sm:w-auto min-w-0">
+              <div className="flex items-center gap-3 min-w-0">
+                <button
+                  type="button"
+                  onClick={() => switchSection('profile')}
+                  className="w-11 h-11 rounded-2xl bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center text-white shadow-md shadow-teal-500/20 font-black text-lg flex-shrink-0 overflow-hidden border border-teal-400/40 hover:scale-105 transition-transform"
+                  title="تعديل الصورة والملف الأكاديمي"
+                >
+                  {userProfile?.avatarUrl ? (
+                    <img
+                      src={userProfile.avatarUrl}
+                      alt={displayNameArabic}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <Stethoscope className="w-5 h-5" />
+                  )}
+                </button>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <h2 className="font-extrabold text-sm sm:text-base text-[var(--text-primary)]">
+                      د. {userProfile?.displayNameArabic || displayNameArabic}
+                    </h2>
+                    {userProfile?.username && (
+                      <span
+                        className="px-2 py-0.5 rounded-md bg-teal-500/15 text-teal-400 border border-teal-500/30 text-[11px] font-mono font-bold tabular-nums"
+                        dir="ltr"
+                      >
+                        @{userProfile.username}
+                      </span>
+                    )}
+                    <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border tabular-nums ${
+                      isInternship 
+                        ? 'bg-amber-500/15 text-amber-400 border-amber-500/30' 
+                        : 'bg-teal-500/15 text-teal-400 border-teal-500/30'
+                    }`}>
+                      {isInternship ? 'سنة الامتياز السريرية' : `دفعة المستوى ${activeEnrollment.currentStudyLevelId.replace('lvl-', '')}`}
+                    </span>
+                  </div>
+                  <p className="text-[11px] sm:text-xs text-[var(--text-muted)] mt-0.5 truncate">
+                    {currentUniversityName} · {currentSpecialtyArabic}
+                  </p>
+                </div>
+              </div>
+
               <button
                 type="button"
                 onClick={() => switchSection('profile')}
-                className="w-11 h-11 rounded-2xl bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center text-white shadow-md shadow-teal-500/20 font-black text-lg flex-shrink-0 overflow-hidden border border-teal-400/40 hover:scale-105 transition-transform"
-                title="تعديل الصورة والملف الأكاديمي"
+                className="px-3 py-1.5 rounded-xl bg-teal-600/15 hover:bg-teal-600/25 border border-teal-500/40 text-teal-400 text-xs font-bold transition-colors shrink-0 sm:hidden"
               >
-                {userProfile?.avatarUrl ? (
-                  <img
-                    src={userProfile.avatarUrl}
-                    alt={displayNameArabic}
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <Stethoscope className="w-5 h-5" />
-                )}
+                تعديل بياناتي
               </button>
-              <div className="min-w-0">
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <h2 className="font-extrabold text-sm sm:text-base text-[var(--text-primary)]">
-                    د. {userProfile?.displayNameArabic || displayNameArabic}
-                  </h2>
-                  {userProfile?.username && (
-                    <span
-                      className="px-2 py-0.5 rounded-md bg-teal-500/15 text-teal-400 border border-teal-500/30 text-[11px] font-mono font-bold tabular-nums"
-                      dir="ltr"
-                    >
-                      @{userProfile.username}
-                    </span>
-                  )}
-                  <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border tabular-nums ${
-                    isInternship 
-                      ? 'bg-amber-500/15 text-amber-400 border-amber-500/30' 
-                      : 'bg-teal-500/15 text-teal-400 border-teal-500/30'
-                  }`}>
-                    {isInternship ? 'سنة الامتياز السريرية' : `دفعة المستوى ${activeEnrollment.currentStudyLevelId.replace('lvl-', '')}`}
-                  </span>
-                </div>
-                <p className="text-[11px] sm:text-xs text-[var(--text-muted)] mt-0.5 truncate">
-                  {currentUniversityName} · {currentSpecialtyArabic}
-                </p>
-              </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="grid grid-cols-2 sm:flex items-center gap-2 w-full sm:w-auto">
               <select
                 value={activeEnrollment.universityId}
                 onChange={(e) => handleQuickUniversityChange(e.target.value)}
-                className="px-2.5 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] text-xs font-bold focus:outline-none focus:border-teal-500 max-w-[180px] truncate"
+                className="w-full sm:w-auto px-2.5 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] text-xs font-bold focus:outline-none focus:border-teal-500 sm:max-w-[180px] truncate"
                 title="تغيير الجامعة"
               >
                 {YEMEN_UNIVERSITIES_OPTIONS.map((u) => (
@@ -645,7 +651,7 @@ export default function StudentDashboard({
               <select
                 value={activeEnrollment.currentStudyLevelId}
                 onChange={(e) => handleQuickLevelChange(e.target.value)}
-                className="px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-teal-400 text-xs font-bold focus:outline-none focus:border-teal-500 tabular-nums"
+                className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-teal-400 text-xs font-bold focus:outline-none focus:border-teal-500 tabular-nums truncate"
                 title="تغيير المستوى الدراسي / الدفعة"
               >
                 <option value="lvl-1">المستوى الأول (Year 1)</option>
@@ -660,7 +666,7 @@ export default function StudentDashboard({
               <button
                 type="button"
                 onClick={() => switchSection('profile')}
-                className="px-3 py-1.5 rounded-xl bg-teal-600/15 hover:bg-teal-600/25 border border-teal-500/40 text-teal-400 text-xs font-bold transition-colors"
+                className="hidden sm:inline-flex px-3 py-1.5 rounded-xl bg-teal-600/15 hover:bg-teal-600/25 border border-teal-500/40 text-teal-400 text-xs font-bold transition-colors shrink-0"
               >
                 تعديل بياناتي
               </button>
@@ -871,28 +877,21 @@ export default function StudentDashboard({
           
           {studyPeriods.length > 0 && (
             <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-3.5 sm:p-4 flex flex-wrap items-center justify-between gap-3">
-              <div>
+              <div className="min-w-0">
                 <span className="text-[11px] font-bold text-[var(--text-muted)] block tabular-nums">
                   البلوك الدراسي النشط حالياً في دفعتك ({studyPeriods.length} بلوكات متاحة):
                 </span>
-                <button
-                  type="button"
-                  onClick={() => setShowBlockPopup(true)}
-                  className="mt-1 text-sm sm:text-base font-black text-[var(--text-primary)] hover:text-teal-400 flex items-center gap-2 transition-colors text-right"
-                >
-                  <span>{selectedPeriod ? `${selectedPeriod.titleArabic} (${selectedPeriod.code})` : 'اختر البلوك الدراسي'}</span>
-                  <span className="px-2.5 py-1 rounded-lg bg-[var(--bg-input)] hover:bg-teal-600 border border-[var(--border-color)] text-teal-400 hover:text-white text-xs font-bold transition-colors">
-                    تبديل البلوك ▾
-                  </span>
-                </button>
+                <div className="mt-1 text-sm sm:text-base font-black text-[var(--text-primary)]">
+                  {selectedPeriod ? `${selectedPeriod.titleArabic} (${selectedPeriod.code})` : 'اختر البلوك الدراسي'}
+                </div>
               </div>
 
               <button
                 type="button"
                 onClick={() => setShowBlockPopup(true)}
-                className="px-3.5 py-2 rounded-xl bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] border border-[var(--border-color)] text-teal-400 text-xs font-bold transition-colors tabular-nums"
+                className="px-3.5 py-2 rounded-xl bg-[var(--bg-input)] hover:bg-teal-600 border border-[var(--border-color)] text-teal-400 hover:text-white text-xs font-bold transition-colors tabular-nums shrink-0"
               >
-                عرض جميع البلوكات ({studyPeriods.length})
+                تبديل البلوك الدراسي ({studyPeriods.length}) ▾
               </button>
             </div>
           )}
@@ -954,10 +953,14 @@ export default function StudentDashboard({
           <div className="umed-card bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-4 sm:p-5 shadow-sm space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[var(--border-color)]">
               <div>
-                <h3 className="text-sm sm:text-base font-bold text-[var(--text-primary)] flex items-center gap-2">
+                <h3 className="text-sm sm:text-base font-bold text-[var(--text-primary)] flex flex-wrap items-center gap-2">
                   <BookOpen className="w-4 h-4 text-teal-400 shrink-0" />
                   <span>المقررات الدراسية ومحتوياتها المقسمة</span>
-                  {selectedPeriod && <span className="text-xs text-teal-400 font-mono">({selectedPeriod.titleArabic})</span>}
+                  {selectedPeriod && (
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-lg bg-teal-500/15 text-teal-400 text-xs font-bold">
+                      {selectedPeriod.titleArabic}
+                    </span>
+                  )}
                 </h3>
                 <p className="text-[11px] sm:text-xs text-[var(--text-muted)] mt-0.5">
                   اضغط على أي مقرر لتصفح تبويباته الثلاثة: المحاضرات، الداتا السريرية والمراجع، والاختبارات والمسابقات
@@ -1017,27 +1020,31 @@ export default function StudentDashboard({
                       >
                         <div className="space-y-1.5 min-w-0 flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-mono text-teal-400 font-bold px-2 py-0.5 rounded bg-[var(--bg-elevated)] border border-[var(--border-color)] tabular-nums">
+                            <h4 className="font-extrabold text-[var(--text-primary)] text-sm sm:text-base">{course.titleArabic}</h4>
+                            <span className="font-mono text-teal-400 font-bold px-2 py-0.5 rounded bg-[var(--bg-elevated)] border border-[var(--border-color)] tabular-nums text-[11px]">
                               {course.code}
                             </span>
-                            <span className="text-[var(--text-muted)] text-[11px] font-mono tabular-nums">
-                              {course.creditHours ?? 3} ساعات معتمدة
-                            </span>
-                            {courseDoctors.length > 0 || course.instructorNameArabic ? (
-                              <span className="inline-flex items-center gap-1 text-[11px] text-teal-400 font-bold">
-                                <Stethoscope className="w-3.5 h-3.5 shrink-0" />
-                                <span>
-                                  {course.instructorNameArabic ||
-                                    courseDoctors.map(d => `${d.academicTitle || 'د.'} ${d.instructorNameArabic}`).join(' ، ')}
-                                </span>
-                              </span>
-                            ) : null}
                           </div>
 
-                          <div>
-                            <h4 className="font-extrabold text-[var(--text-primary)] text-sm sm:text-base">{course.titleArabic}</h4>
-                            {course.titleEnglish && (
-                              <div className="text-[11px] text-[var(--text-muted)]" dir="ltr">{course.titleEnglish}</div>
+                          {course.titleEnglish && (
+                            <div className="text-[11px] text-[var(--text-muted)]" dir="ltr">{course.titleEnglish}</div>
+                          )}
+
+                          <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+                            <span className="text-[var(--text-muted)] font-mono tabular-nums">
+                              {course.creditHours ?? 3} ساعات معتمدة
+                            </span>
+                            {(courseDoctors.length > 0 || course.instructorNameArabic) && (
+                              <>
+                                <span className="text-[var(--text-muted)]" aria-hidden="true">•</span>
+                                <span className="inline-flex items-center gap-1 text-teal-400 font-bold">
+                                  <Stethoscope className="w-3.5 h-3.5 shrink-0" />
+                                  <span>
+                                    {course.instructorNameArabic ||
+                                      courseDoctors.map(d => `${d.academicTitle || 'د.'} ${d.instructorNameArabic}`).join(' ، ')}
+                                  </span>
+                                </span>
+                              </>
                             )}
                           </div>
                         </div>
@@ -1060,44 +1067,44 @@ export default function StudentDashboard({
                       {isExpanded && (
                         <div className="mt-4 pt-3.5 border-t border-[var(--border-color)] space-y-3">
                           {/* 3 Compact Sub-Tabs Switcher */}
-                          <div className="grid grid-cols-3 gap-1.5 p-1 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)]">
+                          <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)]">
                             <button
                               type="button"
                               onClick={() => setActiveCourseSubTab(prev => ({ ...prev, [course.id]: 'lectures' }))}
-                              className={`py-2 px-2 rounded-lg text-[11px] sm:text-xs font-bold transition-all flex items-center justify-center gap-1.5 tabular-nums ${
+                              className={`px-1.5 py-2 rounded-lg text-[11px] sm:text-xs font-bold transition-all flex items-center justify-center gap-1 tabular-nums ${
                                 currentSubTab === 'lectures'
                                   ? 'bg-teal-600 text-white shadow-sm'
                                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
                               }`}
                             >
-                              <FileText className="w-3.5 h-3.5 shrink-0" />
+                              <FileText className="w-3.5 h-3.5 shrink-0 hidden sm:inline" />
                               <span className="truncate">المحاضرات ({courseLectures.length})</span>
                             </button>
 
                             <button
                               type="button"
                               onClick={() => setActiveCourseSubTab(prev => ({ ...prev, [course.id]: 'clinical_refs' }))}
-                              className={`py-2 px-2 rounded-lg text-[11px] sm:text-xs font-bold transition-all flex items-center justify-center gap-1.5 tabular-nums ${
+                              className={`px-1.5 py-2 rounded-lg text-[11px] sm:text-xs font-bold transition-all flex items-center justify-center gap-1 tabular-nums ${
                                 currentSubTab === 'clinical_refs'
                                   ? 'bg-indigo-600 text-white shadow-sm'
                                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
                               }`}
                             >
-                              <FlaskConical className="w-3.5 h-3.5 shrink-0" />
-                              <span className="truncate">الداتا السريرية والمراجع ({courseClinicalRefs.length})</span>
+                              <FlaskConical className="w-3.5 h-3.5 shrink-0 hidden sm:inline" />
+                              <span className="truncate">العملي والمراجع ({courseClinicalRefs.length})</span>
                             </button>
 
                             <button
                               type="button"
                               onClick={() => setActiveCourseSubTab(prev => ({ ...prev, [course.id]: 'assessments' }))}
-                              className={`py-2 px-2 rounded-lg text-[11px] sm:text-xs font-bold transition-all flex items-center justify-center gap-1.5 tabular-nums ${
+                              className={`px-1.5 py-2 rounded-lg text-[11px] sm:text-xs font-bold transition-all flex items-center justify-center gap-1 tabular-nums ${
                                 currentSubTab === 'assessments'
                                   ? 'bg-amber-600 text-white shadow-sm'
                                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
                               }`}
                             >
-                              <Trophy className="w-3.5 h-3.5 shrink-0" />
-                              <span className="truncate">الاختبارات والمسابقات ({courseAssessments.length})</span>
+                              <Trophy className="w-3.5 h-3.5 shrink-0 hidden sm:inline" />
+                              <span className="truncate">الاختبارات ({courseAssessments.length})</span>
                             </button>
                           </div>
 
@@ -1121,7 +1128,7 @@ export default function StudentDashboard({
                                         <div className="min-w-0">
                                           <div className="font-bold text-[var(--text-primary)] truncate">{res.title}</div>
                                           <div className="text-[10px] text-[var(--text-muted)] font-mono">
-                                            {res.fileSizeLabel || 'PDF'} · محاضرة
+                                            <span dir="ltr">{res.fileSizeLabel || 'PDF'}</span> · محاضرة
                                           </div>
                                         </div>
                                       </div>
@@ -1170,7 +1177,7 @@ export default function StudentDashboard({
                                         <div className="min-w-0">
                                           <div className="font-bold text-[var(--text-primary)] truncate">{res.title}</div>
                                           <div className="text-[10px] text-[var(--text-muted)]">
-                                            {res.sectionType === 'practical' ? 'عملي / سريري' : 'مرجع طبي'} · {res.fileSizeLabel || 'ملف'}
+                                            {res.sectionType === 'practical' ? 'عملي / سريري' : 'مرجع طبي'} · <span className="font-mono" dir="ltr">{res.fileSizeLabel || 'ملف'}</span>
                                           </div>
                                         </div>
                                       </div>

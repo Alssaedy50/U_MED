@@ -89,10 +89,25 @@ async function deleteFileFromIDB(fileId: string): Promise<void> {
 
 export function formatFileSize(bytes: number): string {
   if (!bytes || bytes <= 0) return '0 KB';
-  if (bytes < 1024 * 1024) {
-    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  const kb = Math.max(1, Math.round(bytes / 1024));
+  if (kb < 1000) {
+    return `${kb} KB`;
   }
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function normalizeFileSizeLabel(label?: string): string {
+  if (!label) return '1.8 MB';
+  const trimmed = label.trim();
+  const kbMatch = trimmed.match(/^(\d+(?:\.\d+)?)\s*KB$/i);
+  if (kbMatch) {
+    const kbVal = parseFloat(kbMatch[1]);
+    if (kbVal >= 1000) {
+      return `${(kbVal / 1024).toFixed(1)} MB`;
+    }
+    return `${Math.round(kbVal)} KB`;
+  }
+  return trimmed;
 }
 
 function readBlobAsDataUrl(blob: Blob): Promise<string> {

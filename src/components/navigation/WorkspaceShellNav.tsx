@@ -202,7 +202,7 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
 
   const sidebarContent = (
     <aside
-      className="w-72 h-full bg-[var(--bg-sidebar)] border-l border-[var(--border-color)] flex flex-col justify-between select-none overflow-y-auto"
+      className="w-72 max-w-[85vw] h-full bg-[var(--bg-sidebar)] border-l border-[var(--border-color)] shadow-2xl flex flex-col justify-between select-none overflow-y-auto"
       dir="rtl"
     >
       <div className="space-y-3 p-3.5">
@@ -249,20 +249,20 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
                 {displayNameArabic || 'طالب الطب البشري'}
               </div>
               {username && (
-                <div className="text-[11px] text-teal-400 font-mono truncate" dir="ltr">
+                <div className="text-[11px] text-teal-400 font-mono truncate text-right" dir="ltr">
                   @{username}
                 </div>
               )}
               {!username && userEmail && (
-                <div className="text-[10px] text-[var(--text-muted)] font-mono truncate" dir="ltr">
+                <div className="text-[10px] text-[var(--text-muted)] font-mono truncate text-right" dir="ltr">
                   {userEmail}
                 </div>
               )}
             </div>
           </div>
 
-          <div className="flex items-center justify-between gap-2 pt-1 border-t border-[var(--border-color)]">
-            <span className="px-2 py-0.5 rounded-lg bg-teal-500/15 border border-teal-500/30 text-teal-400 text-[10px] font-bold">
+          <div className="flex items-center justify-between gap-2 pt-2 border-t border-[var(--border-color)]">
+            <span className="py-1.5 px-2.5 rounded-lg bg-teal-500/15 border border-teal-500/30 text-teal-400 text-[10px] font-bold">
               {renderBiDiRoleLabel(userRole)}
             </span>
 
@@ -273,7 +273,7 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
                   onToggleWorkspaceMode();
                   onCloseMobile();
                 }}
-                className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold flex items-center gap-1 transition-colors"
+                className="py-1.5 px-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold flex items-center gap-1 transition-colors"
               >
                 <ArrowLeftRight className="w-3 h-3" />
                 <span>{isAdminWorkspaceMode ? 'بوابة الطالب' : 'لوحة المشرف'}</span>
@@ -540,7 +540,7 @@ export const MobileBottomTabBar: React.FC<MobileBottomTabBarProps> = ({
 
   return (
     <nav
-      className="lg:hidden fixed bottom-0 left-0 right-0 z-30 h-15 bg-[var(--bg-header)] backdrop-blur-md border-t border-[var(--border-color)] grid grid-cols-4 px-2"
+      className="lg:hidden fixed bottom-0 left-0 right-0 z-30 min-h-[60px] pb-[env(safe-area-inset-bottom,0px)] bg-[var(--bg-header)] backdrop-blur-md border-t border-[var(--border-color)] shadow-[0_-4px_16px_rgba(0,0,0,0.06)] grid grid-cols-4 px-2"
       dir="rtl"
     >
       {tabs.map((t) => {

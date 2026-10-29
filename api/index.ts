@@ -61,6 +61,7 @@ const ATTEMPTS_FILE = path.join(DATA_DIR, 'attempts.json');
 const RESULTS_FILE = path.join(DATA_DIR, 'results.json');
 const QUESTIONS_FILE = path.join(DATA_DIR, 'questions.json');
 const ASSESSMENTS_FILE = path.join(DATA_DIR, 'assessments.json');
+const BRANDING_FILE = path.join(DATA_DIR, 'branding.json');
 
 try {
   if (!fs.existsSync(DATA_DIR)) {
@@ -153,6 +154,20 @@ let questionsStore: Record<string, QuestionItemFull> = loadJsonSafe(QUESTIONS_FI
   'q-cvs-3': DEFAULT_QUESTIONS[2]
 });
 let assessmentsStore: Record<string, Assessment> = loadJsonSafe(ASSESSMENTS_FILE, {});
+let brandingStore: {
+  platformShortName: string;
+  platformNameArabic: string;
+  platformTaglineArabic: string;
+  logoDataUrl: string;
+  updatedAt: string;
+} = loadJsonSafe(BRANDING_FILE, {
+  platformShortName: 'UMED',
+  platformNameArabic: 'UMED — منصة التعليم الطبي اليمنية',
+  platformTaglineArabic:
+    'منصة التعليم الطبي والأكاديمي الموحدة لطلاب كليات الطب البشري والعلوم الصحية في الجامعات اليمنية',
+  logoDataUrl: '',
+  updatedAt: ''
+});
 
 function addAuditLog(
   action: AuditLog['action'],
@@ -1288,6 +1303,199 @@ app.post('/api/admin/release-results', requireAdmin, (req: AuthenticatedRequest,
     res.json({ success: true, updatedCount });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'فشل إفراج النتائج' });
+  }
+});
+
+// 14b. Dynamic Platform Branding & PWA Icon / Manifest Endpoints
+let lastFirestoreBrandingCheckMs = 0;
+
+async function ensureServerBrandingHydrated(): Promise<void> {
+  if (brandingStore.logoDataUrl) return;
+  const now = Date.now();
+  if (now - lastFirestoreBrandingCheckMs < 30000) return;
+  lastFirestoreBrandingCheckMs = now;
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2500);
+    const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/uniqueIdentifiers/platform_global_settings`;
+    const resp = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!resp.ok) return;
+    const docJson: any = await resp.json();
+    const settingsFields = docJson?.fields?.settings?.mapValue?.fields;
+    if (!settingsFields) return;
+
+    const logoDataUrl = settingsFields.logoDataUrl?.stringValue || '';
+    const platformShortName = settingsFields.platformShortName?.stringValue || brandingStore.platformShortName;
+    const platformNameArabic = settingsFields.platformNameArabic?.stringValue || brandingStore.platformNameArabic;
+    const platformTaglineArabic =
+      settingsFields.platformTaglineArabic?.stringValue || brandingStore.platformTaglineArabic;
+    const updatedAt = settingsFields.updatedAt?.stringValue || new Date().toISOString();
+
+    if (logoDataUrl || platformShortName || platformNameArabic) {
+      brandingStore = {
+        platformShortName: platformShortName || 'UMED',
+        platformNameArabic: platformNameArabic || 'UMED — منصة التعليم الطبي اليمنية',
+        platformTaglineArabic:
+          platformTaglineArabic ||
+          'منصة التعليم الطبي والأكاديمي الموحدة لطلاب كليات الطب البشري والعلوم الصحية في الجامعات اليمنية',
+        logoDataUrl,
+        updatedAt
+      };
+      saveJsonSafe(BRANDING_FILE, brandingStore);
+    }
+  } catch {}
+}
+
+app.post('/api/platform-branding', (req: Request, res: Response) => {
+  try {
+    const { platformShortName, platformNameArabic, platformTaglineArabic, logoDataUrl, updatedAt } =
+      req.body || {};
+    brandingStore = {
+      platformShortName:
+        typeof platformShortName === 'string' && platformShortName.trim()
+          ? platformShortName.trim()
+          : brandingStore.platformShortName || 'UMED',
+      platformNameArabic:
+        typeof platformNameArabic === 'string' && platformNameArabic.trim()
+          ? platformNameArabic.trim()
+          : brandingStore.platformNameArabic || 'UMED — منصة التعليم الطبي اليمنية',
+      platformTaglineArabic:
+        typeof platformTaglineArabic === 'string' && platformTaglineArabic.trim()
+          ? platformTaglineArabic.trim()
+          : brandingStore.platformTaglineArabic,
+      logoDataUrl: typeof logoDataUrl === 'string' ? logoDataUrl : brandingStore.logoDataUrl || '',
+      updatedAt: updatedAt || new Date().toISOString()
+    };
+    saveJsonSafe(BRANDING_FILE, brandingStore);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'فشل تحديث هوية المنصة' });
+  }
+});
+
+app.get('/api/pwa-icon', async (_req: Request, res: Response) => {
+  try {
+    await ensureServerBrandingHydrated();
+    const dataUrl = brandingStore.logoDataUrl || '';
+    if (dataUrl.startsWith('data:image/')) {
+      const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+      if (match) {
+        const mimeType = match[1];
+        const base64Data = match[2];
+        const imgBuffer = Buffer.from(base64Data, 'base64');
+        res.setHeader('Content-Type', mimeType);
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        return res.status(200).send(imgBuffer);
+      }
+      const utf8SvgMatch = dataUrl.match(/^data:image\/svg\+xml;utf8,(.+)$/);
+      if (utf8SvgMatch) {
+        res.setHeader('Content-Type', 'image/svg+xml');
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        return res.status(200).send(decodeURIComponent(utf8SvgMatch[1]));
+      }
+    }
+
+    const svgPath = path.resolve(process.cwd(), 'public', 'icon.svg');
+    if (fs.existsSync(svgPath)) {
+      const svgContent = fs.readFileSync(svgPath, 'utf-8');
+      res.setHeader('Content-Type', 'image/svg+xml');
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      return res.status(200).send(svgContent);
+    }
+
+    res.redirect('/icon.svg');
+  } catch {
+    res.redirect('/icon.svg');
+  }
+});
+
+app.get('/api/pwa-manifest', async (_req: Request, res: Response) => {
+  try {
+    await ensureServerBrandingHydrated();
+    const shortName = brandingStore.platformShortName || 'UMED';
+    const fullName = brandingStore.platformNameArabic || 'UMED | منصة الطب البشري الموحدة - اليمن';
+    const description =
+      brandingStore.platformTaglineArabic ||
+      'المنصة الأكاديمية والسريرية الموحدة لطلاب كليات الطب البشري في الجامعات اليمنية';
+
+    let iconMimeType = 'image/png';
+    if (brandingStore.logoDataUrl?.startsWith('data:image/webp')) {
+      iconMimeType = 'image/webp';
+    } else if (brandingStore.logoDataUrl?.startsWith('data:image/jpeg')) {
+      iconMimeType = 'image/jpeg';
+    } else if (brandingStore.logoDataUrl?.startsWith('data:image/svg+xml')) {
+      iconMimeType = 'image/svg+xml';
+    } else if (!brandingStore.logoDataUrl) {
+      iconMimeType = 'image/svg+xml';
+    }
+
+    const icons: Array<{ src: string; sizes: string; type: string; purpose: string }> =
+      brandingStore.logoDataUrl && iconMimeType !== 'image/svg+xml'
+        ? [
+            {
+              src: '/api/pwa-icon?size=192',
+              sizes: '192x192',
+              type: iconMimeType,
+              purpose: 'any'
+            },
+            {
+              src: '/api/pwa-icon?size=512',
+              sizes: '512x512',
+              type: iconMimeType,
+              purpose: 'any'
+            },
+            {
+              src: '/api/pwa-icon?size=512',
+              sizes: '512x512',
+              type: iconMimeType,
+              purpose: 'maskable'
+            },
+            {
+              src: '/icon.svg',
+              sizes: 'any',
+              type: 'image/svg+xml',
+              purpose: 'any'
+            }
+          ]
+        : [
+            {
+              src: '/api/pwa-icon?size=192',
+              sizes: 'any',
+              type: 'image/svg+xml',
+              purpose: 'any maskable'
+            },
+            {
+              src: '/icon.svg',
+              sizes: '192x192 512x512',
+              type: 'image/svg+xml',
+              purpose: 'any maskable'
+            }
+          ];
+
+    const manifest = {
+      id: '/',
+      name: fullName,
+      short_name: shortName,
+      description,
+      start_url: '/',
+      scope: '/',
+      display: 'standalone',
+      background_color: '#eef6f9',
+      theme_color: '#0284c7',
+      orientation: 'portrait-primary',
+      dir: 'rtl',
+      lang: 'ar',
+      categories: ['education', 'medical'],
+      icons
+    };
+
+    res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.status(200).json(manifest);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'فشل توليد ملف manifest' });
   }
 });
 

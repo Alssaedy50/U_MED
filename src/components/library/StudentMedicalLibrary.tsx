@@ -39,7 +39,8 @@ import {
 import {
   fetchEducationalResources,
   getCachedEducationalResources,
-  subscribeToEducationalResources
+  subscribeToEducationalResources,
+  normalizeFileSizeLabel
 } from '../../services/resourceService.ts';
 import {
   getCachedCollection,
@@ -594,7 +595,7 @@ export default function StudentMedicalLibrary({
                 {sectionLabel}
               </span>
               <span aria-hidden="true">·</span>
-              <span className="font-mono">{res.fileSizeLabel || '1.8 MB'}</span>
+              <span className="font-mono" dir="ltr">{normalizeFileSizeLabel(res.fileSizeLabel)}</span>
             </div>
           </div>
 
@@ -691,7 +692,7 @@ export default function StudentMedicalLibrary({
                   <h2 className="text-sm sm:text-base font-extrabold text-[var(--text-primary)] truncate">
                     المكتبة الطبية الرقمية
                   </h2>
-                  <span className="text-xs text-teal-400 font-mono font-bold tabular-nums">
+                  <span className="text-xs text-teal-400 font-mono font-bold tabular-nums whitespace-nowrap">
                     ({classifiedAndFiltered.length})
                   </span>
                 </div>
@@ -763,7 +764,7 @@ export default function StudentMedicalLibrary({
             <button
               type="button"
               onClick={() => setShowAdvancedFilters(prev => !prev)}
-              className={`min-h-[40px] py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all shrink-0 whitespace-nowrap ${
+              className={`min-h-[40px] py-2 px-2.5 sm:px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all shrink-0 whitespace-nowrap ${
                 showAdvancedFilters || activeFilterCount > 0
                   ? 'bg-teal-600/15 border-teal-500 text-teal-400'
                   : 'bg-[var(--bg-input)] border-[var(--border-color)] text-[var(--text-primary)] hover:bg-[var(--bg-elevated)]'
@@ -1088,7 +1089,7 @@ export default function StudentMedicalLibrary({
                         <h3 className="text-sm sm:text-base font-extrabold text-[var(--text-primary)]">
                           {shelf.title}
                         </h3>
-                        <span className="text-xs font-mono font-bold text-teal-400 tabular-nums">
+                        <span className="text-xs font-mono font-bold text-teal-400 tabular-nums whitespace-nowrap">
                           ({shelf.items.length} ملف)
                         </span>
                       </div>

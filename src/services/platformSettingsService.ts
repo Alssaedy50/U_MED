@@ -145,20 +145,85 @@ function mergeWithDefaultSettings(partial: any): PlatformBrandingAndPolicies {
   };
 }
 
+let lastSyncedBrandingSignature = '';
+
+export function syncBrandingToServer(
+  settings: PlatformBrandingAndPolicies,
+  force = false
+): void {
+  if (typeof window === 'undefined' || typeof fetch === 'undefined') return;
+  try {
+    const signature = `${settings.platformShortName || ''}|${settings.platformNameArabic || ''}|${(settings.logoDataUrl || '').length}|${settings.updatedAt || ''}`;
+    if (!force && signature === lastSyncedBrandingSignature) return;
+    lastSyncedBrandingSignature = signature;
+
+    fetch('/api/platform-branding', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        platformShortName: settings.platformShortName,
+        platformNameArabic: settings.platformNameArabic,
+        platformTaglineArabic: settings.platformTaglineArabic,
+        logoDataUrl: settings.logoDataUrl,
+        updatedAt: settings.updatedAt
+      })
+    }).catch(() => {});
+  } catch {}
+}
+
 function applyBrandingToDocumentHead(settings: PlatformBrandingAndPolicies): void {
   if (typeof document === 'undefined') return;
   try {
     if (settings.platformNameArabic) {
       document.title = settings.platformNameArabic;
     }
-    if (settings.logoDataUrl) {
-      let iconLink = document.querySelector("link[rel~='icon']") as HTMLLinkElement | null;
-      if (!iconLink) {
-        iconLink = document.createElement('link');
-        iconLink.rel = 'icon';
-        document.head.appendChild(iconLink);
+    if (settings.platformShortName) {
+      const appleTitleMeta = document.querySelector(
+        "meta[name='apple-mobile-web-app-title']"
+      ) as HTMLMetaElement | null;
+      if (appleTitleMeta) {
+        appleTitleMeta.content = settings.platformShortName;
       }
+    }
+
+    let iconLink = document.querySelector("link[rel~='icon']") as HTMLLinkElement | null;
+    if (!iconLink) {
+      iconLink = document.createElement('link');
+      iconLink.rel = 'icon';
+      document.head.appendChild(iconLink);
+    }
+
+    let appleTouchIconLink = document.querySelector(
+      "link[rel='apple-touch-icon']"
+    ) as HTMLLinkElement | null;
+    if (!appleTouchIconLink) {
+      appleTouchIconLink = document.createElement('link');
+      appleTouchIconLink.rel = 'apple-touch-icon';
+      document.head.appendChild(appleTouchIconLink);
+    }
+
+    if (settings.logoDataUrl) {
+      iconLink.removeAttribute('type');
       iconLink.href = settings.logoDataUrl;
+      appleTouchIconLink.href = settings.logoDataUrl;
+    } else {
+      iconLink.type = 'image/svg+xml';
+      iconLink.href = '/icon.svg';
+      appleTouchIconLink.href = '/api/pwa-icon?size=192';
+    }
+
+    let manifestLink = document.querySelector("link[rel='manifest']") as HTMLLinkElement | null;
+    if (!manifestLink) {
+      manifestLink = document.createElement('link');
+      manifestLink.rel = 'manifest';
+      document.head.appendChild(manifestLink);
+    }
+    if (manifestLink.getAttribute('href') !== '/api/pwa-manifest') {
+      manifestLink.href = '/api/pwa-manifest';
+    }
+
+    if (settings.logoDataUrl || settings.updatedBy !== 'SYSTEM_DEFAULT') {
+      syncBrandingToServer(settings);
     }
   } catch {}
 }
@@ -235,6 +300,7 @@ export async function savePlatformSettingsByOwner(
   } catch {}
 
   notifyPlatformSettingsListeners(merged);
+  syncBrandingToServer(merged, true);
 
   const synced = await flushPendingPlatformSettingsSync();
   return {
@@ -356,7 +422,7 @@ export function subscribeToPlatformSettings(
  * Compresses and resizes an uploaded image file on the client (works 100% offline & online)
  * into a crisp DataURL suitable for instant rendering and Firestore storage.
  */
-export function compressLogoFileToDataUrl(file: File, maxDimension = 192): Promise<string> {
+export function compressLogoFileToDataUrl(file: File, maxDimension = 512): Promise<string> {
   return new Promise((resolve, reject) => {
     if (!file || !file.type.startsWith('image/')) {
       reject(new Error('يرجى اختيار ملف صورة صالح (PNG, JPG, WEBP, SVG)'));
@@ -367,7 +433,7 @@ export function compressLogoFileToDataUrl(file: File, maxDimension = 192): Promi
     reader.onerror = () => reject(new Error('فشل قراءة ملف الشعار من الجهاز'));
     reader.onload = () => {
       const dataUrl = String(reader.result || '');
-      if (file.type === 'image/svg+xml' && dataUrl.length < 65000) {
+      if (file.type === 'image/svg+xml' && dataUrl.length < 120000) {
         resolve(dataUrl);
         return;
       }
@@ -397,10 +463,10 @@ export function compressLogoFileToDataUrl(file: File, maxDimension = 192): Promi
           ctx.clearRect(0, 0, canvas.width, canvas.height);
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
           const compressedPng = canvas.toDataURL('image/png');
-          if (compressedPng.length <= 90000) {
+          if (compressedPng.length <= 180000) {
             resolve(compressedPng);
           } else {
-            resolve(canvas.toDataURL('image/webp', 0.85));
+            resolve(canvas.toDataURL('image/webp', 0.9));
           }
         } catch {
           resolve(dataUrl);

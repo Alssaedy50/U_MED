@@ -403,34 +403,24 @@ export default function StudentProfile({
                   حساب سحابي موثق ✓
                 </span>
               </div>
-              <p className="text-xs text-[var(--text-secondary)] flex flex-wrap items-center gap-2">
-                <span className="flex items-center gap-1">
-                  <Building2 className="w-3.5 h-3.5 text-teal-400" />
+              <div className="text-xs text-[var(--text-secondary)] flex flex-wrap items-center gap-1.5 pt-0.5">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-[var(--bg-input)] border border-[var(--border-color)]">
+                  <Building2 className="w-3.5 h-3.5 text-teal-400 shrink-0" />
                   <span>{userProfile?.universityNameArabic || universityName}</span>
                 </span>
-                <span className="text-[var(--text-muted)]">•</span>
-                <span className="flex items-center gap-1 text-teal-400 font-semibold">
-                  <Stethoscope className="w-3.5 h-3.5 text-teal-400" />
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-teal-500/10 border border-teal-500/25 text-teal-400 font-semibold">
+                  <Stethoscope className="w-3.5 h-3.5 text-teal-400 shrink-0" />
                   <span>{currentSpecialtyTitle}</span>
                 </span>
-                <span className="text-[var(--text-muted)]">•</span>
-                <span className="flex items-center gap-1 text-amber-400 font-semibold">
-                  <GraduationCap className="w-3.5 h-3.5 text-amber-400" />
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-500/10 border border-amber-500/25 text-amber-400 font-semibold">
+                  <GraduationCap className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                   <span>{currentLevelTitle}</span>
                 </span>
-              </p>
+              </div>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => avatarFileInputRef.current?.click()}
-              className="px-3 py-2 rounded-xl bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] text-teal-400 border border-teal-500/30 text-xs font-bold flex items-center gap-1.5 transition-colors"
-            >
-              <Camera className="w-3.5 h-3.5" />
-              <span>تغيير الصورة</span>
-            </button>
             <button
               type="button"
               onClick={() => setIsEditingProfile(!isEditingProfile)}
@@ -509,8 +499,8 @@ export default function StudentProfile({
               <Trophy className="w-3.5 h-3.5 text-amber-400" />
               <span>الاختبارات المنجزة</span>
             </span>
-            <div className="font-bold text-[var(--text-primary)] text-sm font-mono">
-              {completedAssessmentsCount} / {totalAssessmentsCount}
+            <div className="font-bold text-[var(--text-primary)] text-sm font-mono tabular-nums">
+              {completedAssessmentsCount} من {totalAssessmentsCount}
             </div>
             <div className="text-[10px] text-amber-400">إجمالي المحاولات: {attempts.length}</div>
           </div>
@@ -531,44 +521,44 @@ export default function StudentProfile({
       </div>
 
       {/* 2. Three Clear Navigation Tabs */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 p-1.5 bg-[var(--bg-card)] rounded-2xl border border-[var(--border-color)] shadow-xs text-xs">
+      <div className="grid grid-cols-3 gap-1.5 p-1.5 bg-[var(--bg-card)] rounded-2xl border border-[var(--border-color)] shadow-xs text-[11px] sm:text-xs">
         <button
           type="button"
           onClick={() => setActiveProfileTab('academic_card')}
-          className={`py-3 px-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${
+          className={`py-2.5 px-2 sm:px-4 rounded-xl font-bold flex items-center justify-center gap-1.5 transition-all ${
             activeProfileTab === 'academic_card'
               ? 'bg-teal-600 text-white shadow-sm'
               : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-input)]'
           }`}
         >
-          <User className="w-4 h-4 shrink-0" />
-          <span>بطاقتي الأكاديمية والجامعية</span>
+          <User className="w-4 h-4 shrink-0 hidden sm:inline" />
+          <span className="truncate">بطاقتي</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveProfileTab('certificates_badges')}
-          className={`py-3 px-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${
+          className={`py-2.5 px-2 sm:px-4 rounded-xl font-bold flex items-center justify-center gap-1.5 transition-all ${
             activeProfileTab === 'certificates_badges'
               ? 'bg-teal-600 text-white shadow-sm'
               : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-input)]'
           }`}
         >
-          <Award className="w-4 h-4 shrink-0" />
-          <span>الشهادات والأوسمة</span>
+          <Award className="w-4 h-4 shrink-0 hidden sm:inline" />
+          <span className="truncate">الشهادات</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveProfileTab('exams_history')}
-          className={`py-3 px-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${
+          className={`py-2.5 px-2 sm:px-4 rounded-xl font-bold flex items-center justify-center gap-1.5 transition-all ${
             activeProfileTab === 'exams_history'
               ? 'bg-teal-600 text-white shadow-sm'
               : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-input)]'
           }`}
         >
-          <FileText className="w-4 h-4 shrink-0" />
-          <span>سجل الاختبارات والنتائج</span>
+          <FileText className="w-4 h-4 shrink-0 hidden sm:inline" />
+          <span className="truncate">سجل النتائج</span>
         </button>
       </div>
 
@@ -594,34 +584,34 @@ export default function StudentProfile({
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] flex justify-between items-center">
-                  <span className="text-[var(--text-muted)]">الاسم الكامل:</span>
+                <div className="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] flex justify-between items-center gap-2 flex-wrap">
+                  <span className="text-[var(--text-muted)] shrink-0">الاسم الكامل:</span>
                   <strong className="text-[var(--text-primary)]">
                     {userProfile?.displayNameArabic || displayNameArabic}
                   </strong>
                 </div>
                 <div className="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] flex justify-between items-center gap-2 flex-wrap">
-                  <span className="text-[var(--text-muted)]">اسم المستخدم الفريد:</span>
+                  <span className="text-[var(--text-muted)] shrink-0">اسم المستخدم الفريد:</span>
                   <span className="font-mono text-teal-400 font-bold" dir="ltr">
                     @{userProfile?.username || enrollment?.academicStudentNumber || 'student'}
                   </span>
                 </div>
-                <div className="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] flex justify-between items-center">
-                  <span className="text-[var(--text-muted)]">الجامعة:</span>
+                <div className="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] flex justify-between items-center gap-2 flex-wrap">
+                  <span className="text-[var(--text-muted)] shrink-0">الجامعة:</span>
                   <span className="text-[var(--text-primary)] font-semibold">
                     {userProfile?.universityNameArabic || universityName}
                   </span>
                 </div>
-                <div className="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] flex justify-between items-center">
-                  <span className="text-[var(--text-muted)]">التخصص الأكاديمي:</span>
+                <div className="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] flex justify-between items-center gap-2 flex-wrap">
+                  <span className="text-[var(--text-muted)] shrink-0">التخصص الأكاديمي:</span>
                   <span className="text-[var(--text-primary)] font-semibold">{currentSpecialtyTitle}</span>
                 </div>
-                <div className="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] flex justify-between items-center">
-                  <span className="text-[var(--text-muted)]">المستوى الحالي:</span>
+                <div className="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] flex justify-between items-center gap-2 flex-wrap">
+                  <span className="text-[var(--text-muted)] shrink-0">المستوى الحالي:</span>
                   <span className="text-amber-400 font-bold">{currentLevelTitle}</span>
                 </div>
-                <div className="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] flex justify-between items-center">
-                  <span className="text-[var(--text-muted)]">العام الجامعي:</span>
+                <div className="p-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] flex justify-between items-center gap-2 flex-wrap">
+                  <span className="text-[var(--text-muted)] shrink-0">العام الجامعي:</span>
                   <span className="font-mono text-[var(--text-primary)]" dir="ltr">
                     {enrollment?.academicYear || '2025/2026'}
                   </span>
@@ -653,7 +643,7 @@ export default function StudentProfile({
                 <div className="w-full h-2.5 bg-[var(--bg-input)] rounded-full overflow-hidden border border-[var(--border-color)]">
                   <div
                     className="h-full bg-gradient-to-r from-teal-500 to-emerald-400 rounded-full transition-all duration-500"
-                    style={{ width: `${Math.min(100, Math.max(8, assessmentCompletionPct))}%` }}
+                    style={{ width: `${Math.min(100, Math.max(0, assessmentCompletionPct))}%` }}
                   />
                 </div>
                 <div className="flex justify-between text-[11px] text-[var(--text-muted)]">
@@ -670,15 +660,12 @@ export default function StudentProfile({
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {studyPeriods.map((period, idx) => {
+                  {studyPeriods.map((period) => {
                     const blockCourses = periodCoursesMap[period.id] || [];
                     const blockResources = resources.filter(
                       (r) => r.studyPeriodId === period.id || !r.studyPeriodId
                     );
-                    const blockPct =
-                      idx === 0
-                        ? Math.max(40, assessmentCompletionPct)
-                        : Math.max(15, Math.round(assessmentCompletionPct * 0.6));
+                    const blockPct = Math.min(100, Math.max(0, assessmentCompletionPct));
 
                     return (
                       <div

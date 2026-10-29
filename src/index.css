@@ -10,6 +10,8 @@
 [data-theme="medical"] {
   --bg-app: #eef6f9;
   --bg-card: #ffffff;
+  --bg-sidebar: #ffffff;
+  --bg-header: rgba(255, 255, 255, 0.95);
   --bg-elevated: #e0f2fe;
   --bg-input: #f0f9ff;
   --surface-hover: #bae6fd;
@@ -27,6 +29,8 @@
 [data-theme="gold"] {
   --bg-app: #0c0a06;
   --bg-card: #16120a;
+  --bg-sidebar: #16120a;
+  --bg-header: rgba(22, 18, 10, 0.95);
   --bg-elevated: #241d10;
   --bg-input: #1c160c;
   --surface-hover: #362b16;
@@ -44,6 +48,8 @@
 [data-theme="light"] {
   --bg-app: #f1f5f9;
   --bg-card: #ffffff;
+  --bg-sidebar: #ffffff;
+  --bg-header: rgba(255, 255, 255, 0.95);
   --bg-elevated: #e2e8f0;
   --bg-input: #f8fafc;
   --surface-hover: #cbd5e1;
@@ -61,6 +67,8 @@
 [data-theme="dark"] {
   --bg-app: #060b14;
   --bg-card: #0f172a;
+  --bg-sidebar: #0f172a;
+  --bg-header: rgba(15, 23, 42, 0.95);
   --bg-elevated: #1e293b;
   --bg-input: #090e1a;
   --surface-hover: #334155;
@@ -320,15 +328,24 @@
   border-color: #7dd3fc !important;
 }
 
-/* High-Contrast Typography in Light & Medical (Excludes colored buttons, badges & gradients) */
-[data-theme="light"] .text-white:not([class*="bg-teal-"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not([class*="bg-indigo-"]):not([class*="bg-rose-"]):not([class*="bg-red-"]):not([class*="bg-amber-"]):not([class*="bg-purple-"]):not([class*="bg-cyan-"]):not([class*="from-"]),
-[data-theme="medical"] .text-white:not([class*="bg-teal-"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not([class*="bg-indigo-"]):not([class*="bg-rose-"]):not([class*="bg-red-"]):not([class*="bg-amber-"]):not([class*="bg-purple-"]):not([class*="bg-cyan-"]):not([class*="from-"]) {
+/* High-Contrast Typography in Light & Medical (Excludes colored buttons, badges, gradients & dark code terminals) */
+[data-theme="light"] .text-white:not(.bg-\[\#070A10\]):not([class*="bg-teal-"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not([class*="bg-indigo-"]):not([class*="bg-rose-"]):not([class*="bg-red-"]):not([class*="bg-amber-"]):not([class*="bg-purple-"]):not([class*="bg-cyan-"]):not([class*="from-"]),
+[data-theme="medical"] .text-white:not(.bg-\[\#070A10\]):not([class*="bg-teal-"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not([class*="bg-indigo-"]):not([class*="bg-rose-"]):not([class*="bg-red-"]):not([class*="bg-amber-"]):not([class*="bg-purple-"]):not([class*="bg-cyan-"]):not([class*="from-"]) {
   color: var(--text-primary) !important;
 }
 
-[data-theme="light"] :is(.text-slate-100, .text-slate-200):not([class*="bg-teal-"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not([class*="bg-indigo-"]):not([class*="bg-rose-"]):not([class*="bg-red-"]):not([class*="bg-amber-"]):not([class*="bg-purple-"]):not([class*="bg-cyan-"]):not([class*="from-"]),
-[data-theme="medical"] :is(.text-slate-100, .text-slate-200):not([class*="bg-teal-"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not([class*="bg-indigo-"]):not([class*="bg-rose-"]):not([class*="bg-red-"]):not([class*="bg-amber-"]):not([class*="bg-purple-"]):not([class*="bg-cyan-"]):not([class*="from-"]) {
+[data-theme="light"] :is(.text-slate-100, .text-slate-200):not(.bg-\[\#070A10\]):not([class*="bg-teal-"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not([class*="bg-indigo-"]):not([class*="bg-rose-"]):not([class*="bg-red-"]):not([class*="bg-amber-"]):not([class*="bg-purple-"]):not([class*="bg-cyan-"]):not([class*="from-"]),
+[data-theme="medical"] :is(.text-slate-100, .text-slate-200):not(.bg-\[\#070A10\]):not([class*="bg-teal-"]):not([class*="bg-emerald-"]):not([class*="bg-blue-"]):not([class*="bg-indigo-"]):not([class*="bg-rose-"]):not([class*="bg-red-"]):not([class*="bg-amber-"]):not([class*="bg-purple-"]):not([class*="bg-cyan-"]):not([class*="from-"]) {
   color: var(--text-primary) !important;
+}
+
+/* Preserve readable light text inside explicit dark terminal/code blocks across all themes */
+.bg-\[\#070A10\].text-white,
+.bg-\[\#070A10\] .text-white,
+.bg-\[\#070A10\].text-slate-200,
+.bg-\[\#070A10\] .text-slate-200,
+.bg-\[\#070A10\] .text-slate-300 {
+  color: #e2e8f0 !important;
 }
 
 [data-theme="light"] .text-slate-300,
