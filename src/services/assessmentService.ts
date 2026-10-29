@@ -177,10 +177,20 @@ async function getIdTokenSafe(): Promise<string> {
 // 1. Admin Question Banks & MCQs (Full Dynamic CRUD + Offline Bulk Outbox)
 // ---------------------------------------------------------------------------
 
+const LEGACY_SEED_ASSESSMENT_IDS = new Set([
+  'asmnt-cvs-midterm',
+  'comp-clinical-cardio',
+  'qbank-cvs-default'
+]);
+
 export async function getQuestionBanks(universityId: string): Promise<QuestionBank[]> {
   const initKey = `${LOCAL_STORAGE_PREFIX}banks_init_${universityId}`;
   const raw = localStorage.getItem(`${LOCAL_STORAGE_PREFIX}banks_${universityId}`);
-  const localBanks: QuestionBank[] = raw ? JSON.parse(raw) : [];
+  const localBanks: QuestionBank[] = raw
+    ? (JSON.parse(raw) as QuestionBank[]).filter(
+        b => b && b.id && !LEGACY_SEED_ASSESSMENT_IDS.has(b.id) && b.createdBy !== 'SYSTEM_SEED'
+      )
+    : [];
 
   try {
     const q = query(
@@ -189,26 +199,20 @@ export async function getQuestionBanks(universityId: string): Promise<QuestionBa
     );
     const snap = await getDocs(q);
     const list: QuestionBank[] = [];
-    snap.forEach(d => list.push({ id: d.id, ...d.data() } as QuestionBank));
-    if (list.length > 0) {
-      localStorage.setItem(`${LOCAL_STORAGE_PREFIX}banks_${universityId}`, JSON.stringify(list));
-      localStorage.setItem(initKey, 'true');
-      return list;
-    }
+    snap.forEach(d => {
+      const data = { id: d.id, ...d.data() } as QuestionBank;
+      if (!LEGACY_SEED_ASSESSMENT_IDS.has(data.id) && data.createdBy !== 'SYSTEM_SEED') {
+        list.push(data);
+      }
+    });
+    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}banks_${universityId}`, JSON.stringify(list));
+    localStorage.setItem(initKey, 'true');
+    return list;
   } catch (err) {
     console.warn('Firestore fallback: reading local question banks');
   }
 
-  if (localStorage.getItem(initKey) === 'true') {
-    return localBanks;
-  }
-
-  if (localBanks.length > 0) return localBanks;
-
-  if (universityId === 'univ-dar-al-salam') {
-    return [DEFAULT_QUESTION_BANK];
-  }
-  return [];
+  return localBanks;
 }
 
 async function ensureBanksInitialized(universityId: string): Promise<QuestionBank[]> {
@@ -660,15 +664,15 @@ function unmarkAssessmentDeleted(id: string): void {
 function mergeAssessmentsWithDefaults(universityId: string, items: Assessment[]): Assessment[] {
   const deleted = getDeletedAssessmentIds();
   const map = new Map<string, Assessment>();
-  if (universityId === 'univ-dar-al-salam') {
-    for (const def of DEFAULT_ASSESSMENTS) {
-      if (!deleted.has(def.id)) {
-        map.set(def.id, def);
-      }
-    }
-  }
   for (const item of items) {
-    if (item && item.id && !deleted.has(item.id) && (!universityId || item.universityId === universityId)) {
+    if (
+      item &&
+      item.id &&
+      !deleted.has(item.id) &&
+      !LEGACY_SEED_ASSESSMENT_IDS.has(item.id) &&
+      item.createdBy !== 'SYSTEM_SEED' &&
+      (!universityId || item.universityId === universityId)
+    ) {
       map.set(item.id, item);
     }
   }
@@ -684,9 +688,7 @@ export function getCachedPublishedAssessments(universityId: string, studyLevelId
       a => a.status === 'published' && (!a.studyLevelId || a.studyLevelId === studyLevelId || a.studyLevelId === 'ALL')
     );
   } catch {
-    return mergeAssessmentsWithDefaults(universityId, []).filter(
-      a => a.status === 'published' && (!a.studyLevelId || a.studyLevelId === studyLevelId || a.studyLevelId === 'ALL')
-    );
+    return [];
   }
 }
 
@@ -696,6 +698,7 @@ export async function getAssessments(universityId: string, type?: AssessmentType
   const localList: Assessment[] = raw ? JSON.parse(raw) : [];
 
   let cloudList: Assessment[] = [];
+  let fetchedFromCloud = false;
   try {
     if (status === 'published') {
       // Student-safe query that 100% satisfies `resource.data.status == 'published'` in Firestore security rules
@@ -707,11 +710,13 @@ export async function getAssessments(universityId: string, type?: AssessmentType
           cloudList.push(data);
         }
       });
+      fetchedFromCloud = true;
     } else {
       try {
         const q = query(collection(db, 'assessments'), where('universityId', '==', universityId));
         const snap = await getDocs(q);
         snap.forEach(d => cloudList.push({ id: d.id, ...d.data() } as Assessment));
+        fetchedFromCloud = true;
       } catch {
         const q = query(collection(db, 'assessments'), where('status', '==', 'published'));
         const snap = await getDocs(q);
@@ -721,6 +726,7 @@ export async function getAssessments(universityId: string, type?: AssessmentType
             cloudList.push(data);
           }
         });
+        fetchedFromCloud = true;
       }
     }
   } catch (err) {}
@@ -730,7 +736,7 @@ export async function getAssessments(universityId: string, type?: AssessmentType
     : [];
   const merged = mergeAssessmentsWithDefaults(
     universityId,
-    cloudList.length > 0 ? [...draftsFromLocal, ...cloudList] : localList
+    fetchedFromCloud ? [...draftsFromLocal, ...cloudList] : localList
   );
 
   try {

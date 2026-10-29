@@ -43,11 +43,13 @@ import {
 import {
   getCachedCollection,
   fetchStudyPeriods,
-  fetchCourseOfferings
+  fetchCourseOfferings,
+  subscribeToAcademicHierarchy
 } from '../../services/academicService.ts';
 import {
   fetchCourseInstructors,
-  getCachedCourseInstructors
+  getCachedCourseInstructors,
+  subscribeToCourseInstructors
 } from '../../services/batchGovernanceService.ts';
 import {
   getActiveNotificationUser,
@@ -94,11 +96,16 @@ export default function StudentMedicalLibrary({
       status: 'published'
     })
   );
-  const [courses, setCourses] = useState<CourseOffering[]>(() =>
-    getCachedCollection<CourseOffering>('courseOfferings').filter(
-      (c) => !c.universityId || c.universityId === universityId
-    )
-  );
+  const [courses, setCourses] = useState<CourseOffering[]>(() => {
+    const levelPeriodIds = new Set(
+      getCachedCollection<{ id: string; studyLevelId: string; universityId?: string; isArchived?: boolean }>('studyPeriods')
+        .filter((p) => p.studyLevelId === studyLevelId && (!p.universityId || p.universityId === universityId) && !p.isArchived)
+        .map((p) => p.id)
+    );
+    return getCachedCollection<CourseOffering>('courseOfferings').filter(
+      (c) => Boolean(c.studyPeriodId && levelPeriodIds.has(c.studyPeriodId)) && (!c.universityId || c.universityId === universityId)
+    );
+  });
   const [instructors, setInstructors] = useState<CourseInstructor[]>(() =>
     getCachedCourseInstructors({ universityId, studyLevelId })
   );
@@ -150,14 +157,14 @@ export default function StudentMedicalLibrary({
       setResources(list);
       setInstructors(instList);
 
-      if (periods.length > 0) {
+      const activePeriods = periods.filter((p) => !p.isArchived);
+      if (activePeriods.length > 0) {
         const crsArrays = await Promise.all(
-          periods.map((p) => fetchCourseOfferings(p.id, universityId).catch(() => []))
+          activePeriods.map((p) => fetchCourseOfferings(p.id, universityId).catch(() => []))
         );
-        const mergedCourses = crsArrays.flat();
-        if (mergedCourses.length > 0) {
-          setCourses(mergedCourses);
-        }
+        setCourses(crsArrays.flat());
+      } else {
+        setCourses([]);
       }
 
       const activeUid = getActiveNotificationUser();
@@ -182,7 +189,8 @@ export default function StudentMedicalLibrary({
       setResources(cached);
     }
     loadResources(cached.length === 0);
-    const unsub = subscribeToEducationalResources(
+
+    const unsubResources = subscribeToEducationalResources(
       {
         universityId,
         programId,
@@ -198,7 +206,30 @@ export default function StudentMedicalLibrary({
         }
       }
     );
-    return () => unsub();
+
+    const unsubHierarchy = subscribeToAcademicHierarchy(() => {
+      const activePeriods = getCachedCollection<{ id: string; studyLevelId: string; universityId?: string; isArchived?: boolean }>('studyPeriods')
+        .filter((p) => p.studyLevelId === studyLevelId && (!p.universityId || p.universityId === universityId) && !p.isArchived);
+      const periodIds = new Set(activePeriods.map((p) => p.id));
+      const liveCourses = getCachedCollection<CourseOffering>('courseOfferings').filter(
+        (c) => Boolean(c.studyPeriodId && periodIds.has(c.studyPeriodId)) && (!c.universityId || c.universityId === universityId)
+      );
+      setCourses(liveCourses);
+    });
+
+    const unsubInstructors = subscribeToCourseInstructors(
+      universityId,
+      studyLevelId,
+      (liveInstructors: CourseInstructor[]) => {
+        setInstructors(liveInstructors);
+      }
+    );
+
+    return () => {
+      unsubResources();
+      unsubHierarchy();
+      unsubInstructors();
+    };
   }, [universityId, programId, studyLevelId]);
 
   // Classify each resource into its media type and one of the 3 core shelves:

@@ -42,42 +42,12 @@ const NOTIFICATIONS_DELETED_KEY = 'umed_batch_notifications_deleted';
 let instructorsMemoryCache: CourseInstructor[] | null = null;
 let notificationsMemoryCache: BatchNotification[] | null = null;
 
-export const DEFAULT_COURSE_INSTRUCTORS: CourseInstructor[] = [
-  {
-    id: 'inst-cvs-theo-1',
-    universityId: 'univ-dar-al-salam',
-    studyLevelId: 'lvl-4',
-    studyPeriodId: 'blk-cvs',
-    courseOfferingId: 'crs-anat-cvs',
-    courseTitleArabic: 'تشريح الجهاز القلبي الوعائي',
-    instructorNameArabic: 'عبدالرحمن محمد الشامي',
-    academicTitle: 'أ.د.',
-    teachingType: 'theoretical',
-    specialization: 'التشريح السريري والأجنة الطبية',
-    contactInfo: 'قسم العلوم الطبية الأساسية — مبنى كلية الطب',
-    officeHours: 'الأحد والثلاثاء (10:00 ص - 12:30 م)',
-    createdBy: 'SYSTEM_SEED',
-    createdAt: '2025-01-01T00:00:00Z',
-    updatedAt: '2025-01-01T00:00:00Z'
-  },
-  {
-    id: 'inst-cvs-prac-1',
-    universityId: 'univ-dar-al-salam',
-    studyLevelId: 'lvl-4',
-    studyPeriodId: 'blk-cvs',
-    courseOfferingId: 'crs-anat-cvs',
-    courseTitleArabic: 'تشريح الجهاز القلبي الوعائي',
-    instructorNameArabic: 'سمية علي المقطري',
-    academicTitle: 'د.',
-    teachingType: 'practical',
-    specialization: 'مشرفة معمل التشريح والمجسمات السريرية',
-    contactInfo: 'المشرحة المركزية — القاعة العملية (B2)',
-    officeHours: 'الإثنين والأربعاء (09:00 ص - 01:00 م)',
-    createdBy: 'SYSTEM_SEED',
-    createdAt: '2025-01-01T00:00:00Z',
-    updatedAt: '2025-01-01T00:00:00Z'
-  }
-];
+const LEGACY_SEED_INSTRUCTOR_IDS = new Set([
+  'inst-cvs-theo-1',
+  'inst-cvs-prac-1'
+]);
+
+export const DEFAULT_COURSE_INSTRUCTORS: CourseInstructor[] = [];
 
 export const DEFAULT_BATCH_NOTIFICATIONS: BatchNotification[] = [];
 
@@ -380,13 +350,14 @@ export async function fetchRegisteredUsersDirectory(filterScope?: {
 function mergeInstructorsWithDefaults(items: CourseInstructor[]): CourseInstructor[] {
   const deleted = getDeletedIds(INSTRUCTORS_DELETED_KEY);
   const map = new Map<string, CourseInstructor>();
-  for (const def of DEFAULT_COURSE_INSTRUCTORS) {
-    if (!deleted.has(def.id)) {
-      map.set(def.id, def);
-    }
-  }
   for (const item of items) {
-    if (item && item.id && !deleted.has(item.id)) {
+    if (
+      item &&
+      item.id &&
+      !deleted.has(item.id) &&
+      !LEGACY_SEED_INSTRUCTOR_IDS.has(item.id) &&
+      item.createdBy !== 'SYSTEM_SEED'
+    ) {
       map.set(item.id, item);
     }
   }
@@ -396,7 +367,9 @@ function mergeInstructorsWithDefaults(items: CourseInstructor[]): CourseInstruct
 function readLocalInstructors(): CourseInstructor[] {
   if (instructorsMemoryCache) {
     const deleted = getDeletedIds(INSTRUCTORS_DELETED_KEY);
-    return instructorsMemoryCache.filter(i => !deleted.has(i.id));
+    return instructorsMemoryCache.filter(
+      i => !deleted.has(i.id) && !LEGACY_SEED_INSTRUCTOR_IDS.has(i.id) && i.createdBy !== 'SYSTEM_SEED'
+    );
   }
   try {
     const raw = localStorage.getItem(INSTRUCTORS_STORAGE_KEY);

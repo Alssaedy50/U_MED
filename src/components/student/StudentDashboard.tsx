@@ -58,11 +58,13 @@ import {
 import {
   resolveResourceFileUrl,
   fetchEducationalResources,
-  getCachedEducationalResources
+  getCachedEducationalResources,
+  subscribeToEducationalResources
 } from '../../services/resourceService.ts';
 import {
   getPublishedAssessmentsForStudent,
-  getCachedPublishedAssessments
+  getCachedPublishedAssessments,
+  subscribeToAssessments
 } from '../../services/assessmentService.ts';
 import {
   syncNotificationsForBatchPosts,
@@ -324,21 +326,67 @@ export default function StudentDashboard({
       if (liveUnivs.length > 0) setUniversities(liveUnivs);
 
       const livePeriods = getCachedCollection<StudyPeriod>('studyPeriods')
-        .filter(p => p.studyLevelId === enrollment.currentStudyLevelId && (!p.universityId || p.universityId === enrollment.universityId))
+        .filter(
+          p =>
+            !p.isArchived &&
+            p.isActive !== false &&
+            p.studyLevelId === enrollment.currentStudyLevelId &&
+            (!p.universityId || p.universityId === enrollment.universityId)
+        )
         .sort((a, b) => a.order - b.order);
       setStudyPeriods(livePeriods);
       setSelectedPeriod(prev => {
-        if (prev && livePeriods.some(p => p.id === prev.id)) {
-          return livePeriods.find(p => p.id === prev.id) || livePeriods[0] || null;
+        const nextPeriod =
+          prev && livePeriods.some(p => p.id === prev.id)
+            ? livePeriods.find(p => p.id === prev.id) || livePeriods[0] || null
+            : livePeriods[0] || null;
+
+        if (nextPeriod) {
+          const liveCourses = getCachedCollection<CourseOffering>('courseOfferings').filter(
+            c =>
+              c.isActive !== false &&
+              c.studyPeriodId === nextPeriod.id &&
+              (!c.universityId || c.universityId === enrollment.universityId)
+          );
+          setCourses(liveCourses);
+        } else {
+          setCourses([]);
         }
-        return livePeriods[0] || null;
+        return nextPeriod;
       });
     });
+
+    const unsubResources = subscribeToEducationalResources(
+      {
+        universityId: enrollment.universityId,
+        studyLevelId: enrollment.currentStudyLevelId,
+        status: 'published'
+      },
+      (liveResources) => {
+        setLevelResources(liveResources);
+      }
+    );
+
+    const unsubAssessments = subscribeToAssessments(
+      enrollment.universityId,
+      (liveAssessments) => {
+        const filtered = liveAssessments.filter(
+          a =>
+            a.status === 'published' &&
+            (!a.studyLevelId || a.studyLevelId === enrollment.currentStudyLevelId || a.studyLevelId === 'ALL')
+        );
+        setLevelAssessments(filtered);
+      },
+      undefined,
+      'published'
+    );
 
     return () => {
       unsubNotifs();
       unsubInstructors();
       unsubAcademic();
+      unsubResources();
+      unsubAssessments();
     };
   }, [enrollment?.universityId, enrollment?.currentStudyLevelId, enrollment?.status]);
 
@@ -346,13 +394,14 @@ export default function StudentDashboard({
     if (selectedPeriod && enrollment) {
       // Hydrate synchronously first from cache for 0ms block switching
       const cachedCourses = getCachedCollection<CourseOffering>('courseOfferings').filter(
-        c => c.studyPeriodId === selectedPeriod.id && (!c.universityId || c.universityId === enrollment.universityId)
+        c =>
+          c.isActive !== false &&
+          c.studyPeriodId === selectedPeriod.id &&
+          (!c.universityId || c.universityId === enrollment.universityId)
       );
-      if (cachedCourses.length > 0) {
-        setCourses(cachedCourses);
-      }
+      setCourses(cachedCourses);
       fetchCourseOfferings(selectedPeriod.id, enrollment.universityId).then((crs) => {
-        setCourses(crs);
+        setCourses(crs.filter(c => c.isActive !== false));
       });
     } else {
       setCourses([]);
@@ -807,7 +856,11 @@ export default function StudentDashboard({
 
             {courses.length === 0 ? (
               <div className="text-center py-6 text-slate-400 text-xs">
-                <p>لم تتم إضافة مقررات مخصصة لهذا البلوك بعد. يمكنك الوصول إلى محاضرات وشرائح وفيديوهات البلوك عبر زر «فتح المكتبة الرقمية» أعلاه.</p>
+                <p>
+                  {studyPeriods.length === 0
+                    ? 'لم تقم الإدارة أو مندوب الدفعة بإنشاء بلوكات أو مقررات دراسية لهذا المستوى بعد. ستظهر هنا تلقائياً فور إضافتها.'
+                    : 'لم تتم إضافة مقررات مخصصة لهذا البلوك بعد. يمكنك الوصول إلى محاضرات وشرائح وفيديوهات البلوك عبر زر «فتح المكتبة الرقمية» أعلاه.'}
+                </p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

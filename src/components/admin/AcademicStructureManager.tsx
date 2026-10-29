@@ -46,6 +46,8 @@ import {
 import { 
   fetchUniversities, 
   subscribeToUniversities,
+  subscribeToAcademicHierarchy,
+  getCachedCollection,
   saveUniversity, 
   toggleUniversityActive,
   deleteUniversity,
@@ -377,6 +379,35 @@ export default function AcademicStructureManager({
       setCourses([]);
     }
   }, [selectedPeriod]);
+
+  // Real-Time Synchronization for Blocks (studyPeriods) and Courses (courseOfferings)
+  useEffect(() => {
+    const unsub = subscribeToAcademicHierarchy(() => {
+      if (selectedLevel) {
+        const allPeriods = getCachedCollection<StudyPeriod>('studyPeriods').filter(
+          (p) => p.studyLevelId === selectedLevel.id
+        );
+        const activeOnly = allPeriods.filter((p) => !p.isArchived).sort((a, b) => (a.order || 0) - (b.order || 0));
+        const archivedOnly = allPeriods.filter((p) => !!p.isArchived).sort((a, b) => (a.order || 0) - (b.order || 0));
+        setStudyPeriods(activeOnly);
+        setArchivedPeriods(archivedOnly);
+        setSelectedPeriod((prev) => {
+          if (prev) {
+            const match = activeOnly.find((p) => p.id === prev.id);
+            if (match) return match;
+          }
+          return activeOnly.length > 0 ? activeOnly[0] : null;
+        });
+      }
+      if (selectedPeriod) {
+        const liveCourses = getCachedCollection<CourseOffering>('courseOfferings').filter(
+          (c) => c.studyPeriodId === selectedPeriod.id
+        );
+        setCourses(liveCourses);
+      }
+    });
+    return () => unsub();
+  }, [selectedLevel?.id, selectedPeriod?.id]);
 
   // Seed Handler: Seed Dar Al Salam University
   const handleSeedDarAlSalam = async () => {

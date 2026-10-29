@@ -602,9 +602,9 @@ export default function App() {
     }
   }, [isAuthorizedAdmin, activeTab]);
 
-  // Start real-time academic sync ONLY for admins, and subscribe to enrollment when logged in
+  // Start real-time academic sync for all users (students & admins) and subscribe to enrollment when logged in
   useEffect(() => {
-    startAcademicRealtimeSync(isAuthorizedAdmin);
+    startAcademicRealtimeSync(true);
     if (!user) {
       setStudentEnrollment(null);
       return;

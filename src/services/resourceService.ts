@@ -552,84 +552,15 @@ ${352 + streamText.length}
   return new TextEncoder().encode(pdfContent);
 }
 
-// Initial verified sample resources for Dar Al Salam University (Level 4 - CVS & RESP Blocks)
-export const SAMPLE_EDUCATIONAL_RESOURCES: EducationalResource[] = [
-  {
-    id: 'res-cvs-anat-01',
-    title: 'محاضرة تشريح القلب والأوعية الكبرى (Gross Anatomy of Heart)',
-    description: 'شرح تفصيلي لتشريح حجرات القلب والصمامات والتروية التاجية مع مخططات توضيحية.',
-    resourceType: 'pdf',
-    url: 'https://drive.google.com/file/d/1sample_cvs_anatomy/preview',
-    fileSizeLabel: '1.8 MB',
-    universityId: 'univ-dar-al-salam',
-    programId: 'prog-mbbs',
-    curriculumVersionId: 'cur-dar-2024',
-    studyLevelId: 'lvl-4',
-    studyPeriodId: 'blk-cvs',
-    courseOfferingId: 'crs-anat-cvs',
-    sectionType: 'theoretical',
-    status: 'published',
-    createdBy: 'DR_ALSSAEDY',
-    createdAt: '2025-09-10T10:00:00Z',
-    updatedAt: '2025-09-10T10:00:00Z'
-  },
-  {
-    id: 'res-cvs-histo-02',
-    title: 'شريحة هستولوجي: عضلة القلب والأقراص البينية (Cardiac Muscle Histology)',
-    description: 'صورة مجهرية عالية الدقة للشريحة النسيجية لعضلة القلب وتفرعات الألياف العضلية والأقراص البينية (Intercalated Discs).',
-    resourceType: 'image',
-    url: 'https://images.unsplash.com/photo-1530497610245-94d3c16cda28?auto=format&fit=crop&w=1200&q=80',
-    fileSizeLabel: '420 KB',
-    universityId: 'univ-dar-al-salam',
-    programId: 'prog-mbbs',
-    curriculumVersionId: 'cur-dar-2024',
-    studyLevelId: 'lvl-4',
-    studyPeriodId: 'blk-cvs',
-    courseOfferingId: 'crs-anat-cvs',
-    sectionType: 'practical',
-    status: 'published',
-    createdBy: 'DR_ALSSAEDY',
-    createdAt: '2025-09-12T14:30:00Z',
-    updatedAt: '2025-09-12T14:30:00Z'
-  },
-  {
-    id: 'res-cvs-physio-03',
-    title: 'دليل تخطيط كهربية القلب السريري (ECG Interpretation Guide)',
-    description: 'ملف تفاعلي لقراءة ورسم موجات تخطيط القلب السريرية وحساب المحور الكهربائي للقلب.',
-    resourceType: 'pdf',
-    url: 'https://drive.google.com/file/d/1sample_ecg_guide/preview',
-    fileSizeLabel: '2.4 MB',
-    universityId: 'univ-dar-al-salam',
-    programId: 'prog-mbbs',
-    curriculumVersionId: 'cur-dar-2024',
-    studyLevelId: 'lvl-4',
-    studyPeriodId: 'blk-cvs',
-    courseOfferingId: 'crs-anat-cvs',
-    sectionType: 'practical',
-    status: 'published',
-    createdBy: 'DR_ALSSAEDY',
-    createdAt: '2025-09-15T09:00:00Z',
-    updatedAt: '2025-09-15T09:00:00Z'
-  },
-  {
-    id: 'res-resp-04',
-    title: 'محاضرة فسيولوجيا التبادل الغازي الرئوي (Gas Exchange Physiology)',
-    description: 'آليات انتشار الأكسجين وثاني أكسيد الكربون عبر الغشاء السنخي الشعيري ومنحنى تفكك الأكسي هيموجلوبين.',
-    resourceType: 'pdf',
-    url: 'https://drive.google.com/file/d/1sample_gas_exchange/preview',
-    fileSizeLabel: '1.2 MB',
-    universityId: 'univ-dar-al-salam',
-    programId: 'prog-mbbs',
-    curriculumVersionId: 'cur-dar-2024',
-    studyLevelId: 'lvl-4',
-    studyPeriodId: 'blk-rs',
-    sectionType: 'theoretical',
-    status: 'published',
-    createdBy: 'DR_ALSSAEDY',
-    createdAt: '2025-09-20T11:00:00Z',
-    updatedAt: '2025-09-20T11:00:00Z'
-  }
-];
+// Legacy uncreated sample resource IDs that must never be injected into user accounts
+const LEGACY_SAMPLE_RESOURCE_IDS = new Set([
+  'res-cvs-anat-01',
+  'res-cvs-histo-02',
+  'res-cvs-physio-03',
+  'res-resp-04'
+]);
+
+export const SAMPLE_EDUCATIONAL_RESOURCES: EducationalResource[] = [];
 
 function getDeletedResourceIds(): Set<string> {
   try {
@@ -659,6 +590,7 @@ function unmarkResourceDeleted(id: string): void {
 
 function isInternalBackupResource(item?: Partial<EducationalResource> | null): boolean {
   if (!item) return true;
+  if (item.id && LEGACY_SAMPLE_RESOURCE_IDS.has(item.id)) return true;
   const fName = (item.fileName || '').toLowerCase();
   const title = item.title || '';
   if (
@@ -676,13 +608,14 @@ function isInternalBackupResource(item?: Partial<EducationalResource> | null): b
 function mergeResourcesWithDefaults(cloudOrLocal: EducationalResource[]): EducationalResource[] {
   const deleted = getDeletedResourceIds();
   const map = new Map<string, EducationalResource>();
-  for (const def of SAMPLE_EDUCATIONAL_RESOURCES) {
-    if (!deleted.has(def.id)) {
-      map.set(def.id, def);
-    }
-  }
   for (const item of cloudOrLocal) {
-    if (item && item.id && !deleted.has(item.id) && !isInternalBackupResource(item)) {
+    if (
+      item &&
+      item.id &&
+      !deleted.has(item.id) &&
+      !LEGACY_SAMPLE_RESOURCE_IDS.has(item.id) &&
+      !isInternalBackupResource(item)
+    ) {
       map.set(item.id, item);
     }
   }
@@ -694,7 +627,9 @@ function mergeResourcesWithDefaults(cloudOrLocal: EducationalResource[]): Educat
 function readLocalResources(): EducationalResource[] {
   if (resourcesMemoryCache) {
     const deleted = getDeletedResourceIds();
-    return resourcesMemoryCache.filter(r => !deleted.has(r.id));
+    return resourcesMemoryCache.filter(
+      r => !deleted.has(r.id) && !LEGACY_SAMPLE_RESOURCE_IDS.has(r.id)
+    );
   }
   try {
     const raw = localStorage.getItem(RESOURCES_STORAGE_KEY);

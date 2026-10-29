@@ -60,6 +60,17 @@ const FIRESTORE_COLLECTIONS: Record<CollectionKey, string> = {
   courseOfferings: 'courseOfferings'
 };
 
+const LEGACY_UNCREATED_SEED_IDS = new Set([
+  'blk-hem-2',
+  'blk-msk-2',
+  'blk-git-3',
+  'blk-cns-3',
+  'blk-cvs',
+  'blk-rs',
+  'crs-hem-201',
+  'crs-anat-cvs'
+]);
+
 const DEFAULT_SEED_DATA: Record<CollectionKey, any[]> = {
   countries: [DAR_AL_SALAM_SEED.country],
   universities: [DAR_AL_SALAM_SEED.university],
@@ -67,44 +78,9 @@ const DEFAULT_SEED_DATA: Record<CollectionKey, any[]> = {
   programs: [DAR_AL_SALAM_SEED.program],
   curriculumVersions: [DAR_AL_SALAM_SEED.curriculumVersion],
   studyLevels: DAR_AL_SALAM_SEED.studyLevels,
-  studyPeriods: DAR_AL_SALAM_SEED.sampleBlocks.map(b => ({
-    id: b.id,
-    studyLevelId: b.levelId || 'lvl-4',
-    curriculumVersionId: 'cur-dar-2024',
-    universityId: 'univ-dar-al-salam',
-    periodType: b.periodType,
-    titleArabic: b.titleArabic,
-    titleEnglish: b.titleEnglish,
-    code: b.code,
-    order: b.order,
-    isActive: true
-  })),
-  courseOfferings: [
-    {
-      id: 'crs-hem-201',
-      studyPeriodId: 'blk-hem-2',
-      studyLevelId: 'lvl-2',
-      curriculumVersionId: 'cur-dar-2024',
-      universityId: 'univ-dar-al-salam',
-      titleArabic: 'فسيولوجيا وأمراض الدم (Hematology)',
-      titleEnglish: 'Hematology Physiology & Pathology',
-      code: 'HEM-201',
-      creditHours: 4,
-      isActive: true
-    },
-    {
-      id: 'crs-anat-cvs',
-      studyPeriodId: 'blk-cvs',
-      studyLevelId: 'lvl-4',
-      curriculumVersionId: 'cur-dar-2024',
-      universityId: 'univ-dar-al-salam',
-      titleArabic: 'تشريح الجهاز القلبي الوعائي',
-      titleEnglish: 'Anatomy of Cardiovascular System',
-      code: 'ANAT-401',
-      creditHours: 3,
-      isActive: true
-    }
-  ]
+  // Blocks (studyPeriods) and Courses (courseOfferings) must strictly come from Admin creation in Firestore
+  studyPeriods: [],
+  courseOfferings: []
 };
 
 // Fast in-memory cache for 0ms synchronous access across tabs
@@ -113,6 +89,26 @@ const syncedCollections = new Set<CollectionKey>();
 const inFlightFetches: Partial<Record<CollectionKey, Promise<any[]>>> = {};
 const hierarchyListeners = new Set<() => void>();
 let realtimeWatchersStarted = false;
+
+// One-time cleanup of legacy uncreated seed data from browser localStorage
+if (typeof window !== 'undefined') {
+  try {
+    const PURGE_FLAG = 'umed_purged_uncreated_seed_v3';
+    if (localStorage.getItem(PURGE_FLAG) !== 'true') {
+      (['studyPeriods', 'courseOfferings'] as CollectionKey[]).forEach((k) => {
+        const raw = localStorage.getItem(STORAGE_KEYS[k]);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            const cleaned = parsed.filter((item: any) => item && item.id && !LEGACY_UNCREATED_SEED_IDS.has(item.id));
+            localStorage.setItem(STORAGE_KEYS[k], JSON.stringify(cleaned));
+          }
+        }
+      });
+      localStorage.setItem(PURGE_FLAG, 'true');
+    }
+  } catch (e) {}
+}
 
 function notifyHierarchyListeners() {
   hierarchyListeners.forEach(cb => {
@@ -184,12 +180,12 @@ function mergeWithDefaults<T extends { id: string }>(key: CollectionKey, cloudOr
   const mergedMap = new Map<string, T>();
 
   for (const defItem of defaults) {
-    if (!deleted.has(defItem.id)) {
+    if (!deleted.has(defItem.id) && !LEGACY_UNCREATED_SEED_IDS.has(defItem.id)) {
       mergedMap.set(defItem.id, defItem);
     }
   }
   for (const item of cloudOrLocalItems) {
-    if (item && item.id && !deleted.has(item.id)) {
+    if (item && item.id && !deleted.has(item.id) && !LEGACY_UNCREATED_SEED_IDS.has(item.id)) {
       mergedMap.set(item.id, item);
     }
   }
@@ -199,7 +195,9 @@ function mergeWithDefaults<T extends { id: string }>(key: CollectionKey, cloudOr
 function readLocalCollection<T extends { id: string }>(key: CollectionKey): T[] | null {
   if (memoryCache[key]) {
     const deleted = getDeletedIds();
-    return (memoryCache[key] as T[]).filter(item => !deleted.has(item.id));
+    return (memoryCache[key] as T[]).filter(
+      item => !deleted.has(item.id) && !LEGACY_UNCREATED_SEED_IDS.has(item.id)
+    );
   }
   try {
     const raw = localStorage.getItem(STORAGE_KEYS[key]);
@@ -215,7 +213,9 @@ function readLocalCollection<T extends { id: string }>(key: CollectionKey): T[] 
 
 function writeLocalCollection<T extends { id: string }>(key: CollectionKey, items: T[]): void {
   const deleted = getDeletedIds();
-  const clean = items.filter(item => item && item.id && !deleted.has(item.id));
+  const clean = items.filter(
+    item => item && item.id && !deleted.has(item.id) && !LEGACY_UNCREATED_SEED_IDS.has(item.id)
+  );
   memoryCache[key] = clean;
   try {
     localStorage.setItem(STORAGE_KEYS[key], JSON.stringify(clean));
@@ -230,15 +230,16 @@ export function getCachedCollection<T extends { id: string }>(
   key: CollectionKey,
   filterFn?: (item: T) => boolean
 ): T[] {
+  startAcademicRealtimeSync(true);
   const existing = readLocalCollection<T>(key) || mergeWithDefaults<T>(key, []);
   return filterFn ? existing.filter(filterFn) : existing;
 }
 
 /**
- * Starts real-time Firestore listeners for academic hierarchy collections ONLY for authorized admins.
- * Regular students read from persistent local cache + one-time sync without keeping 8 open listeners.
+ * Starts real-time Firestore listeners for academic hierarchy collections for ALL users (Students & Admins)
+ * so any block, course, level, or university created, updated, or deleted by the administration syncs immediately.
  */
-export function startAcademicRealtimeSync(enableRealtimeListeners = false): void {
+export function startAcademicRealtimeSync(enableRealtimeListeners = true): void {
   if (!enableRealtimeListeners || realtimeWatchersStarted || !db) return;
   realtimeWatchersStarted = true;
 
@@ -250,7 +251,13 @@ export function startAcademicRealtimeSync(enableRealtimeListeners = false): void
         if (snap.exists()) {
           const data = snap.data();
           if (Array.isArray(data?.ids)) {
-            saveDeletedIds(new Set(data.ids));
+            const newDeletedSet = new Set<string>(data.ids);
+            saveDeletedIds(newDeletedSet);
+            (Object.keys(FIRESTORE_COLLECTIONS) as CollectionKey[]).forEach((k) => {
+              if (memoryCache[k]) {
+                writeLocalCollection(k, memoryCache[k] as any[]);
+              }
+            });
             notifyHierarchyListeners();
           }
         }
@@ -268,8 +275,16 @@ export function startAcademicRealtimeSync(enableRealtimeListeners = false): void
           const cloudItems: any[] = [];
           snap.forEach((d) => {
             const data = d.data();
-            if (data && (data.id || d.id)) {
-              cloudItems.push({ ...data, id: data.id || d.id });
+            const docId = data?.id || d.id;
+            if (data && docId) {
+              if (LEGACY_UNCREATED_SEED_IDS.has(docId)) {
+                // Clean up legacy uncreated seed block/course from cloud if user has write access
+                if (auth.currentUser) {
+                  deleteDoc(doc(db, colName, d.id)).catch(() => {});
+                }
+              } else {
+                cloudItems.push({ ...data, id: docId });
+              }
             }
           });
           const merged = mergeWithDefaults(key, cloudItems);
@@ -284,6 +299,7 @@ export function startAcademicRealtimeSync(enableRealtimeListeners = false): void
 }
 
 export function subscribeToAcademicHierarchy(onUpdate: () => void): () => void {
+  startAcademicRealtimeSync(true);
   hierarchyListeners.add(onUpdate);
   return () => {
     hierarchyListeners.delete(onUpdate);
@@ -301,19 +317,24 @@ async function ensureCollectionInitialized<T extends { id: string }>(
 
   const deleted = getDeletedIds();
   let firestoreList: T[] = [];
+  let fetchedFromCloud = false;
   try {
     const snap = await getDocs(collection(db, firestoreCollectionName));
     snap.forEach(d => {
       const data = d.data() as T;
       const item = { ...data, id: data.id || d.id };
-      if (!deleted.has(item.id)) {
+      if (!deleted.has(item.id) && !LEGACY_UNCREATED_SEED_IDS.has(item.id)) {
         firestoreList.push(item);
       }
     });
     syncedCollections.add(key);
+    fetchedFromCloud = true;
   } catch (e) {}
 
-  const merged = mergeWithDefaults<T>(key, [...(currentLocal || []), ...firestoreList]);
+  const merged = mergeWithDefaults<T>(
+    key,
+    fetchedFromCloud ? firestoreList : (currentLocal || [])
+  );
   writeLocalCollection(key, merged);
   return merged;
 }
@@ -935,46 +956,6 @@ export async function seedDarAlSalamToFirestore(performedBy: string = 'PLATFORM_
     createdAt: '2024-01-01T00:00:00Z'
   };
 
-  const periodsList: StudyPeriod[] = DAR_AL_SALAM_SEED.sampleBlocks.map(blk => ({
-    id: blk.id,
-    studyLevelId: blk.levelId || 'lvl-4',
-    curriculumVersionId: 'cur-dar-2024',
-    universityId: 'univ-dar-al-salam',
-    periodType: blk.periodType,
-    titleArabic: blk.titleArabic,
-    titleEnglish: blk.titleEnglish,
-    code: blk.code,
-    order: blk.order,
-    isActive: true
-  }));
-
-  const defaultCourses: CourseOffering[] = [
-    {
-      id: 'crs-hem-201',
-      studyPeriodId: 'blk-hem-2',
-      studyLevelId: 'lvl-2',
-      curriculumVersionId: 'cur-dar-2024',
-      universityId: 'univ-dar-al-salam',
-      titleArabic: 'فسيولوجيا وأمراض الدم (Hematology)',
-      titleEnglish: 'Hematology Physiology & Pathology',
-      code: 'HEM-201',
-      creditHours: 4,
-      isActive: true
-    },
-    {
-      id: 'crs-anat-cvs',
-      studyPeriodId: 'blk-cvs',
-      studyLevelId: 'lvl-4',
-      curriculumVersionId: 'cur-dar-2024',
-      universityId: 'univ-dar-al-salam',
-      titleArabic: 'تشريح الجهاز القلبي الوعائي',
-      titleEnglish: 'Anatomy of Cardiovascular System',
-      code: 'ANAT-401',
-      creditHours: 3,
-      isActive: true
-    }
-  ];
-
   const mergeSeedWithLocal = <T extends { id: string }>(key: CollectionKey, seedItems: T[]) => {
     const existing = readLocalCollection<T>(key) || [];
     const map = new Map<string, T>();
@@ -989,11 +970,9 @@ export async function seedDarAlSalamToFirestore(performedBy: string = 'PLATFORM_
   mergeSeedWithLocal('programs', [progWithTimestamp]);
   mergeSeedWithLocal('curriculumVersions', [curWithTimestamp]);
   mergeSeedWithLocal('studyLevels', DAR_AL_SALAM_SEED.studyLevels);
-  mergeSeedWithLocal('studyPeriods', periodsList);
-  mergeSeedWithLocal('courseOfferings', defaultCourses);
   notifyHierarchyListeners();
 
-  let count = 1 + 1 + 1 + 1 + 1 + DAR_AL_SALAM_SEED.studyLevels.length + periodsList.length + defaultCourses.length;
+  const count = 1 + 1 + 1 + 1 + 1 + DAR_AL_SALAM_SEED.studyLevels.length;
 
   try {
     const batch = writeBatch(db);
@@ -1006,14 +985,6 @@ export async function seedDarAlSalamToFirestore(performedBy: string = 'PLATFORM_
 
     for (const lvl of DAR_AL_SALAM_SEED.studyLevels) {
       batch.set(doc(db, 'studyLevels', lvl.id), lvl, { merge: true });
-    }
-
-    for (const blk of periodsList) {
-      batch.set(doc(db, 'studyPeriods', blk.id), blk, { merge: true });
-    }
-
-    for (const crs of defaultCourses) {
-      batch.set(doc(db, 'courseOfferings', crs.id), crs, { merge: true });
     }
 
     await batch.commit();
@@ -1031,7 +1002,7 @@ export async function seedDarAlSalamToFirestore(performedBy: string = 'PLATFORM_
 
   return {
     success: true,
-    message: `تم تثبيت ومزامنة بذور جامعة دار السلام بنجاح (${count} كيان أكاديمي بدون تكرار).`,
+    message: `تم تثبيت الهيكل الأساسي لجامعة دار السلام والمستويات الدراسية بنجاح (${count} كيان أكاديمي بدون أي بلوكات وهمية).`,
     itemsCreated: count
   };
 }
