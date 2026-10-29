@@ -45,6 +45,7 @@ import {
 import { 
   getPublishedAssessmentsForStudent, 
   getCachedPublishedAssessments,
+  prepareAttemptInstant,
   startAttemptServer, 
   getStudentAttempts, 
   getStudentResults,
@@ -179,7 +180,6 @@ export default function StudentAssessmentList({
     if (cached.length > 0) {
       setAssessments(cached);
       syncNotificationsForAssessments(uid, cached, universityId, studyLevelId);
-      prefetchAssessmentsForOffline(cached).catch(() => {});
     }
     loadData(cached.length === 0);
     const unsub = subscribeToAssessments(
@@ -190,7 +190,9 @@ export default function StudentAssessmentList({
         );
         setAssessments(published);
         syncNotificationsForAssessments(uid, published, universityId, studyLevelId);
-        prefetchAssessmentsForOffline(published).catch(() => {});
+        setTimeout(() => {
+          prefetchAssessmentsForOffline(published).catch(() => {});
+        }, 1500);
       },
       undefined,
       'published'
@@ -212,14 +214,24 @@ export default function StudentAssessmentList({
     setStatusMsg(null);
 
     try {
-      const res = await startAttemptServer(assessment.id, assessment);
+      // 1. Open ExamTakingModal in 0ms with local/resumed attempt & any cached questions
+      const instant = prepareAttemptInstant(assessment, uid);
       setActiveInitialResult(null);
       setActiveAssessment(assessment);
-      setActiveAttempt(res.attempt);
-      setActiveQuestions(res.questions);
+      setActiveAttempt(instant.attempt);
+      setActiveQuestions(instant.cachedQuestions);
+      setStartingAttempt(null);
+
+      // 2. If questions are not yet fully cached locally, fetch them in 1 batch query while the modal is open
+      const expectedCount = assessment.questionIds?.length || 1;
+      if (instant.cachedQuestions.length < expectedCount) {
+        const res = await startAttemptServer(assessment.id, assessment);
+        if (res.questions.length > 0) {
+          setActiveQuestions(res.questions);
+        }
+      }
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err.message || 'تعذر بدء الاختبار، يرجى المحاولة مرة أخرى' });
-    } finally {
       setStartingAttempt(null);
     }
   };
@@ -228,7 +240,6 @@ export default function StudentAssessmentList({
     setStartingAttempt(assessment.id);
     setStatusMsg(null);
     try {
-      const qs = await getQuestionsForAssessmentPreview(assessment);
       const matchingAttempt = attempts.find((a) => a.id === userResult.attemptId) || {
         id: userResult.attemptId || `att-rev-${assessment.id}`,
         assessmentId: assessment.id,
@@ -243,10 +254,14 @@ export default function StudentAssessmentList({
       setActiveInitialResult(userResult);
       setActiveAssessment(assessment);
       setActiveAttempt(matchingAttempt);
-      setActiveQuestions(qs);
+      setStartingAttempt(null);
+
+      const qs = await getQuestionsForAssessmentPreview(assessment);
+      if (qs.length > 0) {
+        setActiveQuestions(qs);
+      }
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: 'تعذر فتح تفاصيل النتيجة والمراجعة' });
-    } finally {
       setStartingAttempt(null);
     }
   };

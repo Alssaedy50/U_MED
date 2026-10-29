@@ -176,12 +176,15 @@ export default function ExamTakingModal({
   const isQuestionTimerEnabled = perQuestionDuration > 0;
   const [questionTimeLeft, setQuestionTimeLeft] = useState<number>(perQuestionDuration);
 
-  // Full Exam Timer state (Synchronized with per-question timer × questions.length)
+  const expectedQuestionsCount =
+    questions.length > 0 ? questions.length : Math.max(1, assessment.questionIds?.length || 1);
+
+  // Full Exam Timer state (Synchronized with per-question timer × expectedQuestionsCount)
   const effectiveExamDurationSeconds = useMemo(() => {
     const fromMinutes = Number(assessment.durationMinutes || 0) * 60;
-    const fromPerQuestion = perQuestionDuration > 0 ? questions.length * perQuestionDuration : 0;
+    const fromPerQuestion = perQuestionDuration > 0 ? expectedQuestionsCount * perQuestionDuration : 0;
     return Math.max(fromMinutes, fromPerQuestion);
-  }, [assessment.durationMinutes, perQuestionDuration, questions.length]);
+  }, [assessment.durationMinutes, perQuestionDuration, expectedQuestionsCount]);
 
   const isExamTimerEnabled =
     (assessment.enableExamTimer !== false && Number(assessment.durationMinutes) > 0) ||
@@ -244,23 +247,23 @@ export default function ExamTakingModal({
 
   // Ensure deadline is refreshed when questions finish loading or when guest passes the identity gate
   useEffect(() => {
-    if (!isExamTimerEnabled || result || !hasStartedSolving) return;
+    if (!isExamTimerEnabled || result || !hasStartedSolving || questions.length === 0) return;
     const minDeadline = startedAtTimestampRef.current + effectiveExamDurationSeconds * 1000;
     if (examDeadlineRef.current < minDeadline) {
       examDeadlineRef.current = minDeadline;
       setTimeLeftSeconds(Math.max(1, Math.floor((examDeadlineRef.current - Date.now()) / 1000)));
     }
-  }, [effectiveExamDurationSeconds, isExamTimerEnabled, result, hasStartedSolving]);
+  }, [effectiveExamDurationSeconds, isExamTimerEnabled, result, hasStartedSolving, questions.length]);
 
   // Reset per-question timer whenever the question changes
   useEffect(() => {
-    if (!isQuestionTimerEnabled || result || showMandatoryGuestGate || !hasStartedSolving) return;
+    if (!isQuestionTimerEnabled || result || showMandatoryGuestGate || !hasStartedSolving || questions.length === 0) return;
     setQuestionTimeLeft(perQuestionDuration);
-  }, [currentQuestionIndex, isQuestionTimerEnabled, perQuestionDuration, result, showMandatoryGuestGate, hasStartedSolving]);
+  }, [currentQuestionIndex, isQuestionTimerEnabled, perQuestionDuration, result, showMandatoryGuestGate, hasStartedSolving, questions.length]);
 
   // Per-question countdown interval (strictly clamped to perQuestionDuration so it never overshoots by +1/+2s)
   useEffect(() => {
-    if (!isQuestionTimerEnabled || result || submitting || showMandatoryGuestGate || !hasStartedSolving) return;
+    if (!isQuestionTimerEnabled || result || submitting || showMandatoryGuestGate || !hasStartedSolving || questions.length === 0) return;
 
     const deadline = Date.now() + perQuestionDuration * 1000;
     setQuestionTimeLeft(perQuestionDuration);
@@ -299,7 +302,7 @@ export default function ExamTakingModal({
 
   // Full Exam Timer interval
   useEffect(() => {
-    if (!isExamTimerEnabled || result || showMandatoryGuestGate || !hasStartedSolving) return;
+    if (!isExamTimerEnabled || result || showMandatoryGuestGate || !hasStartedSolving || questions.length === 0) return;
 
     const timer = setInterval(() => {
       const nowTime = Date.now();
@@ -313,7 +316,7 @@ export default function ExamTakingModal({
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [isExamTimerEnabled, result, submitting, showMandatoryGuestGate, isGuestMode, answers, hasStartedSolving]);
+  }, [isExamTimerEnabled, result, submitting, showMandatoryGuestGate, isGuestMode, answers, hasStartedSolving, questions.length]);
 
   // Load Leaderboard when result is shown
   useEffect(() => {
@@ -1398,7 +1401,7 @@ export default function ExamTakingModal({
               <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
                 <div className="text-[11px] text-slate-400">عدد الأسئلة</div>
                 <div className="text-base sm:text-lg font-extrabold text-white font-mono">
-                  {questions.length} سؤال
+                  {expectedQuestionsCount} سؤال
                 </div>
               </div>
               <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
@@ -1442,7 +1445,7 @@ export default function ExamTakingModal({
                 }`}
               >
                 <Play className="w-5 h-5 fill-current" />
-                <span>بدء الاختبار الآن ({questions.length} سؤال)</span>
+                <span>بدء الاختبار الآن ({expectedQuestionsCount} سؤال)</span>
               </button>
               <button
                 type="button"
@@ -1519,7 +1522,15 @@ export default function ExamTakingModal({
               </div>
             )}
 
-            {currentQuestion && (
+            {!currentQuestion ? (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center space-y-3 shadow-xl">
+                <RefreshCw className="w-8 h-8 animate-spin text-teal-400 mx-auto" />
+                <div className="text-sm font-bold text-white">جارٍ تحضير أسئلة الاختبار...</div>
+                <p className="text-xs text-slate-400">
+                  لن يتم احتساب أي ثانية من وقت الاختبار حتى تظهر الأسئلة أمامك الآن.
+                </p>
+              </div>
+            ) : (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 md:p-6 shadow-xl space-y-6">
                 
                 <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-wrap gap-2">

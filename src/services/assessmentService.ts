@@ -17,7 +17,8 @@ import {
   deleteDoc, 
   query, 
   where,
-  onSnapshot
+  onSnapshot,
+  documentId
 } from 'firebase/firestore';
 import { db, auth, writeAuditLogToCloud, cleanFirestoreData } from '../lib/firebase.ts';
 import { 
@@ -907,13 +908,16 @@ if (typeof window !== 'undefined') {
 export async function getQuestionsForAssessmentPreview(
   assessment: Assessment
 ): Promise<AssessmentQuestionPublic[]> {
+  const qIds = assessment.questionIds?.length ? assessment.questionIds : ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
   const localResolved = findLocalQuestionsForAssessmentSync(assessment);
-  if (localResolved.publicQuestions.length > 0 && (typeof navigator !== 'undefined' && !navigator.onLine)) {
+  if (
+    localResolved.publicQuestions.length >= qIds.length ||
+    (localResolved.publicQuestions.length > 0 && typeof navigator !== 'undefined' && !navigator.onLine)
+  ) {
     return localResolved.publicQuestions;
   }
-  const qIds = assessment.questionIds?.length ? assessment.questionIds : ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
   try {
-    const fetched = await fetchPublicQuestionsForAssessment(qIds);
+    const fetched = await fetchPublicQuestionsForAssessment(qIds, assessment.id);
     if (fetched.length > 0) return fetched;
   } catch {}
   return localResolved.publicQuestions.length > 0 ? localResolved.publicQuestions : DEFAULT_PUBLIC_QUESTIONS;
@@ -1224,24 +1228,78 @@ function readLocalStudentAttempts(uid: string): AssessmentAttempt[] {
   return [];
 }
 
+function raceWithTimeout<T>(promise: Promise<T>, timeoutMs: number, fallbackValue: T): Promise<T> {
+  return new Promise<T>((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(fallbackValue);
+      }
+    }, timeoutMs);
+    promise
+      .then((val) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(val);
+        }
+      })
+      .catch(() => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(fallbackValue);
+        }
+      });
+  });
+}
+
+function extractBankIdsFromQuestionIds(questionIds: string[]): string[] {
+  const bankIds = new Set<string>();
+  for (const qId of questionIds) {
+    if (!qId) continue;
+    const match = qId.match(/^q-(qbank-[a-zA-Z0-9_-]+)-[a-zA-Z0-9]+$/);
+    if (match && match[1]) {
+      bankIds.add(match[1]);
+    }
+  }
+  return Array.from(bankIds);
+}
+
+let activePrefetchIds = new Set<string>();
+
 /**
  * Silently prefetches and caches public questions for published assessments
- * so students can start and complete exams even if internet disconnects.
+ * without saturating low-bandwidth mobile connections or triggering write-backs.
  */
 export async function prefetchAssessmentsForOffline(assessments: Assessment[]): Promise<void> {
   if (typeof navigator !== 'undefined' && !navigator.onLine) return;
   for (const assessment of assessments) {
-    if (!assessment?.questionIds?.length) continue;
+    if (!assessment?.id || !assessment?.questionIds?.length) continue;
+    if (activePrefetchIds.has(assessment.id)) continue;
+
+    // Skip network completely if all questions for this assessment are already cached locally
+    const localSync = findLocalQuestionsForAssessmentSync(assessment);
+    if (localSync.publicQuestions.length >= assessment.questionIds.length) {
+      continue;
+    }
+
+    activePrefetchIds.add(assessment.id);
     try {
-      const qs = await fetchPublicQuestionsForAssessment(assessment.questionIds);
+      const qs = await fetchPublicQuestionsForAssessment(assessment.questionIds, assessment.id);
       if (qs.length > 0) {
-        localStorage.setItem(
-          `${LOCAL_STORAGE_PREFIX}cached_questions_${assessment.id}`,
-          JSON.stringify(qs)
-        );
-        publishSharedAssessmentSnapshot(assessment, qs).catch(() => {});
+        try {
+          localStorage.setItem(
+            `${LOCAL_STORAGE_PREFIX}cached_questions_${assessment.id}`,
+            JSON.stringify(qs)
+          );
+        } catch {}
       }
-    } catch (e) {}
+    } catch (e) {
+    } finally {
+      activePrefetchIds.delete(assessment.id);
+    }
   }
 }
 
@@ -1253,173 +1311,334 @@ export async function getPublishedAssessmentsForStudent(
   const filtered = all.filter(
     a => a.status === 'published' && (a.studyLevelId === studyLevelId || !a.studyLevelId || a.studyLevelId === 'ALL')
   );
-  // Trigger background offline caching for these published assessments
-  prefetchAssessmentsForOffline(filtered).catch(() => {});
+  // Trigger gentle background offline caching only after a short delay so UI interactions are never blocked
+  setTimeout(() => {
+    prefetchAssessmentsForOffline(filtered).catch(() => {});
+  }, 1200);
   return filtered;
 }
 
-export async function fetchPublicQuestionsForAssessment(questionIds: string[]): Promise<AssessmentQuestionPublic[]> {
-  const defaultMap: Record<string, AssessmentQuestionPublic> = {};
-  DEFAULT_PUBLIC_QUESTIONS.forEach(q => { defaultMap[q.id] = q; });
-
-  // Also build a local bank question lookup map so newly imported questions (even if still syncing) resolve 100%
-  const localBankPubMap = new Map<string, AssessmentQuestionPublic>();
-  try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith('umed_assessment_q_') && !key.startsWith('umed_assessment_q_init_')) {
-        const raw = localStorage.getItem(key);
-        if (raw) {
-          const list = JSON.parse(raw) as QuestionItemFull[];
-          if (Array.isArray(list)) {
-            list.forEach((fullQ) => {
-              if (fullQ && fullQ.id) {
-                localBankPubMap.set(fullQ.id, sanitizePublicQuestion(fullQ));
-              }
-            });
-          }
-        }
-      }
-    }
-  } catch {}
-
-  // Fetch all questions in parallel with local offline cache fallback
-  const fetched = await Promise.all(
-    questionIds.map(async (qId) => {
-      const cacheKey = `${LOCAL_STORAGE_PREFIX}public_q_${qId}`;
-      try {
-        if (typeof navigator === 'undefined' || navigator.onLine) {
-          const snap = await getDoc(doc(db, 'assessmentQuestions', qId));
-          if (snap.exists()) {
-            const d = snap.data() as AssessmentQuestionPublic;
-            const item: AssessmentQuestionPublic = {
-              id: d.id || qId,
-              bankId: d.bankId,
-              questionType: d.questionType || 'mcq',
-              language: d.language,
-              stemArabic: d.stemArabic,
-              stemEnglish: d.stemEnglish,
-              imageUrl: d.imageUrl,
-              options: d.options || [],
-              points: Number(d.points) || 5
-            };
-            try {
-              localStorage.setItem(cacheKey, JSON.stringify(item));
-            } catch (e) {}
-            return item;
-          }
-        }
-      } catch (e) {}
-
-      // Fallback 1: cached public question in localStorage
-      try {
-        const cachedRaw = localStorage.getItem(cacheKey);
-        if (cachedRaw) {
-          return JSON.parse(cachedRaw) as AssessmentQuestionPublic;
-        }
-      } catch (e) {}
-
-      // Fallback 2: local bank question mirror
-      const fromLocalBank = localBankPubMap.get(qId);
-      if (fromLocalBank) {
-        try {
-          localStorage.setItem(cacheKey, JSON.stringify(fromLocalBank));
-        } catch {}
-        return fromLocalBank;
-      }
-
-      return defaultMap[qId] || null;
-    })
-  );
-
-  const results = fetched.filter(Boolean) as AssessmentQuestionPublic[];
-  if (results.length === 0) {
+export async function fetchPublicQuestionsForAssessment(
+  questionIds: string[],
+  assessmentId?: string
+): Promise<AssessmentQuestionPublic[]> {
+  if (!Array.isArray(questionIds) || questionIds.length === 0) {
     return DEFAULT_PUBLIC_QUESTIONS;
   }
 
-  return results;
-}
+  const resolvedMap = new Map<string, AssessmentQuestionPublic>();
+  const defaultMap: Record<string, AssessmentQuestionPublic> = {};
+  DEFAULT_PUBLIC_QUESTIONS.forEach(q => { defaultMap[q.id] = q; });
 
-export async function startAttemptServer(
-  assessmentId: string,
-  assessmentObj?: Assessment
-): Promise<{
-  attempt: AssessmentAttempt;
-  questions: AssessmentQuestionPublic[];
-}> {
-  const token = await getIdTokenSafe();
-  const uid = auth.currentUser?.uid || 'student-user';
-  const questionIds = assessmentObj?.questionIds?.length
-    ? assessmentObj.questionIds
-    : ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
+  // 1. Check fast local caches synchronously first (0ms)
+  if (assessmentId) {
+    try {
+      const rawCachedSet = localStorage.getItem(`${LOCAL_STORAGE_PREFIX}cached_questions_${assessmentId}`);
+      if (rawCachedSet) {
+        const list = JSON.parse(rawCachedSet) as AssessmentQuestionPublic[];
+        if (Array.isArray(list)) {
+          list.forEach((q) => {
+            if (q && q.id) resolvedMap.set(q.id, q);
+          });
+        }
+      }
+    } catch {}
 
-  const perQuestionSeconds = Number(assessmentObj?.questionDurationSeconds || 0);
-  const minDurationFromPerQuestion =
-    perQuestionSeconds > 0 ? Math.max(1, Math.ceil((questionIds.length * perQuestionSeconds) / 60)) : 0;
-  const isUntimed = assessmentObj?.enableExamTimer === false && perQuestionSeconds <= 0;
-  const rawDuration = Number(assessmentObj?.durationMinutes || 0);
-  const durationMinutes = isUntimed
-    ? 1440 // 24 hours window for untimed open exams
-    : Math.max(rawDuration > 0 ? rawDuration : 45, minDurationFromPerQuestion);
+    try {
+      const rawBundle = localStorage.getItem(`${SHARED_BUNDLE_CACHE_PREFIX}${assessmentId}`);
+      if (rawBundle) {
+        const parsed = JSON.parse(rawBundle) as SharedAssessmentBundle;
+        if (Array.isArray(parsed?.questions)) {
+          parsed.questions.forEach((q) => {
+            if (q && q.id) resolvedMap.set(q.id, q);
+          });
+        }
+      }
+    } catch {}
+  }
 
-  const maxAttempts = assessmentObj?.maxAttempts || 1;
-
-  // Fetch public questions from Firestore or offline local cache
-  let firestoreQuestions = await fetchPublicQuestionsForAssessment(questionIds);
-  if (firestoreQuestions.length < questionIds.length && assessmentObj) {
-    const localSync = findLocalQuestionsForAssessmentSync(assessmentObj);
-    if (localSync.publicQuestions.length > firestoreQuestions.length) {
-      firestoreQuestions = localSync.publicQuestions;
+  for (const qId of questionIds) {
+    if (resolvedMap.has(qId)) continue;
+    try {
+      const cachedRaw = localStorage.getItem(`${LOCAL_STORAGE_PREFIX}public_q_${qId}`);
+      if (cachedRaw) {
+        const parsed = JSON.parse(cachedRaw) as AssessmentQuestionPublic;
+        if (parsed && parsed.id) {
+          resolvedMap.set(qId, parsed);
+          continue;
+        }
+      }
+    } catch {}
+    if (defaultMap[qId]) {
+      resolvedMap.set(qId, defaultMap[qId]);
     }
   }
-  if (firestoreQuestions.length === 0) {
+
+  // Check local bank questions in localStorage if any questions are still missing
+  if (resolvedMap.size < questionIds.length) {
     try {
-      const cachedSet = localStorage.getItem(`${LOCAL_STORAGE_PREFIX}cached_questions_${assessmentId}`);
-      if (cachedSet) {
-        firestoreQuestions = JSON.parse(cachedSet) as AssessmentQuestionPublic[];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('umed_assessment_q_') && !key.startsWith('umed_assessment_q_init_')) {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            const list = JSON.parse(raw) as QuestionItemFull[];
+            if (Array.isArray(list)) {
+              list.forEach((fullQ) => {
+                if (fullQ && fullQ.id && !resolvedMap.has(fullQ.id)) {
+                  const pubQ = sanitizePublicQuestion(fullQ);
+                  resolvedMap.set(fullQ.id, pubQ);
+                }
+              });
+            }
+          }
+        }
       }
-    } catch (e) {}
+    } catch {}
   }
 
-  // Check existing attempts for this student (merged remote + local offline attempts)
-  const existingUserAttempts = (await getStudentAttempts(uid)).filter(
-    (a) => a.assessmentId === assessmentId
-  );
+  // If all questions are already in local cache (or if browser is offline), return immediately in 0ms!
+  const missingIds = questionIds.filter((qId) => !resolvedMap.has(qId));
+  if (missingIds.length === 0 || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+    const immediateResults = questionIds
+      .map((qId) => resolvedMap.get(qId))
+      .filter(Boolean) as AssessmentQuestionPublic[];
+    if (immediateResults.length > 0) {
+      if (assessmentId) {
+        try {
+          localStorage.setItem(
+            `${LOCAL_STORAGE_PREFIX}cached_questions_${assessmentId}`,
+            JSON.stringify(immediateResults)
+          );
+        } catch {}
+      }
+      return immediateResults;
+    }
+  }
+
+  // 2. Fast Cloud Resolution: Fetch entire exam bundle or bank in 1 single Firestore query instead of 45-111 individual getDoc calls!
+  if (typeof navigator === 'undefined' || navigator.onLine) {
+    const fastTasks: Promise<void>[] = [];
+
+    if (assessmentId) {
+      fastTasks.push(
+        raceWithTimeout(
+          (async () => {
+            const [pubSnap, sysSnap] = await Promise.all([
+              getDoc(doc(db, 'uniqueIdentifiers', `shared_exam_${assessmentId}`)).catch(() => null),
+              getDoc(doc(db, 'system', `shared_exam_${assessmentId}`)).catch(() => null)
+            ]);
+            const snapData = (pubSnap && pubSnap.exists() ? pubSnap.data() : null) ||
+              (sysSnap && sysSnap.exists() ? sysSnap.data() : null);
+            if (snapData && Array.isArray(snapData.questions)) {
+              snapData.questions.forEach((d: AssessmentQuestionPublic) => {
+                if (d && d.id) {
+                  const item: AssessmentQuestionPublic = {
+                    id: d.id,
+                    bankId: d.bankId,
+                    questionType: d.questionType || 'mcq',
+                    language: d.language,
+                    stemArabic: d.stemArabic,
+                    stemEnglish: d.stemEnglish,
+                    imageUrl: d.imageUrl,
+                    options: (d.options || []).map((o) => ({
+                      ...o,
+                      textArabic: sanitizeOptionTextForDisplay(o.textArabic)
+                    })),
+                    points: Number(d.points) || 5
+                  };
+                  resolvedMap.set(item.id, item);
+                  try {
+                    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}public_q_${item.id}`, JSON.stringify(item));
+                  } catch {}
+                }
+              });
+            }
+          })(),
+          4500,
+          undefined
+        )
+      );
+    }
+
+    const bankIds = extractBankIdsFromQuestionIds(missingIds);
+    for (const bankId of bankIds) {
+      fastTasks.push(
+        raceWithTimeout(
+          (async () => {
+            const qSnap = await getDocs(
+              query(collection(db, 'assessmentQuestions'), where('bankId', '==', bankId))
+            );
+            qSnap.forEach((docSnap) => {
+              const d = docSnap.data() as AssessmentQuestionPublic;
+              const qId = d.id || docSnap.id;
+              const item: AssessmentQuestionPublic = {
+                id: qId,
+                bankId: d.bankId || bankId,
+                questionType: d.questionType || 'mcq',
+                language: d.language,
+                stemArabic: d.stemArabic,
+                stemEnglish: d.stemEnglish,
+                imageUrl: d.imageUrl,
+                options: (d.options || []).map((o) => ({
+                  ...o,
+                  textArabic: sanitizeOptionTextForDisplay(o.textArabic)
+                })),
+                points: Number(d.points) || 5
+              };
+              resolvedMap.set(qId, item);
+              try {
+                localStorage.setItem(`${LOCAL_STORAGE_PREFIX}public_q_${qId}`, JSON.stringify(item));
+              } catch {}
+            });
+          })(),
+          5000,
+          undefined
+        )
+      );
+    }
+
+    if (fastTasks.length > 0) {
+      await Promise.allSettled(fastTasks);
+    }
+
+    // 3. If any specific questionIds are still missing, batch-fetch them in chunks of 30 using `where(documentId(), 'in', chunk)`
+    const stillMissing = questionIds.filter((qId) => !resolvedMap.has(qId));
+    if (stillMissing.length > 0) {
+      const CHUNK_SIZE = 30;
+      const chunkPromises: Promise<void>[] = [];
+      for (let i = 0; i < stillMissing.length; i += CHUNK_SIZE) {
+        const chunk = stillMissing.slice(i, i + CHUNK_SIZE);
+        chunkPromises.push(
+          raceWithTimeout(
+            (async () => {
+              const snap = await getDocs(
+                query(collection(db, 'assessmentQuestions'), where(documentId(), 'in', chunk))
+              );
+              snap.forEach((docSnap) => {
+                const d = docSnap.data() as AssessmentQuestionPublic;
+                const qId = d.id || docSnap.id;
+                const item: AssessmentQuestionPublic = {
+                  id: qId,
+                  bankId: d.bankId,
+                  questionType: d.questionType || 'mcq',
+                  language: d.language,
+                  stemArabic: d.stemArabic,
+                  stemEnglish: d.stemEnglish,
+                  imageUrl: d.imageUrl,
+                  options: (d.options || []).map((o) => ({
+                    ...o,
+                    textArabic: sanitizeOptionTextForDisplay(o.textArabic)
+                  })),
+                  points: Number(d.points) || 5
+                };
+                resolvedMap.set(qId, item);
+                try {
+                  localStorage.setItem(`${LOCAL_STORAGE_PREFIX}public_q_${qId}`, JSON.stringify(item));
+                } catch {}
+              });
+            })(),
+            5000,
+            undefined
+          )
+        );
+      }
+      await Promise.allSettled(chunkPromises);
+    }
+  }
+
+  const orderedResults = questionIds
+    .map((qId) => resolvedMap.get(qId))
+    .filter(Boolean) as AssessmentQuestionPublic[];
+
+  if (orderedResults.length > 0) {
+    if (assessmentId) {
+      try {
+        localStorage.setItem(
+          `${LOCAL_STORAGE_PREFIX}cached_questions_${assessmentId}`,
+          JSON.stringify(orderedResults)
+        );
+      } catch {}
+    }
+    return orderedResults;
+  }
+
+  return questionIds.some((id) => id.startsWith('q-cvs-')) ? DEFAULT_PUBLIC_QUESTIONS : [];
+}
+
+/**
+ * Synchronously (0ms) creates or resumes an assessment attempt and returns any locally cached questions.
+ * Used so the ExamTakingModal opens in 0ms on click without waiting for slow 3G/4G round-trips.
+ */
+export function prepareAttemptInstant(
+  assessment: Assessment,
+  uidInput?: string
+): {
+  attempt: AssessmentAttempt;
+  cachedQuestions: AssessmentQuestionPublic[];
+} {
+  const uid = uidInput || auth.currentUser?.uid || 'student-user';
+  const assessmentId = assessment.id;
+  const questionIds = assessment.questionIds?.length
+    ? assessment.questionIds
+    : ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
+
+  const perQuestionSeconds = Number(assessment.questionDurationSeconds || 0);
+  const minDurationFromPerQuestion =
+    perQuestionSeconds > 0 ? Math.max(1, Math.ceil((questionIds.length * perQuestionSeconds) / 60)) : 0;
+  const isUntimed = assessment.enableExamTimer === false && perQuestionSeconds <= 0;
+  const rawDuration = Number(assessment.durationMinutes || 0);
+  const durationMinutes = isUntimed
+    ? 1440
+    : Math.max(rawDuration > 0 ? rawDuration : 45, minDurationFromPerQuestion);
+
+  const maxAttempts = assessment.maxAttempts || 1;
+  const localAttempts = readLocalStudentAttempts(uid).filter((a) => a.assessmentId === assessmentId);
   const now = new Date();
-  const activeLocalOrRemoteAttempt = existingUserAttempts.find(
+
+  const activeAttempt = localAttempts.find(
     (a) => a.status === 'in_progress' && new Date(a.expiresAt).getTime() > now.getTime()
   );
 
-  if (activeLocalOrRemoteAttempt) {
-    // Ensure expiresAt is never shorter than the required duration for all questions
+  let attempt: AssessmentAttempt;
+  if (activeAttempt) {
     const minRequiredExpiry = new Date(
-      new Date(activeLocalOrRemoteAttempt.startedAt).getTime() + durationMinutes * 60 * 1000
+      new Date(activeAttempt.startedAt).getTime() + durationMinutes * 60 * 1000
     ).getTime();
-    if (new Date(activeLocalOrRemoteAttempt.expiresAt).getTime() < minRequiredExpiry) {
-      activeLocalOrRemoteAttempt.expiresAt = new Date(minRequiredExpiry).toISOString();
-      saveLocalStudentAttempt(uid, activeLocalOrRemoteAttempt);
+    if (new Date(activeAttempt.expiresAt).getTime() < minRequiredExpiry) {
+      activeAttempt.expiresAt = new Date(minRequiredExpiry).toISOString();
+      saveLocalStudentAttempt(uid, activeAttempt);
     }
-    return {
-      attempt: activeLocalOrRemoteAttempt,
-      questions: firestoreQuestions
+    attempt = activeAttempt;
+  } else {
+    const completedCount = localAttempts.filter(
+      (a) => a.status === 'scored' || a.status === 'submitted'
+    ).length;
+    if (completedCount >= maxAttempts) {
+      throw new Error(`لقد استنفدت الحد الأقصى للمحاولات المسموحة لهذا التقييم (${maxAttempts}).`);
+    }
+    const expiresAt = new Date(now.getTime() + durationMinutes * 60 * 1000).toISOString();
+    attempt = {
+      id: `att-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      assessmentId,
+      uid,
+      startedAt: now.toISOString(),
+      expiresAt,
+      status: 'in_progress',
+      answers: {},
+      lastSavedAt: now.toISOString(),
+      attemptNumber: completedCount + 1
     };
+    saveLocalStudentAttempt(uid, attempt);
   }
 
-  const completedAttemptsCount = existingUserAttempts.filter(
-    (a) => a.status === 'scored' || a.status === 'submitted'
-  ).length;
+  const localSync = findLocalQuestionsForAssessmentSync(assessment);
 
-  if (completedAttemptsCount >= maxAttempts) {
-    throw new Error(`لقد استنفدت الحد الأقصى للمحاولات المسموحة لهذا التقييم (${maxAttempts}).`);
-  }
-
-  const nextAttemptNumber = completedAttemptsCount + 1;
-  let attempt: AssessmentAttempt | null = null;
-  let serverQuestions: AssessmentQuestionPublic[] = [];
-
+  // Sync attempt to Firestore & backend asynchronously in the background (never blocks UI)
   if (typeof navigator === 'undefined' || navigator.onLine) {
-    try {
-      const res = await fetch('/api/assessments/start-attempt', {
+    setDoc(doc(db, 'assessmentAttempts', attempt.id), attempt, { merge: true }).catch(() => {});
+    getIdTokenSafe().then((token) => {
+      fetch('/api/assessments/start-attempt', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1432,55 +1651,54 @@ export async function startAttemptServer(
           questionIds,
           uid
         })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && data.attempt) {
-          attempt = {
-            ...data.attempt,
-            attemptNumber: Math.max(Number(data.attempt.attemptNumber) || 1, nextAttemptNumber)
-          };
-          serverQuestions = data.questions || [];
-        }
-      }
-    } catch (e) {}
+      }).catch(() => {});
+    });
   }
 
-  if (!attempt) {
-    const expiresAt = new Date(now.getTime() + durationMinutes * 60 * 1000).toISOString();
-    attempt = {
-      id: `att-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      assessmentId,
-      uid,
-      startedAt: now.toISOString(),
-      expiresAt,
-      status: 'in_progress',
-      answers: {},
-      lastSavedAt: now.toISOString(),
-      attemptNumber: nextAttemptNumber
+  return {
+    attempt,
+    cachedQuestions: localSync.publicQuestions
+  };
+}
+
+export async function startAttemptServer(
+  assessmentId: string,
+  assessmentObj?: Assessment
+): Promise<{
+  attempt: AssessmentAttempt;
+  questions: AssessmentQuestionPublic[];
+}> {
+  const uid = auth.currentUser?.uid || 'student-user';
+  const fallbackAssessment: Assessment = assessmentObj ||
+    findLocalAssessmentById(assessmentId) || {
+      ...DEFAULT_ASSESSMENTS[0],
+      id: assessmentId
+    };
+
+  const { attempt, cachedQuestions } = prepareAttemptInstant(fallbackAssessment, uid);
+  const questionIds = fallbackAssessment.questionIds?.length
+    ? fallbackAssessment.questionIds
+    : ['q-cvs-1', 'q-cvs-2', 'q-cvs-3'];
+
+  if (cachedQuestions.length >= questionIds.length) {
+    return {
+      attempt,
+      questions: cachedQuestions
     };
   }
 
-  // Always persist attempt locally first so offline progress survives refreshes
-  saveLocalStudentAttempt(uid, attempt);
-
-  // Persist attempt to Firestore when online
-  if (typeof navigator === 'undefined' || navigator.onLine) {
-    try {
-      await setDoc(doc(db, 'assessmentAttempts', attempt.id), attempt);
-    } catch (e) {}
-  }
-
-  // CRITICAL: Prefer whichever source has the full set of questions (never let a partial server cache truncate firestoreQuestions)
+  const fetchedQuestions = await fetchPublicQuestionsForAssessment(questionIds, assessmentId);
   const questionsToUse =
-    firestoreQuestions.length >= serverQuestions.length ? firestoreQuestions : serverQuestions;
+    fetchedQuestions.length >= cachedQuestions.length ? fetchedQuestions : cachedQuestions;
 
-  try {
-    localStorage.setItem(
-      `${LOCAL_STORAGE_PREFIX}cached_questions_${assessmentId}`,
-      JSON.stringify(questionsToUse)
-    );
-  } catch (e) {}
+  if (questionsToUse.length > 0) {
+    try {
+      localStorage.setItem(
+        `${LOCAL_STORAGE_PREFIX}cached_questions_${assessmentId}`,
+        JSON.stringify(questionsToUse)
+      );
+    } catch {}
+  }
 
   return {
     attempt,
@@ -1684,29 +1902,42 @@ export async function submitAttemptServer(
       } catch {}
 
       if (typeof navigator === 'undefined' || navigator.onLine) {
-        const keyDocs = await Promise.all(
-          questionIds.map((qId) => getDoc(doc(db, 'questionAnswerKeys', qId)).catch(() => null))
-        );
-        const validKeys = keyDocs.filter((d) => d && d.exists());
-        validKeys.forEach((snap) => {
-          if (!snap) return;
-          const k = snap.data() as QuestionAnswerKey;
-          if (k && k.questionId && k.correctOptionId) {
-            resolvedKeyMap[k.questionId] = {
-              correctOptionId: k.correctOptionId,
-              points: Number(k.points) || 5,
-              explanationArabic: k.explanationArabic || resolvedKeyMap[k.questionId]?.explanationArabic,
-              modelAnswerArabic: k.modelAnswerArabic || resolvedKeyMap[k.questionId]?.modelAnswerArabic,
-              optionExplanations: k.optionExplanations || resolvedKeyMap[k.questionId]?.optionExplanations
-            };
-          }
-        });
+        const CHUNK_SIZE = 30;
+        const chunkPromises: Promise<void>[] = [];
+        for (let i = 0; i < questionIds.length; i += CHUNK_SIZE) {
+          const chunk = questionIds.slice(i, i + CHUNK_SIZE);
+          chunkPromises.push(
+            raceWithTimeout(
+              (async () => {
+                const snap = await getDocs(
+                  query(collection(db, 'questionAnswerKeys'), where(documentId(), 'in', chunk))
+                );
+                snap.forEach((docSnap) => {
+                  const k = docSnap.data() as QuestionAnswerKey;
+                  const qId = k.questionId || docSnap.id;
+                  if (k && qId && k.correctOptionId) {
+                    resolvedKeyMap[qId] = {
+                      correctOptionId: k.correctOptionId,
+                      points: Number(k.points) || 5,
+                      explanationArabic: k.explanationArabic || resolvedKeyMap[qId]?.explanationArabic,
+                      modelAnswerArabic: k.modelAnswerArabic || resolvedKeyMap[qId]?.modelAnswerArabic,
+                      optionExplanations: k.optionExplanations || resolvedKeyMap[qId]?.optionExplanations
+                    };
+                  }
+                });
+              })(),
+              4500,
+              undefined
+            )
+          );
+        }
+        await Promise.allSettled(chunkPromises);
       }
 
       if (Object.keys(resolvedKeyMap).length > 0) {
         let earned = 0;
         let maxPts = 0;
-        const publicQs = await fetchPublicQuestionsForAssessment(questionIds).catch(() => []);
+        const publicQs = await fetchPublicQuestionsForAssessment(questionIds, assessmentId).catch(() => []);
         const pubQMap = new Map<string, AssessmentQuestionPublic>();
         publicQs.forEach((pq) => pubQMap.set(pq.id, pq));
 
@@ -2863,7 +3094,12 @@ function findLocalQuestionsForAssessmentSync(
   }
 
   return {
-    publicQuestions: resolved.length > 0 ? resolved : DEFAULT_PUBLIC_QUESTIONS,
+    publicQuestions:
+      resolved.length > 0
+        ? resolved
+        : qIds.some((id) => id.startsWith('q-cvs-'))
+        ? DEFAULT_PUBLIC_QUESTIONS
+        : [],
     answerKeyMap: keyMap
   };
 }
@@ -3417,7 +3653,7 @@ export async function fetchSharedAssessmentForGuest(
       questions = localSync.publicQuestions;
     }
     if (questions.length < questionIds.length) {
-      const fetchedAll = await fetchPublicQuestionsForAssessment(questionIds);
+      const fetchedAll = await fetchPublicQuestionsForAssessment(questionIds, assessmentId);
       if (fetchedAll.length > questions.length) {
         questions = fetchedAll;
       }
@@ -3574,22 +3810,35 @@ export async function downloadExamBookletFile(params: {
     }
   } catch {}
 
-  // Also try reading Firestore questionAnswerKeys if online and reviews aren't already attached
   const firestoreKeysMap = new Map<string, QuestionAnswerKey>();
   if (
     (!result?.questionReviews || result.questionReviews.length === 0) &&
-    (typeof navigator === 'undefined' || navigator.onLine)
+    (typeof navigator === 'undefined' || navigator.onLine) &&
+    qIds.length > 0
   ) {
     try {
-      const snaps = await Promise.all(
-        qIds.map((id) => getDoc(doc(db, 'questionAnswerKeys', id)).catch(() => null))
-      );
-      snaps.forEach((s) => {
-        if (s && s.exists()) {
-          const d = s.data() as QuestionAnswerKey;
-          if (d && d.questionId) firestoreKeysMap.set(d.questionId, d);
-        }
-      });
+      const CHUNK_SIZE = 30;
+      const chunkPromises: Promise<void>[] = [];
+      for (let i = 0; i < qIds.length; i += CHUNK_SIZE) {
+        const chunk = qIds.slice(i, i + CHUNK_SIZE);
+        chunkPromises.push(
+          raceWithTimeout(
+            (async () => {
+              const snap = await getDocs(
+                query(collection(db, 'questionAnswerKeys'), where(documentId(), 'in', chunk))
+              );
+              snap.forEach((docSnap) => {
+                const d = docSnap.data() as QuestionAnswerKey;
+                const qId = d.questionId || docSnap.id;
+                if (d && qId) firestoreKeysMap.set(qId, { ...d, questionId: qId });
+              });
+            })(),
+            4500,
+            undefined
+          )
+        );
+      }
+      await Promise.allSettled(chunkPromises);
     } catch {}
   }
 
