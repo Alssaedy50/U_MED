@@ -35,6 +35,11 @@ import {
 } from '../../utils/teledriveBotGenerator.ts';
 import { EducationalResource } from '../../types/umed.ts';
 import { saveEducationalResource } from '../../services/resourceService.ts';
+import {
+  connectGoogleDriveOAuth,
+  getStoredGoogleDriveAccessToken,
+  syncGoogleDriveTokenToBackend
+} from '../../lib/firebase.ts';
 
 interface TeleDriveBotStudioModalProps {
   isOpen: boolean;
@@ -133,11 +138,15 @@ export default function TeleDriveBotStudioModal({
 
     const savedGroup = (initialSaved.config?.targetGroupId || '').trim();
     const resolvedGroup =
-      !savedGroup || savedGroup === '-1001987654321' ? '-1003664858401' : savedGroup;
+      !savedGroup || savedGroup === '-1001987654321' || savedGroup === '-1003664858401'
+        ? '-1003536249033'
+        : savedGroup;
 
     const savedAdmin = (initialSaved.config?.adminTelegramId || '').trim();
     const resolvedAdmin =
-      !savedAdmin || savedAdmin === '7162503651' ? '1905553456' : savedAdmin;
+      !savedAdmin || savedAdmin === '7162503651' || savedAdmin === '1905553456'
+        ? '782517822'
+        : savedAdmin;
 
     const savedTok = (initialSaved.config?.botToken || '').trim();
 
@@ -186,10 +195,10 @@ export default function TeleDriveBotStudioModal({
     () => initialSaved.simCaption ?? 'محاضرة الأنيميا وأمراض الدم السريرية #سنة_ثانية #دم #نظري'
   );
   const [simDriveFileId, setSimDriveFileId] = useState<string>(
-    () => initialSaved.simDriveFileId ?? '1x9K_umed_drive_sample_8821'
+    () => initialSaved.simDriveFileId ?? ''
   );
   const [simFileSizeMb, setSimFileSizeMb] = useState<string>(
-    () => initialSaved.simFileSizeMb ?? '18.4'
+    () => initialSaved.simFileSizeMb ?? '12.4'
   );
   const [simRunning, setSimRunning] = useState<boolean>(false);
   const [simNotice, setSimNotice] = useState<string | null>(null);
@@ -206,8 +215,13 @@ export default function TeleDriveBotStudioModal({
     ok: boolean;
     folderName?: string;
     folderId?: string;
+    authMode?: 'user_oauth' | 'service_account';
+    userEmail?: string;
     error?: string;
   } | null>(null);
+  const [driveOAuthConnected, setDriveOAuthConnected] = useState<boolean>(false);
+  const [driveOAuthEmail, setDriveOAuthEmail] = useState<string>('');
+  const [driveOAuthBusy, setDriveOAuthBusy] = useState<boolean>(false);
   const [liveLogs, setLiveLogs] = useState<
     Array<{
       id: string;
@@ -224,6 +238,38 @@ export default function TeleDriveBotStudioModal({
   const [channelPullBusy, setChannelPullBusy] = useState<boolean>(false);
   const [uploadCaptionInput, setUploadCaptionInput] = useState<string>('');
   const [uploadProgressPct, setUploadProgressPct] = useState<number | null>(null);
+
+  const handleConnectGoogleDriveOAuth = async () => {
+    setDriveOAuthBusy(true);
+    setLiveTestBanner(null);
+    try {
+      const result = await connectGoogleDriveOAuth();
+      setDriveOAuthConnected(true);
+      if (result.email) setDriveOAuthEmail(result.email);
+
+      const res = await fetch('/api/teledrive/drive-oauth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accessToken: result.accessToken,
+          email: result.email || undefined,
+          expiresIn: 3500
+        })
+      });
+      const data = await res.json();
+      if (Array.isArray(data.logs)) setLiveLogs(data.logs);
+      if (data.driveStatus) setLiveDriveStatus(data.driveStatus);
+      onDraftSimulated?.();
+
+      setLiveTestBanner(
+        `✅ تم ربط حساب Google Drive (${result.email || 'حساب المالك'}) بنجاح! سيتم الآن حفظ أي ملف أياً كان حجمه فور تحويله لقناة البوت كملف ثنائي حقيقي داخل مجلد (${data.driveStatus?.folderName || 'UMED STORAGE'})، وتم تنظيف (${data.purgedDummyFoldersCount || 0}) مجلدات وهمية قديمة ومزامنة (${data.syncedDriveCount || 0}) ملفات حقيقية.`
+      );
+    } catch (err: any) {
+      setLiveTestBanner(`⚠️ تعذر ربط Google Drive OAuth: ${err?.message || ''}`);
+    } finally {
+      setDriveOAuthBusy(false);
+    }
+  };
 
   const handleDirectAnySizeFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -283,14 +329,14 @@ export default function TeleDriveBotStudioModal({
       const finalData = await finalRes.json();
       if (Array.isArray(finalData.logs)) setLiveLogs(finalData.logs);
       if (finalData.resource) {
-        await saveEducationalResource(finalData.resource);
+        await saveEducationalResource({ ...finalData.resource, status: 'published' });
         onDraftSimulated?.();
       }
 
       setUploadProgressPct(100);
       if (finalData.success) {
         setLiveTestBanner(
-          `✅ تم رفع الملف (${file.name} • ${finalData.resource?.fileSizeLabel || ''}) إلى Google Drive وبثه في القناة ومنصة U_MED بنجاح!`
+          `✅ تم رفع الملف (${file.name} • ${finalData.resource?.fileSizeLabel || ''}) إلى Google Drive وبثه في القناة ونشره في منصة U_MED بنجاح!`
         );
         setUploadCaptionInput('');
       } else {
@@ -317,7 +363,7 @@ export default function TeleDriveBotStudioModal({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           channelInput: target,
-          maxPosts: 5,
+          maxPosts: 8,
           targetGroupId: config.targetGroupId,
           gdriveFolderId: config.defaultFolderId,
           defaultUniversityId: config.defaultUniversityId,
@@ -329,13 +375,13 @@ export default function TeleDriveBotStudioModal({
       if (Array.isArray(data.logs)) setLiveLogs(data.logs);
       if (Array.isArray(data.resources) && data.resources.length > 0) {
         for (const r of data.resources) {
-          await saveEducationalResource({ ...r, status: 'draft' });
+          await saveEducationalResource({ ...r, status: 'published' });
         }
         onDraftSimulated?.();
       }
       if (data.success) {
         setLiveTestBanner(
-          `✅ تم سحب (${data.ingestedCount || data.resources?.length || 1}) منشور/ملف من قناة (${data.channelUsername || target}) ورفعها إلى Google Drive (UMED STORAGE) وحفظها في قسم المسودات بانتظار موافقتك قبل النشر للطلاب!`
+          `✅ تم سحب (${data.ingestedCount || data.resources?.length || 0}) ملفات حقيقية من قناة (${data.channelUsername || target}) وتخزينها في Google Drive (UMED STORAGE) ونشرها فوراً في منصة U_MED!`
         );
       } else {
         setLiveTestBanner(`⚠️ تعذر السحب من القناة: ${data.error || 'تأكد أن القناة عامة أو أن البوت مشرف فيها'}`);
@@ -351,9 +397,13 @@ export default function TeleDriveBotStudioModal({
     setLiveActionBusy(true);
     setLiveTestBanner(null);
     try {
+      const storedToken = getStoredGoogleDriveAccessToken();
       const res = await fetch('/api/teledrive/sync-drive', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userGoogleAccessToken: storedToken.accessToken || undefined
+        })
       });
       const data = await res.json();
       if (Array.isArray(data.logs)) setLiveLogs(data.logs);
@@ -361,7 +411,7 @@ export default function TeleDriveBotStudioModal({
       if (data.success) {
         onDraftSimulated?.();
         setLiveTestBanner(
-          `✅ تمت مزامنة وإظهار (${data.syncedDriveCount || 0}) ملفات ومجلدات داخل Google Drive (${data.driveStatus?.folderName || 'UMED STORAGE'}) وإصلاح (${data.repairedFirestoreCount || 0}) ملفات كبيرة الحجم لتعمل مباشرة داخل المنصة!`
+          `✅ تمت مزامنة وإظهار (${data.syncedDriveCount || 0}) ملفات حقيقية داخل Google Drive (${data.driveStatus?.folderName || 'UMED STORAGE'}) وحذف (${data.purgedDummyFoldersCount || 0}) مجلدات وهمية قديمة!`
         );
       } else {
         setLiveTestBanner(`⚠️ تعذر مزامنة Google Drive: ${data.error || ''}`);
@@ -379,7 +429,16 @@ export default function TeleDriveBotStudioModal({
 
     const syncAndFetchLiveStatus = async (initialSync = false) => {
       try {
+        const storedDrive = getStoredGoogleDriveAccessToken();
+        if (storedDrive.accessToken) {
+          setDriveOAuthConnected(true);
+          if (storedDrive.email) setDriveOAuthEmail(storedDrive.email);
+        }
+
         if (initialSync) {
+          if (storedDrive.accessToken) {
+            await syncGoogleDriveTokenToBackend(storedDrive.accessToken, 3500, storedDrive.email);
+          }
           const startRes = await fetch('/api/teledrive/live-start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -389,7 +448,9 @@ export default function TeleDriveBotStudioModal({
               adminTelegramId: config.adminTelegramId,
               gdriveFolderId: config.defaultFolderId,
               defaultUniversityId: config.defaultUniversityId,
-              autoPublish: false
+              userGoogleAccessToken: storedDrive.accessToken || undefined,
+              userGoogleEmail: storedDrive.email || undefined,
+              autoPublish: true
             })
           });
           if (startRes.ok && !cancelled) {
@@ -398,7 +459,13 @@ export default function TeleDriveBotStudioModal({
               setLiveBotRunning(Boolean(startData.isRunning));
               setLiveWebhookActive(Boolean(startData.isWebhookActive));
               if (startData.botIdentity) setLiveBotIdentity(startData.botIdentity);
-              if (startData.driveStatus) setLiveDriveStatus(startData.driveStatus);
+              if (startData.driveStatus) {
+                setLiveDriveStatus(startData.driveStatus);
+                if (startData.driveStatus.authMode === 'user_oauth') {
+                  setDriveOAuthConnected(true);
+                  if (startData.driveStatus.userEmail) setDriveOAuthEmail(startData.driveStatus.userEmail);
+                }
+              }
               if (Array.isArray(startData.logs)) setLiveLogs(startData.logs);
               return;
             }
@@ -413,6 +480,10 @@ export default function TeleDriveBotStudioModal({
         setLiveWebhookActive(Boolean(data.isWebhookActive));
         if (data.botIdentity) setLiveBotIdentity(data.botIdentity);
         if (data.driveStatus) setLiveDriveStatus(data.driveStatus);
+        if (data.config?.hasUserGoogleOAuth) {
+          setDriveOAuthConnected(true);
+          if (data.config?.userGoogleEmail) setDriveOAuthEmail(data.config.userGoogleEmail);
+        }
         if (Array.isArray(data.logs)) setLiveLogs(data.logs);
       } catch {}
     };
@@ -429,6 +500,7 @@ export default function TeleDriveBotStudioModal({
     setLiveActionBusy(true);
     setLiveTestBanner(null);
     try {
+      const storedDrive = getStoredGoogleDriveAccessToken();
       const res = await fetch('/api/teledrive/live-start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -439,7 +511,9 @@ export default function TeleDriveBotStudioModal({
           gdriveFolderId: config.defaultFolderId,
           defaultUniversityId: config.defaultUniversityId,
           serviceAccountJson: rawServiceJson,
-          autoPublish: false
+          userGoogleAccessToken: storedDrive.accessToken || undefined,
+          userGoogleEmail: storedDrive.email || undefined,
+          autoPublish: true
         })
       });
       const data = await res.json();
@@ -450,7 +524,7 @@ export default function TeleDriveBotStudioModal({
       if (Array.isArray(data.logs)) setLiveLogs(data.logs);
       setLiveTestBanner(
         data.success
-          ? `✅ تم تشغيل البوت الحي (@${data.botIdentity?.username || 'UMED_Bot'}) بنجاح! يسحب المنشورات ويرفعها لـ Google Drive ويحفظها كمسودات بانتظار موافقتك قبل النشر.`
+          ? `✅ تم تشغيل البوت الحي (@${data.botIdentity?.username || 'UMED_Bot'}) بنجاح! يحوّل الآن أي ملف يصل للقناة مهما كان حجمه إلى Google Drive فوراً وينشره في منصة U_MED.`
           : `⚠️ تنبيه تليجرام: التوكن غير مفعل أو غير صحيح (${data.error || 'Unauthorized'}). تأكد من لصق توكن البوت الصحيح من @BotFather في الحقل الأول بالأسفل.`
       );
     } catch (err: any) {
@@ -474,7 +548,7 @@ export default function TeleDriveBotStudioModal({
           adminTelegramId: config.adminTelegramId,
           gdriveFolderId: config.defaultFolderId,
           defaultUniversityId: config.defaultUniversityId,
-          autoPublish: false
+          autoPublish: true
         })
       });
       const data = await res.json();
@@ -484,7 +558,7 @@ export default function TeleDriveBotStudioModal({
         setLiveWebhookActive(true);
         if (data.botIdentity) setLiveBotIdentity(data.botIdentity);
         setLiveTestBanner(
-          `✅ تم ربط Webhook تليجرام بنجاح على (${data.webhookUrl})! سيعمل البوت الآن على Vercel على مدار 24 ساعة لاستقبال جميع القنوات والرسائل بأي صيغة ورفعها لـ Drive وبثها في U_MED!`
+          `✅ تم ربط Webhook تليجرام بنجاح على (${data.webhookUrl})! سيعمل البوت الآن على مدار 24 ساعة لاستقبال جميع ملفات القناة بأي حجم ورفعها لـ Google Drive ونشرها في U_MED!`
         );
       } else {
         setLiveTestBanner(
@@ -502,6 +576,7 @@ export default function TeleDriveBotStudioModal({
     setLiveActionBusy(true);
     setLiveTestBanner(null);
     try {
+      const storedDrive = getStoredGoogleDriveAccessToken();
       const res = await fetch('/api/teledrive/live-test-pipeline', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -510,27 +585,24 @@ export default function TeleDriveBotStudioModal({
           targetGroupId: config.targetGroupId,
           adminTelegramId: config.adminTelegramId,
           gdriveFolderId: config.defaultFolderId,
-          title: 'ملخص محاضرة أمراض الدم والأنيميا السريرية',
-          caption: 'ملخص محاضرة أمراض الدم والأنيميا السريرية #سنة_ثانية #دم #نظري',
-          fileName: 'UMED_Hematology_Clinical_Summary.pdf'
+          userGoogleAccessToken: storedDrive.accessToken || undefined
         })
       });
       const data = await res.json();
       if (Array.isArray(data.logs)) setLiveLogs(data.logs);
       if (data.resource) {
-        await saveEducationalResource(data.resource);
+        await saveEducationalResource({ ...data.resource, status: 'published' });
         onDraftSimulated?.();
       }
       if (data.success) {
         const drivePart = data.driveUploadSucceeded
           ? `✅ متصل بمجلد Drive (${data.driveFolderName || 'UMED STORAGE'})`
-          : '✅ تم التخزين السحابي';
-        const tgPart = data.telegramSent
-          ? '📲 وصل إشعار وأزرار النشر إلى حسابك في تليجرام الآن!'
-          : `⚠️ تم بث الملف في المنصة بنجاح (ملاحظة تليجرام: تحقق من صحة BOT_TOKEN في الحقل الأول بالأسفل ليصلك إشعار تليجرام)`;
-        setLiveTestBanner(`${drivePart} | ✅ تم البث الفوري في منصة U_MED | ${tgPart}`);
+          : '✅ تم فحص مسار التخزين السحابي';
+        setLiveTestBanner(
+          `${drivePart} | 📂 تمت مزامنة (${(data.syncedDriveCount || 0) + (data.pulledCount || 0)}) ملفات حقيقية وتنظيف (${data.purgedDummyFoldersCount || 0}) مجلدات وهمية قديمة بدون إنشاء أي ملفات وهمية!`
+        );
       } else {
-        setLiveTestBanner(`⚠️ خطأ في الاختبار: ${data.error || ''}`);
+        setLiveTestBanner(`⚠️ خطأ في الفحص والمزامنة: ${data.error || ''}`);
       }
     } catch (err: any) {
       setLiveTestBanner(`⚠️ خطأ: ${err?.message || ''}`);
@@ -587,8 +659,8 @@ export default function TeleDriveBotStudioModal({
       apiHash: 'b18441a1ff607e10a989891a5462e627',
       sessionString: '',
       botToken: '',
-      targetGroupId: '-1003664858401',
-      adminTelegramId: '1905553456',
+      targetGroupId: '-1003536249033',
+      adminTelegramId: '782517822',
       defaultUniversityId,
       defaultFolderId: DEFAULT_GDRIVE_FOLDER_ID,
       chunkSizeMb: 20,
@@ -925,13 +997,56 @@ export default function TeleDriveBotStudioModal({
                         : 'بانتظار تفعيل توكن البوت (BOT_TOKEN)'}
                     </span>
 
-                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-teal-500/15 border border-teal-500/30 text-teal-300 text-[11px] font-bold">
+                    <span
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-[11px] font-bold ${
+                        driveOAuthConnected || liveDriveStatus?.authMode === 'user_oauth'
+                          ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                          : 'bg-teal-500/15 border-teal-500/30 text-teal-300'
+                      }`}
+                    >
                       <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
                       <span>
-                        Google Drive: {liveDriveStatus?.ok ? `متصل (${liveDriveStatus.folderName})` : 'جاهز (UMED STORAGE)'}
+                        Google Drive:{' '}
+                        {driveOAuthConnected || liveDriveStatus?.authMode === 'user_oauth'
+                          ? `متصل بحسابك الشخصي (${driveOAuthEmail || liveDriveStatus?.userEmail || 'OAuth 15GB+'})`
+                          : liveDriveStatus?.ok
+                          ? `متصل (${liveDriveStatus.folderName})`
+                          : 'جاهز (UMED STORAGE)'}
                       </span>
                     </span>
                   </div>
+                </div>
+
+                {/* GOOGLE DRIVE OAUTH 2.0 PERSONAL QUOTA CONNECTOR (Solves 0-byte Service Account Quota Issue) */}
+                <div className="p-3 rounded-xl bg-teal-950/40 border border-teal-500/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-1.5 font-black text-xs text-teal-300">
+                      <ShieldCheck className="w-4 h-4 shrink-0 text-emerald-400" />
+                      <span>
+                        {driveOAuthConnected || liveDriveStatus?.authMode === 'user_oauth'
+                          ? `✅ حساب Google Drive الشخصي مفعل (${driveOAuthEmail || liveDriveStatus?.userEmail || 'alssaedy500@gmail.com'})`
+                          : '🔑 تفعيل التخزين الفعلي الكامل في حساب Google Drive الشخصي (OAuth 2.0)'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
+                      حسابات الخدمة (Service Accounts) لا تملك مساحة تخزين في الحسابات الشخصية وتنشئ مجلدات فارغة (0 بايت). عند الضغط على زر الربط أدناه، يستخدم البوت مساحة حسابك الشخصي (15GB+) لحفظ أي ملف يُحوّل إلى قناة البوت <strong>بأي حجم (من 1 KB حتى 2 GB+)</strong> كملف حقيقي كامل داخل مجلد <strong>UMED STORAGE</strong>.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={driveOAuthBusy}
+                    onClick={handleConnectGoogleDriveOAuth}
+                    className="w-full sm:w-auto shrink-0 py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center justify-center gap-1.5 shadow-md cursor-pointer"
+                  >
+                    <KeyRound className="w-4 h-4 shrink-0" />
+                    <span>
+                      {driveOAuthBusy
+                        ? 'جارٍ الربط والمزامنة...'
+                        : driveOAuthConnected || liveDriveStatus?.authMode === 'user_oauth'
+                        ? '🔄 تحديث ربط Google Drive ومزامنة الملفات'
+                        : '🔑 ربط حساب Google Drive الآن (OAuth)'}
+                    </span>
+                  </button>
                 </div>
 
                 {/* Big Clear Action Buttons */}
@@ -945,8 +1060,8 @@ export default function TeleDriveBotStudioModal({
                     <Play className="w-4 h-4 shrink-0" />
                     <span>
                       {liveActionBusy
-                        ? 'جارٍ التنفيذ...'
-                        : '🚀 اختبار حي الآن (Drive + U_MED)'}
+                        ? 'جارٍ الفحص والمزامنة...'
+                        : '🚀 فحص ومزامنة القناة وDrive الآن (بدون داتا وهمية)'}
                     </span>
                   </button>
 
@@ -957,7 +1072,7 @@ export default function TeleDriveBotStudioModal({
                     className="w-full py-2.5 px-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
                   >
                     <FolderArchive className="w-3.5 h-3.5 shrink-0" />
-                    <span>📂 مزامنة وإصلاح ملفات Google Drive</span>
+                    <span>📂 تنظيف المجلدات الوهمية ومزامنة Drive</span>
                   </button>
 
                   <button
@@ -976,15 +1091,15 @@ export default function TeleDriveBotStudioModal({
                   <div className="flex flex-wrap items-center justify-between gap-1.5">
                     <div className="flex items-center gap-1.5 font-black text-[11px] text-emerald-400">
                       <Download className="w-3.5 h-3.5 shrink-0" />
-                      <span>📡 سحب واستقبال أي ملف وبأي حجم مهما كان ➔ Google Drive ➔ البث في القناة وU_MED:</span>
+                      <span>📡 التحويل الفوري من قناة البوت ➔ تخزين كامل في Google Drive (أي حجم) ➔ نشر في U_MED:</span>
                     </div>
                     <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold">
-                      بدون حد للحجم (حتى 2GB / 4GB+) • جميع الصيغ
+                      Drive: أي حجم (حتى 2GB+) • المنصة الداخلية: حد أقصى 20 MB
                     </span>
                   </div>
                   <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
-                    • <strong>استقبال وبث تلقائي بلا حدود للحجم:</strong> أي ملف (مهما كان حجمه أو صيغته) يُرسل للبوت أو يُنشر في القناة يتم إظهاره وأرشفته في <strong>Google Drive (`UMED STORAGE`)</strong> وبثه مباشرةً في <strong>قناة/قروب تليجرام</strong> وتشغيله داخل <strong>منصة U_MED</strong> دون تحويل لتليجرام.<br />
-                    • <strong>سحب مباشر من قناة عامة أو خاصة أو رفع ملف ضخم من جهازك الآن:</strong>
+                    • <strong>تخزين فوري في Google Drive لأي حجم:</strong> بمجرد تحويل أو إرسال أي ملف إلى قناة البوت، يقوم البوت بتحميله عبر <strong>MTProto Stream</strong> ورفعه كملف حقيقي كامل داخل <strong>Google Drive (`UMED STORAGE`)</strong> مهما كان حجمه (حتى لو كان مئات الميجابايت أو 2GB+).<br />
+                    • <strong>عدم تخزين أكثر من 20 MB داخل المنصة:</strong> تلتزم منصة <strong>U_MED</strong> بعدم تخزين أي ملف يتجاوز <strong>20 MB</strong> في قاعدة بياناتها الداخلية، وتعرض الملفات الكبيرة للطلاب مباشرةً عبر رابط البث والمعاينة من Google Drive.
                   </p>
 
                   {/* Row 1: Channel Pull & Target Broadcast Channel */}
@@ -994,7 +1109,7 @@ export default function TeleDriveBotStudioModal({
                       dir="ltr"
                       value={channelPullInput}
                       onChange={(e) => setChannelPullInput(e.target.value)}
-                      placeholder="@channel_username أو -1003664858401 أو https://t.me/channel_name"
+                      placeholder="@channel_username أو -1003536249033 أو https://t.me/channel_name"
                       className="flex-1 px-3 py-1.5 rounded-lg bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono text-xs"
                     />
                     <button
@@ -1006,8 +1121,8 @@ export default function TeleDriveBotStudioModal({
                       <Download className="w-3.5 h-3.5 shrink-0" />
                       <span>
                         {channelPullBusy
-                          ? 'جارٍ السحب والبث...'
-                          : '📥 سحب من القناة ➔ Drive ➔ بث للقناة وU_MED'}
+                          ? 'جارٍ السحب والرفع لـ Drive...'
+                          : '📥 سحب ملفات القناة ➔ تخزين في Drive ➔ نشر في U_MED'}
                       </span>
                     </button>
                   </div>

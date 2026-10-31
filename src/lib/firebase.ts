@@ -141,9 +141,183 @@ export function cleanFirestoreData<T>(obj: T): T {
   return cleaned as T;
 }
 
-// 3. Google Auth Provider
+// 3. Google Auth Provider & Google Drive OAuth Integration
+export const SCOPES = ['https://www.googleapis.com/auth/drive'];
+
 const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
+SCOPES.forEach((scope) => googleProvider.addScope(scope));
+
+const GDRIVE_TOKEN_SESSION_KEY = 'umed_gdrive_access_token';
+const GDRIVE_TOKEN_EXPIRY_KEY = 'umed_gdrive_access_token_expiry';
+const GDRIVE_USER_EMAIL_KEY = 'umed_gdrive_user_email';
+
+export function getStoredGoogleDriveAccessToken(): {
+  accessToken: string;
+  expiresAt: number;
+  email?: string;
+} | null {
+  try {
+    const token =
+      sessionStorage.getItem(GDRIVE_TOKEN_SESSION_KEY) ||
+      localStorage.getItem(GDRIVE_TOKEN_SESSION_KEY) ||
+      '';
+    const exp = Number(
+      sessionStorage.getItem(GDRIVE_TOKEN_EXPIRY_KEY) ||
+        localStorage.getItem(GDRIVE_TOKEN_EXPIRY_KEY) ||
+        0
+    );
+    const email =
+      sessionStorage.getItem(GDRIVE_USER_EMAIL_KEY) ||
+      localStorage.getItem(GDRIVE_USER_EMAIL_KEY) ||
+      undefined;
+    if (token && (!exp || exp > Date.now() + 60_000)) {
+      return { accessToken: token, expiresAt: exp || Date.now() + 3500_000, email };
+    }
+  } catch {}
+  return null;
+}
+
+export async function syncGoogleDriveTokenToBackend(
+  accessToken: string,
+  expiresInSec = 3590,
+  email?: string
+): Promise<any> {
+  const expiresAt = Date.now() + expiresInSec * 1000;
+  try {
+    sessionStorage.setItem(GDRIVE_TOKEN_SESSION_KEY, accessToken);
+    sessionStorage.setItem(GDRIVE_TOKEN_EXPIRY_KEY, String(expiresAt));
+    localStorage.setItem(GDRIVE_TOKEN_SESSION_KEY, accessToken);
+    localStorage.setItem(GDRIVE_TOKEN_EXPIRY_KEY, String(expiresAt));
+    if (email) {
+      sessionStorage.setItem(GDRIVE_USER_EMAIL_KEY, email);
+      localStorage.setItem(GDRIVE_USER_EMAIL_KEY, email);
+    }
+  } catch {}
+
+  try {
+    const res = await fetch('/api/teledrive/drive-oauth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accessToken,
+        expiresIn: expiresInSec,
+        email: email || auth.currentUser?.email || 'alssaedy500@gmail.com'
+      })
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch {}
+  return null;
+}
+
+function loadGisScript(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (typeof window === 'undefined') {
+      reject(new Error('No window environment'));
+      return;
+    }
+    if ((window as any).google?.accounts?.oauth2) {
+      resolve();
+      return;
+    }
+    const existing = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
+    if (existing) {
+      existing.addEventListener('load', () => resolve());
+      existing.addEventListener('error', () => reject(new Error('Failed to load GIS script')));
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Failed to load Google Identity Services'));
+    document.head.appendChild(script);
+  });
+}
+
+/**
+ * Initiates client-side Google OAuth consent for Google Drive (`https://www.googleapis.com/auth/drive`)
+ * using the provisioned `oAuthClientId` from `firebase-applet-config.json` (or Firebase Auth popup fallback)
+ * and syncs the resulting user OAuth token to the backend so files of ANY size are uploaded to the user's real Google Drive quota.
+ */
+export async function connectGoogleDriveOAuth(): Promise<{
+  ok: boolean;
+  accessToken?: string;
+  email?: string;
+  driveStatus?: any;
+  error?: string;
+}> {
+  const clientId = (firebaseAppletConfig as any).oAuthClientId || '';
+
+  // 1. Try Google Identity Services Token Client if oAuthClientId is configured
+  if (clientId) {
+    try {
+      await loadGisScript();
+      const tokenResponse = await new Promise<{ access_token: string; expires_in?: number }>((resolve, reject) => {
+        const tokenClient = (window as any).google.accounts.oauth2.initTokenClient({
+          client_id: clientId,
+          scope: SCOPES.join(' '),
+          prompt: 'consent',
+          callback: (resp: any) => {
+            if (resp && resp.access_token) {
+              resolve(resp);
+            } else {
+              reject(new Error(resp?.error_description || resp?.error || 'لم يتم منح صلاحية Google Drive'));
+            }
+          },
+          error_callback: (err: any) => {
+            reject(new Error(err?.message || 'تم إغلاق نافذة مصادقة Google Drive'));
+          }
+        });
+        tokenClient.requestAccessToken({ prompt: 'consent' });
+      });
+
+      const backendSync = await syncGoogleDriveTokenToBackend(
+        tokenResponse.access_token,
+        Number(tokenResponse.expires_in) || 3590,
+        auth.currentUser?.email || 'alssaedy500@gmail.com'
+      );
+
+      return {
+        ok: true,
+        accessToken: tokenResponse.access_token,
+        email: backendSync?.email || auth.currentUser?.email || 'alssaedy500@gmail.com',
+        driveStatus: backendSync?.driveStatus
+      };
+    } catch (gisErr: any) {
+      console.warn('GIS Token Client fallback to Firebase signInWithPopup:', gisErr);
+    }
+  }
+
+  // 2. Fallback to Firebase signInWithPopup with GoogleAuthProvider (includes Drive scope)
+  try {
+    const result = await signInWithPopup(auth, googleProvider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    const accessToken = credential?.accessToken;
+    if (!accessToken) {
+      return {
+        ok: false,
+        error: 'لم يتم استلام رمز الوصول (Access Token) من حساب جوجل.'
+      };
+    }
+    const email = result.user?.email || 'alssaedy500@gmail.com';
+    const backendSync = await syncGoogleDriveTokenToBackend(accessToken, 3590, email);
+    return {
+      ok: true,
+      accessToken,
+      email,
+      driveStatus: backendSync?.driveStatus
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      error: err?.message || 'فشل ربط حساب Google Drive'
+    };
+  }
+}
 
 // 4. Test Firestore Connection
 export async function testFirestoreConnection(): Promise<{ connected: boolean; latencyMs: number; error?: string }> {
@@ -1596,6 +1770,16 @@ async function enforceCloudAccountIntegrityAfterSignIn(signedInUser: User): Prom
 
 export async function signInWithGoogle(): Promise<User> {
   const result = await signInWithPopup(auth, googleProvider);
+  try {
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    if (credential?.accessToken) {
+      syncGoogleDriveTokenToBackend(
+        credential.accessToken,
+        3590,
+        result.user?.email || undefined
+      ).catch(() => {});
+    }
+  } catch {}
   return enforceCloudAccountIntegrityAfterSignIn(result.user);
 }
 

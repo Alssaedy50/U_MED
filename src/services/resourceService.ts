@@ -161,9 +161,9 @@ export async function uploadFileToCloudFirestore(
   chunkCount: number;
   fileName: string;
 }> {
-  const maxBytes = 15 * 1024 * 1024; // 15 MB safeguard
+  const maxBytes = 20 * 1024 * 1024; // Strict 20 MB cap for direct platform storage
   if (file.size > maxBytes) {
-    throw new Error('حجم الملف يتجاوز الحد الأقصى المسموح به للرفع المباشر (15 ميجابايت). للملفات الضخمة يرجى رفعها على Google Drive ووضع الرابط.');
+    throw new Error('سياسة التخزين في المنصة: لا يتم تخزين ملفات أكبر من 20 ميجابايت داخل قاعدة بيانات المنصة. يرجى تحويل الملف إلى قناة البوت أو رفعه عبر استوديو البوت ليتم تخزينه بحجمه الكامل مباشرة في Google Drive.');
   }
 
   onProgress?.(5);
@@ -608,9 +608,14 @@ function isInternalBackupResource(item?: Partial<EducationalResource> | null): b
   if (item.id && LEGACY_SAMPLE_RESOURCE_IDS.has(item.id)) return true;
   const fName = (item.fileName || '').toLowerCase();
   const title = item.title || '';
+  const url = item.url || '';
   if (
     fName.includes('medbot-cloud-backup') ||
     fName.endsWith('.json') ||
+    fName === 'umed_hematology_clinical_summary.pdf' ||
+    fName === 'lecture_05_hematology_anemia_review.pdf' ||
+    url.includes('1x9K_umed_drive_sample_8821') ||
+    url.includes('1sample_') ||
     title.includes('MEDBOT Cloud Backup') ||
     title.includes('بطاقة فهرسة قسم دراسي — MEDBOT') ||
     title === 'السلام عليكم'
@@ -783,9 +788,58 @@ export function subscribeToEducationalResources(
   filters: ResourceFilters = {},
   onUpdate: (resources: EducationalResource[]) => void
 ): () => void {
+  let latestSnapshotItems: EducationalResource[] = readLocalResources();
+  let latestBotItems: EducationalResource[] = [];
+  let isCancelled = false;
+
+  const emitCombined = () => {
+    if (isCancelled) return;
+    const deleted = getDeletedResourceIds();
+    const existingLocal = readLocalResources();
+    const draftsToKeep =
+      filters.status === 'published'
+        ? existingLocal.filter((r) => r.status !== 'published')
+        : [];
+
+    const byId = new Map<string, EducationalResource>();
+    for (const item of [...draftsToKeep, ...latestSnapshotItems, ...latestBotItems]) {
+      if (item && item.id && !deleted.has(item.id) && !isInternalBackupResource(item)) {
+        const prev = byId.get(item.id);
+        if (!prev || new Date(item.updatedAt || 0) >= new Date(prev.updatedAt || 0)) {
+          byId.set(item.id, item);
+        }
+      }
+    }
+
+    const merged = mergeResourcesWithDefaults(Array.from(byId.values()));
+    writeLocalResources(merged);
+    onUpdate(applyLocalFilters(merged, filters));
+  };
+
+  const syncFromLiveBot = async () => {
+    try {
+      const res = await fetch('/api/teledrive/live-status');
+      if (!res.ok || isCancelled) return;
+      const data = await res.json();
+      if (Array.isArray(data.ingestedResources)) {
+        const deleted = getDeletedResourceIds();
+        latestBotItems = data.ingestedResources.filter(
+          (item: any) =>
+            item &&
+            item.id &&
+            !deleted.has(item.id) &&
+            !isInternalBackupResource(item) &&
+            (!filters.status || item.status === filters.status)
+        );
+        emitCombined();
+      }
+    } catch {}
+  };
+
+  syncFromLiveBot();
+  const pollInterval = setInterval(syncFromLiveBot, 6000);
+
   try {
-    // Use `where('status', '==', 'published')` when status is 'published' so student listeners
-    // 100% comply with Firestore security rules on `umed-yemen`.
     const targetQuery =
       filters.status === 'published'
         ? query(collection(db, 'educationalResources'), where('status', '==', 'published'))
@@ -798,27 +852,27 @@ export function subscribeToEducationalResources(
         const cloudItems: EducationalResource[] = [];
         snap.forEach((d) => {
           const data = { ...d.data(), id: d.data().id || d.id } as EducationalResource;
-          if (data && data.id && !deleted.has(data.id)) {
+          if (data && data.id && !deleted.has(data.id) && !isInternalBackupResource(data)) {
             cloudItems.push(data);
           }
         });
-
-        const existingLocal = readLocalResources();
-        const draftsToKeep =
-          filters.status === 'published'
-            ? existingLocal.filter(r => r.status !== 'published')
-            : [];
-        const merged = mergeResourcesWithDefaults([...draftsToKeep, ...cloudItems]);
-        writeLocalResources(merged);
-        onUpdate(applyLocalFilters(merged, filters));
+        latestSnapshotItems = cloudItems;
+        emitCombined();
       },
       (err) => {
         console.warn('subscribeToEducationalResources error:', err);
       }
     );
-    return unsub;
+    return () => {
+      isCancelled = true;
+      clearInterval(pollInterval);
+      unsub();
+    };
   } catch (err) {
-    return () => {};
+    return () => {
+      isCancelled = true;
+      clearInterval(pollInterval);
+    };
   }
 }
 
