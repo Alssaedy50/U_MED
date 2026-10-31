@@ -64,7 +64,7 @@ export const firebaseConfig = {
   messagingSenderId: metaEnv.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseAppletConfig.messagingSenderId || '471786641119',
   appId: metaEnv.VITE_FIREBASE_APP_ID || firebaseAppletConfig.appId || '1:471786641119:web:umed-yemen-app',
   measurementId: metaEnv.VITE_FIREBASE_MEASUREMENT_ID || firebaseAppletConfig.measurementId || '',
-  firestoreDatabaseId: metaEnv.VITE_FIREBASE_DATABASE_ID || firebaseAppletConfig.firestoreDatabaseId || '(default)',
+  firestoreDatabaseId: metaEnv.VITE_FIREBASE_DATABASE_ID || (firebaseAppletConfig as any).firestoreDatabaseId || '(default)',
 };
 
 // Primary Platform Owner Official Details (Non-duplicable & Strictly Reserved)

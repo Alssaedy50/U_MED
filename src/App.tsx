@@ -86,8 +86,40 @@ function UmedWorkspaceApp() {
     }
   });
 
-  const [activeTab, setActiveTab] = useState<ActiveTabType>('student_portal');
-  const [isAdminWorkspaceMode, setIsAdminWorkspaceMode] = useState<boolean>(false);
+  const ADMIN_WORKSPACE_TABS: ActiveTabType[] = [
+    'content_manager',
+    'exams_manager',
+    'hierarchy_governance',
+    'academic',
+    'users_manager',
+    'backup_restore',
+    'audit',
+    'enrollment_queue',
+    'assessments',
+    'roles'
+  ];
+
+  const [isAdminWorkspaceMode, setIsAdminWorkspaceMode] = useState<boolean>(() => {
+    try {
+      const savedMode = localStorage.getItem('umed_workspace_mode');
+      if (savedMode === 'admin') return true;
+      if (savedMode === 'student') return false;
+      const savedTab = localStorage.getItem('umed_active_tab') as ActiveTabType | null;
+      if (savedTab && ADMIN_WORKSPACE_TABS.includes(savedTab)) return true;
+    } catch {}
+    return false;
+  });
+
+  const [activeTab, setActiveTab] = useState<ActiveTabType>(() => {
+    try {
+      const savedTab = localStorage.getItem('umed_active_tab') as ActiveTabType | null;
+      if (savedTab) return savedTab;
+      const savedMode = localStorage.getItem('umed_workspace_mode');
+      if (savedMode === 'admin') return 'content_manager';
+    } catch {}
+    return 'student_portal';
+  });
+
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
 
   const [platformSettings, setPlatformSettings] = useState<PlatformBrandingAndPolicies>(
@@ -106,6 +138,14 @@ function UmedWorkspaceApp() {
     assessmentId?: string;
     timestamp?: number;
   } | null>(null);
+
+  // Sync activeTab and isAdminWorkspaceMode to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('umed_workspace_mode', isAdminWorkspaceMode ? 'admin' : 'student');
+      localStorage.setItem('umed_active_tab', activeTab);
+    } catch {}
+  }, [isAdminWorkspaceMode, activeTab]);
 
   // Sync theme to document root & localStorage
   useEffect(() => {
@@ -148,11 +188,57 @@ function UmedWorkspaceApp() {
     effectiveRole === 'department_head' ||
     effectiveRole === 'batch_rep';
 
+  // Protect against non-admin users getting stuck in saved admin mode
+  useEffect(() => {
+    if (!loading && user && userProfile) {
+      if (!canAccessAdminWorkspace && isAdminWorkspaceMode) {
+        setIsAdminWorkspaceMode(false);
+        setActiveTab('student_portal');
+        try {
+          localStorage.setItem('umed_workspace_mode', 'student');
+          localStorage.setItem('umed_active_tab', 'student_portal');
+        } catch {}
+      }
+    }
+  }, [loading, user, userProfile, canAccessAdminWorkspace, isAdminWorkspaceMode]);
+
+  const handleSelectTab = (tab: ActiveTabType) => {
+    setActiveTab(tab);
+    if (ADMIN_WORKSPACE_TABS.includes(tab)) {
+      setIsAdminWorkspaceMode(true);
+      try {
+        localStorage.setItem('umed_workspace_mode', 'admin');
+        localStorage.setItem('umed_active_tab', tab);
+      } catch {}
+    } else if (
+      tab === 'student_portal' ||
+      tab === 'student_dashboard' ||
+      tab === 'student_library' ||
+      tab === 'student_exams' ||
+      tab === 'student_profile'
+    ) {
+      setIsAdminWorkspaceMode(false);
+      try {
+        localStorage.setItem('umed_workspace_mode', 'student');
+        localStorage.setItem('umed_active_tab', tab);
+      } catch {}
+    } else {
+      try {
+        localStorage.setItem('umed_active_tab', tab);
+      } catch {}
+    }
+  };
+
   const handleToggleWorkspaceMode = () => {
     if (!canAccessAdminWorkspace) return;
     const nextMode = !isAdminWorkspaceMode;
     setIsAdminWorkspaceMode(nextMode);
-    setActiveTab(nextMode ? 'content_manager' : 'student_portal');
+    const nextTab = nextMode ? 'content_manager' : 'student_portal';
+    setActiveTab(nextTab);
+    try {
+      localStorage.setItem('umed_workspace_mode', nextMode ? 'admin' : 'student');
+      localStorage.setItem('umed_active_tab', nextTab);
+    } catch {}
   };
 
   const handleNotificationNavigation = (
@@ -166,6 +252,10 @@ function UmedWorkspaceApp() {
     ) {
       setIsAdminWorkspaceMode(false);
       setActiveTab('student_exams');
+      try {
+        localStorage.setItem('umed_workspace_mode', 'student');
+        localStorage.setItem('umed_active_tab', 'student_exams');
+      } catch {}
       if (payload?.assessmentId) {
         setAssessmentNavTarget({
           assessmentId: String(payload.assessmentId),
@@ -179,15 +269,27 @@ function UmedWorkspaceApp() {
     if (targetTab === 'student_library' || targetTab === 'library') {
       setIsAdminWorkspaceMode(false);
       setActiveTab('student_library');
+      try {
+        localStorage.setItem('umed_workspace_mode', 'student');
+        localStorage.setItem('umed_active_tab', 'student_library');
+      } catch {}
       return;
     }
     if (targetTab === 'student_profile') {
       setIsAdminWorkspaceMode(false);
       setActiveTab('student_profile');
+      try {
+        localStorage.setItem('umed_workspace_mode', 'student');
+        localStorage.setItem('umed_active_tab', 'student_profile');
+      } catch {}
       return;
     }
     setIsAdminWorkspaceMode(false);
     setActiveTab('student_portal');
+    try {
+      localStorage.setItem('umed_workspace_mode', 'student');
+      localStorage.setItem('umed_active_tab', 'student_portal');
+    } catch {}
   };
 
   if (loading) {
@@ -247,7 +349,7 @@ function UmedWorkspaceApp() {
       {/* Unified Sidebar */}
       <WorkspaceSidebar
         activeTab={activeTab}
-        onSelectTab={(tab) => setActiveTab(tab)}
+        onSelectTab={handleSelectTab}
         isOpenMobile={isMobileSidebarOpen}
         onCloseMobile={() => setIsMobileSidebarOpen(false)}
         userRole={effectiveRole}
@@ -294,7 +396,7 @@ function UmedWorkspaceApp() {
               <AccountAndAppearanceView
                 theme={theme}
                 setTheme={setTheme}
-                setActiveTab={setActiveTab}
+                setActiveTab={handleSelectTab}
                 platformSettings={platformSettings}
                 isStrictPlatformOwner={isStrictOwner}
                 onOpenLegalModal={(tab) => setLegalModalState({ isOpen: true, tab })}
@@ -343,7 +445,7 @@ function UmedWorkspaceApp() {
                         ? assignedLevelId
                         : undefined
                     }
-                    onNavigateToAcademicStructure={() => setActiveTab('academic')}
+                    onNavigateToAcademicStructure={() => handleSelectTab('academic')}
                   />
                 )}
 
@@ -425,7 +527,7 @@ function UmedWorkspaceApp() {
 
         <MobileBottomTabBar
           activeTab={activeTab}
-          onSelectTab={(tab) => setActiveTab(tab)}
+          onSelectTab={handleSelectTab}
           isAdminWorkspaceMode={isAdminWorkspaceMode}
         />
       </div>

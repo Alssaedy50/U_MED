@@ -799,6 +799,43 @@ export default function EducationalContentManager({
     }
   };
 
+  // Resources scoped by current Level filter (and University if set)
+  const scopedByLevelResources = useMemo(() => {
+    return resources.filter(r => {
+      const matchUniv = !userContext.universityId || !r.universityId || r.universityId === userContext.universityId;
+      if (filterLevelId === 'all') return matchUniv;
+      if (filterLevelId === 'pending_review') {
+        return matchUniv && (!r.studyLevelId || r.studyLevelId === 'pending_review');
+      }
+      return matchUniv && r.studyLevelId === filterLevelId;
+    });
+  }, [resources, userContext.universityId, filterLevelId]);
+
+  const unassignedLevelCount = useMemo(() => {
+    return resources.filter(r => !r.studyLevelId || r.studyLevelId === 'pending_review').length;
+  }, [resources]);
+
+  const scopedPublishedCount = useMemo(
+    () => scopedByLevelResources.filter(r => r.status === 'published').length,
+    [scopedByLevelResources]
+  );
+  const scopedDraftCount = useMemo(
+    () => scopedByLevelResources.filter(r => r.status === 'draft').length,
+    [scopedByLevelResources]
+  );
+  const scopedPdfCount = useMemo(
+    () => scopedByLevelResources.filter(r => r.resourceType === 'pdf').length,
+    [scopedByLevelResources]
+  );
+  const scopedMediaCount = useMemo(
+    () => scopedByLevelResources.filter(r => r.resourceType !== 'pdf').length,
+    [scopedByLevelResources]
+  );
+  const scopedTelegramDraftCount = useMemo(
+    () => scopedByLevelResources.filter(r => r.status === 'draft' && r.createdBy === 'AUTOMATED_TELEGRAM_INGESTION').length,
+    [scopedByLevelResources]
+  );
+
   const filtered = resources.filter(r => {
     const matchStatus =
       statusFilter === 'all'
@@ -808,7 +845,12 @@ export default function EducationalContentManager({
         : r.status === statusFilter;
     const matchType = typeFilter === 'all' || r.resourceType === typeFilter;
     const matchUniv = !userContext.universityId || !r.universityId || r.universityId === userContext.universityId;
-    const matchLevel = filterLevelId === 'all' || !r.studyLevelId || r.studyLevelId === 'pending_review' || r.studyLevelId === filterLevelId;
+    const matchLevel =
+      filterLevelId === 'all'
+        ? true
+        : filterLevelId === 'pending_review'
+        ? !r.studyLevelId || r.studyLevelId === 'pending_review'
+        : r.studyLevelId === filterLevelId;
     const matchPeriod = filterPeriodId === 'all' || r.studyPeriodId === filterPeriodId;
     const matchCourse = filterCourseId === 'all' || r.courseOfferingId === filterCourseId;
 
@@ -846,10 +888,25 @@ export default function EducationalContentManager({
     setFilterCourseId('all');
   };
 
-  const publishedCount = useMemo(() => resources.filter(r => r.status === 'published').length, [resources]);
-  const draftCount = useMemo(() => resources.filter(r => r.status === 'draft').length, [resources]);
-  const pdfCount = useMemo(() => resources.filter(r => r.resourceType === 'pdf').length, [resources]);
-  const mediaAndSlidesCount = useMemo(() => resources.filter(r => r.resourceType !== 'pdf').length, [resources]);
+  const handleQuickChangeLevel = async (resourceId: string, newLevelId: string) => {
+    const target = resources.find(r => r.id === resourceId);
+    if (!target) return;
+    try {
+      const updated: EducationalResource = {
+        ...target,
+        studyLevelId: newLevelId,
+        updatedAt: new Date().toISOString()
+      };
+      await saveEducationalResource(updated);
+      setResources(prev => prev.map(r => r.id === resourceId ? updated : r));
+      setStatusMessage({
+        type: 'success',
+        text: `تم نقل المورد "${target.title}" إلى (${getLevelLabel(newLevelId)}) بنجاح!`
+      });
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: 'تعذر تغيير المستوى الأكاديمي للمورد.' });
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -861,13 +918,19 @@ export default function EducationalContentManager({
             <div className="flex items-center gap-2 text-xs text-teal-400 font-bold">
               <span>إدارة المحتوى والمكتبة الرقمية</span>
               <span aria-hidden="true">·</span>
-              <span className="font-mono tabular-nums text-[var(--text-muted)]">إجمالي الملفات: {resources.length}</span>
+              <span className="font-mono tabular-nums text-[var(--text-muted)]">
+                {filterLevelId === 'all'
+                  ? `إجمالي الملفات: ${resources.length}`
+                  : `ملفات ${getLevelLabel(filterLevelId)}: ${scopedByLevelResources.length} (من أصل ${resources.length} في المنصة)`}
+              </span>
             </div>
             <h2 className="text-base sm:text-lg font-black text-[var(--text-primary)]">
               تنظيم ونشر المحاضرات والشرائح والمراجع الطبية
             </h2>
             <p className="text-xs text-[var(--text-muted)]">
-              تصفح وإدارة المحاضرات مباشرة، مع نافذة منبثقة مخصصة لإضافة أو تعديل أي مورد تعليمي.
+              {filterLevelId === 'all'
+                ? 'تصفح وإدارة المحاضرات لجميع المستويات الأكاديمية مع إمكانية الفرز والتعديل والنشر الفوري.'
+                : `تصفح وإدارة ملفات ومقررات (${getLevelLabel(filterLevelId)}) مع مطابقة فورية لما يظهر في حسابات الطلاب.`}
             </p>
           </div>
 
@@ -909,7 +972,7 @@ export default function EducationalContentManager({
           </div>
         </div>
 
-        {/* Top Statistics Strip (شريط الإحصائيات السريع) */}
+        {/* Top Statistics Strip (شريط الإحصائيات السريع المطابق للمستوى المختار) */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-3 border-t border-[var(--border-color)] text-xs">
           <button
             type="button"
@@ -921,10 +984,17 @@ export default function EducationalContentManager({
             }`}
           >
             <div>
-              <span className="text-[11px] text-[var(--text-muted)] font-semibold block">إجمالي الموارد</span>
-              <span className="text-base sm:text-lg font-black text-[var(--text-primary)] font-mono tabular-nums mt-0.5 block">
-                {resources.length}
+              <span className="text-[11px] text-[var(--text-muted)] font-semibold block">
+                {filterLevelId === 'all' ? 'إجمالي الموارد' : `موارد ${getLevelLabel(filterLevelId)}`}
               </span>
+              <span className="text-base sm:text-lg font-black text-[var(--text-primary)] font-mono tabular-nums mt-0.5 block">
+                {scopedByLevelResources.length}
+              </span>
+              {filterLevelId !== 'all' && (
+                <span className="text-[10px] text-[var(--text-muted)] font-mono">
+                  {resources.length} إجمالي المنصة
+                </span>
+              )}
             </div>
             <div className="w-9 h-9 rounded-xl bg-teal-500/15 text-teal-400 flex items-center justify-center shrink-0">
               <FileText className="w-4 h-4" />
@@ -943,8 +1013,13 @@ export default function EducationalContentManager({
             <div>
               <span className="text-[11px] text-[var(--text-muted)] font-semibold block">منشور للطلاب</span>
               <span className="text-base sm:text-lg font-black text-emerald-400 font-mono tabular-nums mt-0.5 block">
-                {publishedCount}
+                {scopedPublishedCount}
               </span>
+              {filterLevelId !== 'all' && (
+                <span className="text-[10px] text-emerald-500/80 font-mono">
+                  متاح لدفعة {getLevelLabel(filterLevelId)}
+                </span>
+              )}
             </div>
             <div className="w-9 h-9 rounded-xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center shrink-0">
               <CheckCircle2 className="w-4 h-4" />
@@ -963,7 +1038,10 @@ export default function EducationalContentManager({
             <div>
               <span className="text-[11px] text-[var(--text-muted)] font-semibold block">مسودات وقيد المراجعة</span>
               <span className="text-base sm:text-lg font-black text-amber-400 font-mono tabular-nums mt-0.5 block">
-                {draftCount}
+                {scopedDraftCount}
+              </span>
+              <span className="text-[10px] text-[var(--text-muted)] font-mono">
+                {scopedTelegramDraftCount > 0 ? `${scopedTelegramDraftCount} مسودة بوت` : 'لا توجد مسودات معلقة'}
               </span>
             </div>
             <div className="w-9 h-9 rounded-xl bg-amber-500/15 text-amber-400 flex items-center justify-center shrink-0">
@@ -983,7 +1061,7 @@ export default function EducationalContentManager({
             <div>
               <span className="text-[11px] text-[var(--text-muted)] font-semibold block">ملفات PDF / وسائط</span>
               <span className="text-sm sm:text-base font-black text-indigo-400 font-mono tabular-nums mt-0.5 block">
-                {pdfCount} PDF · {mediaAndSlidesCount} وسائط
+                {scopedPdfCount} PDF · {scopedMediaCount} وسائط
               </span>
             </div>
             <div className="w-9 h-9 rounded-xl bg-indigo-500/15 text-indigo-400 flex items-center justify-center shrink-0">
@@ -994,11 +1072,11 @@ export default function EducationalContentManager({
       </div>
 
       {/* Automated Telegram Draft Ingestion Alert Banner */}
-      {telegramDraftCount > 0 && (
+      {scopedTelegramDraftCount > 0 && (
         <div className="p-3.5 sm:p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-2.5">
             <span className="px-2.5 py-1 rounded-lg bg-amber-500 text-slate-950 font-black text-xs tabular-nums">
-              {telegramDraftCount} مسودة من تيليجرام
+              {scopedTelegramDraftCount} مسودة من تيليجرام
             </span>
             <span className="text-[var(--text-primary)] font-semibold">
               ملفات مسحوبة تلقائياً عبر البوت تنتظر تحديد المادة أو الاعتماد الجماعي للنشر.
@@ -1009,13 +1087,12 @@ export default function EducationalContentManager({
               type="button"
               onClick={() => {
                 setStatusFilter('telegram_draft');
-                if (!isBatchScoped) setFilterLevelId('all');
                 setFilterPeriodId('all');
                 setFilterCourseId('all');
               }}
               className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs transition-colors cursor-pointer whitespace-nowrap"
             >
-              عرض مسودات البوت ({telegramDraftCount})
+              عرض مسودات البوت ({scopedTelegramDraftCount})
             </button>
           </div>
         </div>
@@ -1068,7 +1145,7 @@ export default function EducationalContentManager({
                 statusFilter === 'all' ? 'bg-teal-600 text-white' : 'text-slate-400 hover:text-white'
               }`}
             >
-              الكل ({resources.length})
+              الكل ({scopedByLevelResources.length})
             </button>
             <button
               type="button"
@@ -1077,7 +1154,7 @@ export default function EducationalContentManager({
                 statusFilter === 'published' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'
               }`}
             >
-              منشور ({resources.filter(r => r.status === 'published').length})
+              منشور ({scopedPublishedCount})
             </button>
             <button
               type="button"
@@ -1086,9 +1163,9 @@ export default function EducationalContentManager({
                 statusFilter === 'draft' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'
               }`}
             >
-              مسودات ({resources.filter(r => r.status === 'draft').length})
+              مسودات ({scopedDraftCount})
             </button>
-            {telegramDraftCount > 0 && (
+            {scopedTelegramDraftCount > 0 && (
               <button
                 type="button"
                 onClick={() => setStatusFilter('telegram_draft')}
@@ -1096,7 +1173,7 @@ export default function EducationalContentManager({
                   statusFilter === 'telegram_draft' ? 'bg-sky-600 text-white' : 'text-sky-400 hover:text-white'
                 }`}
               >
-                مسودات تيليجرام ({telegramDraftCount})
+                مسودات تيليجرام ({scopedTelegramDraftCount})
               </button>
             )}
           </div>
@@ -1111,12 +1188,24 @@ export default function EducationalContentManager({
                 value={filterLevelId}
                 disabled={isBatchScoped}
                 onChange={(e) => handleFilterLevelChange(e.target.value)}
-                className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-bold text-xs focus:outline-none focus:border-teal-500"
+                className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-bold text-xs focus:outline-none focus:border-teal-500 tabular-nums"
               >
-                {!isBatchScoped && <option value="all">جميع المستويات</option>}
-                {studyLevels.map(lvl => (
-                  <option key={lvl.id} value={lvl.id}>{lvl.titleArabic}</option>
-                ))}
+                {!isBatchScoped && (
+                  <option value="all">جميع المستويات ({resources.length})</option>
+                )}
+                {studyLevels.map(lvl => {
+                  const countForLvl = resources.filter(r => r.studyLevelId === lvl.id).length;
+                  return (
+                    <option key={lvl.id} value={lvl.id}>
+                      {lvl.titleArabic} ({countForLvl} ملفات)
+                    </option>
+                  );
+                })}
+                {unassignedLevelCount > 0 && (
+                  <option value="pending_review">
+                    ⚠️ بحاجة لتحديد المستوى ({unassignedLevelCount})
+                  </option>
+                )}
               </select>
             </div>
 
@@ -1341,9 +1430,25 @@ export default function EducationalContentManager({
                       )}
                     </div>
 
-                    {/* Clean Unboxed Arabic Hierarchy Path */}
+                    {/* Clean Unboxed Arabic Hierarchy Path with Quick Level Badge & Switcher */}
                     <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-slate-400">
-                      <span className="text-slate-200 font-semibold">{getLevelLabel(res.studyLevelId)}</span>
+                      <div className="inline-flex items-center gap-1">
+                        <span className="px-2 py-0.5 rounded-md bg-teal-500/15 border border-teal-500/30 text-teal-300 font-bold">
+                          {getLevelLabel(res.studyLevelId)}
+                        </span>
+                        <select
+                          value={res.studyLevelId || 'pending_review'}
+                          onChange={(e) => handleQuickChangeLevel(res.id, e.target.value)}
+                          className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-[10px] text-slate-300 font-semibold focus:outline-none focus:border-teal-400 cursor-pointer"
+                          title="نقل المورد إلى مستوى آخر"
+                        >
+                          {studyLevels.map(lvl => (
+                            <option key={lvl.id} value={lvl.id}>
+                              نقل: {lvl.titleArabic}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                       {res.studyPeriodId && (
                         <>
                           <span aria-hidden="true">·</span>

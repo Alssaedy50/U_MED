@@ -689,13 +689,24 @@ export default function StudentDashboard({
               type="button"
               onClick={() => studyPeriods.length > 0 && setShowBlockPopup(true)}
               className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] border border-[var(--border-color)] transition-colors text-right"
+              title="عرض وتبديل البلوكات الدراسية المتاحة"
             >
-              <span className="text-[11px] text-[var(--text-muted)] font-semibold">البلوكات الدراسية</span>
+              <div className="flex flex-col min-w-0 text-right">
+                <span className="text-[11px] text-[var(--text-muted)] font-semibold">البلوكات الدراسية</span>
+                <span className="text-[10px] text-teal-400/80 font-bold truncate">
+                  {selectedPeriod ? selectedPeriod.code : currentLevelLabel}
+                </span>
+              </div>
               <span className="font-mono font-extrabold text-teal-400 text-sm">{studyPeriods.length}</span>
             </button>
 
-            <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)]">
-              <span className="text-[11px] text-[var(--text-muted)] font-semibold">مقررات البلوك</span>
+            <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-right">
+              <div className="flex flex-col min-w-0 text-right">
+                <span className="text-[11px] text-[var(--text-muted)] font-semibold">مقررات البلوك</span>
+                <span className="text-[10px] text-emerald-400/80 font-bold truncate">
+                  {selectedPeriod ? selectedPeriod.titleArabic : 'المقررات'}
+                </span>
+              </div>
               <span className="font-mono font-extrabold text-emerald-400 text-sm">{courses.length}</span>
             </div>
 
@@ -703,8 +714,12 @@ export default function StudentDashboard({
               type="button"
               onClick={() => switchSection('library')}
               className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] border border-[var(--border-color)] transition-colors text-right"
+              title={`عرض المحاضرات والمراجع المتاحة لـ ${currentLevelLabel}`}
             >
-              <span className="text-[11px] text-[var(--text-muted)] font-semibold">المحاضرات والمراجع</span>
+              <div className="flex flex-col min-w-0 text-right">
+                <span className="text-[11px] text-[var(--text-muted)] font-semibold">المحاضرات والمراجع</span>
+                <span className="text-[10px] text-sky-400/80 font-bold truncate">{currentLevelLabel}</span>
+              </div>
               <span className="font-mono font-extrabold text-sky-400 text-sm">{levelResources.length}</span>
             </button>
 
@@ -712,8 +727,12 @@ export default function StudentDashboard({
               type="button"
               onClick={() => switchSection('assessments')}
               className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] border border-[var(--border-color)] transition-colors text-right"
+              title={`عرض الاختبارات والمسابقات المتاحة لـ ${currentLevelLabel}`}
             >
-              <span className="text-[11px] text-[var(--text-muted)] font-semibold">الاختبارات والمسابقات</span>
+              <div className="flex flex-col min-w-0 text-right">
+                <span className="text-[11px] text-[var(--text-muted)] font-semibold">الاختبارات والمسابقات</span>
+                <span className="text-[10px] text-amber-400/80 font-bold truncate">{currentLevelLabel}</span>
+              </div>
               <span className="font-mono font-extrabold text-amber-400 text-sm">{levelAssessments.length}</span>
             </button>
           </div>

@@ -402,7 +402,7 @@ export default function TeleDriveBotStudioModal({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userGoogleAccessToken: storedToken.accessToken || undefined
+          userGoogleAccessToken: storedToken?.accessToken || undefined
         })
       });
       const data = await res.json();
@@ -430,13 +430,13 @@ export default function TeleDriveBotStudioModal({
     const syncAndFetchLiveStatus = async (initialSync = false) => {
       try {
         const storedDrive = getStoredGoogleDriveAccessToken();
-        if (storedDrive.accessToken) {
+        if (storedDrive?.accessToken) {
           setDriveOAuthConnected(true);
           if (storedDrive.email) setDriveOAuthEmail(storedDrive.email);
         }
 
         if (initialSync) {
-          if (storedDrive.accessToken) {
+          if (storedDrive?.accessToken) {
             await syncGoogleDriveTokenToBackend(storedDrive.accessToken, 3500, storedDrive.email);
           }
           const startRes = await fetch('/api/teledrive/live-start', {
@@ -448,8 +448,8 @@ export default function TeleDriveBotStudioModal({
               adminTelegramId: config.adminTelegramId,
               gdriveFolderId: config.defaultFolderId,
               defaultUniversityId: config.defaultUniversityId,
-              userGoogleAccessToken: storedDrive.accessToken || undefined,
-              userGoogleEmail: storedDrive.email || undefined,
+              userGoogleAccessToken: storedDrive?.accessToken || undefined,
+              userGoogleEmail: storedDrive?.email || undefined,
               autoPublish: true
             })
           });
@@ -511,8 +511,8 @@ export default function TeleDriveBotStudioModal({
           gdriveFolderId: config.defaultFolderId,
           defaultUniversityId: config.defaultUniversityId,
           serviceAccountJson: rawServiceJson,
-          userGoogleAccessToken: storedDrive.accessToken || undefined,
-          userGoogleEmail: storedDrive.email || undefined,
+          userGoogleAccessToken: storedDrive?.accessToken || undefined,
+          userGoogleEmail: storedDrive?.email || undefined,
           autoPublish: true
         })
       });
@@ -585,7 +585,7 @@ export default function TeleDriveBotStudioModal({
           targetGroupId: config.targetGroupId,
           adminTelegramId: config.adminTelegramId,
           gdriveFolderId: config.defaultFolderId,
-          userGoogleAccessToken: storedDrive.accessToken || undefined
+          userGoogleAccessToken: storedDrive?.accessToken || undefined
         })
       });
       const data = await res.json();
