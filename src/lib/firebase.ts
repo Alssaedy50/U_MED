@@ -57,14 +57,14 @@ import {
 const metaEnv = (typeof import.meta !== 'undefined' && (import.meta as any).env) || {};
 
 export const firebaseConfig = {
-  apiKey: metaEnv.VITE_FIREBASE_API_KEY || firebaseAppletConfig.apiKey,
-  authDomain: metaEnv.VITE_FIREBASE_AUTH_DOMAIN || firebaseAppletConfig.authDomain,
-  projectId: metaEnv.VITE_FIREBASE_PROJECT_ID || firebaseAppletConfig.projectId,
-  storageBucket: metaEnv.VITE_FIREBASE_STORAGE_BUCKET || firebaseAppletConfig.storageBucket,
-  messagingSenderId: metaEnv.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseAppletConfig.messagingSenderId,
-  appId: metaEnv.VITE_FIREBASE_APP_ID || firebaseAppletConfig.appId,
-  measurementId: metaEnv.VITE_FIREBASE_MEASUREMENT_ID || firebaseAppletConfig.measurementId,
-  firestoreDatabaseId: metaEnv.VITE_FIREBASE_DATABASE_ID || firebaseAppletConfig.firestoreDatabaseId,
+  apiKey: metaEnv.VITE_FIREBASE_API_KEY || firebaseAppletConfig.apiKey || 'AIzaSyAAjo3PyRS5SzNL-PCE78T_wJkVaAANcSE',
+  authDomain: metaEnv.VITE_FIREBASE_AUTH_DOMAIN || firebaseAppletConfig.authDomain || 'umed-yemen.firebaseapp.com',
+  projectId: metaEnv.VITE_FIREBASE_PROJECT_ID || (firebaseAppletConfig.projectId && firebaseAppletConfig.projectId !== 'active-branch-w83d0' ? firebaseAppletConfig.projectId : 'umed-yemen'),
+  storageBucket: metaEnv.VITE_FIREBASE_STORAGE_BUCKET || firebaseAppletConfig.storageBucket || 'umed-yemen.appspot.com',
+  messagingSenderId: metaEnv.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseAppletConfig.messagingSenderId || '471786641119',
+  appId: metaEnv.VITE_FIREBASE_APP_ID || firebaseAppletConfig.appId || '1:471786641119:web:umed-yemen-app',
+  measurementId: metaEnv.VITE_FIREBASE_MEASUREMENT_ID || firebaseAppletConfig.measurementId || '',
+  firestoreDatabaseId: metaEnv.VITE_FIREBASE_DATABASE_ID || firebaseAppletConfig.firestoreDatabaseId || '(default)',
 };
 
 // Primary Platform Owner Official Details (Non-duplicable & Strictly Reserved)

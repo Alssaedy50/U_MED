@@ -1,10 +1,10 @@
 {
-  "projectId": "active-branch-w83d0",
-  "appId": "1:1072983768253:web:834d852dcda998d9f94bd4",
-  "apiKey": "AIzaSyBuHctDTJtSvuBR1mFggEm9G-eONb8yPtQ",
-  "authDomain": "active-branch-w83d0.firebaseapp.com",
-  "storageBucket": "active-branch-w83d0.firebasestorage.app",
-  "messagingSenderId": "1072983768253",
+  "projectId": "umed-yemen",
+  "appId": "1:471786641119:web:umed-yemen-app",
+  "apiKey": "AIzaSyAAjo3PyRS5SzNL-PCE78T_wJkVaAANcSE",
+  "authDomain": "umed-yemen.firebaseapp.com",
+  "storageBucket": "umed-yemen.appspot.com",
+  "messagingSenderId": "471786641119",
   "measurementId": "",
   "oAuthClientId": "1072983768253-20ce000qvqf56k376aqieia4oluc0opm.apps.googleusercontent.com",
   "recaptchaSiteKey": ""

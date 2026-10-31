@@ -36,6 +36,7 @@ import {
   normalizeUsername,
   validateUsernameFormat,
   checkDeviceSingleAccountPolicy,
+  releaseDeviceAccountBinding,
   getDeviceFingerprint,
   YEMEN_UNIVERSITIES_OPTIONS,
   MEDICAL_SPECIALTIES_OPTIONS,
@@ -213,6 +214,20 @@ export default function StudentOnboardingGate({
     }
   };
 
+  const handleResetDeviceBinding = async () => {
+    try {
+      await releaseDeviceAccountBinding();
+      setDevicePolicy({
+        checking: false,
+        allowed: true,
+        deviceId: getDeviceFingerprint().deviceId
+      });
+      setAuthSuccess('تمت إعادة تهيئة قيد الجهاز بنجاح. يمكنك الآن تسجيل حساب جديد.');
+    } catch {
+      setAuthError('تعذر فك قيد الجهاز');
+    }
+  };
+
   const handleProceedToStepTwo = () => {
     setAuthError(null);
     if (!displayNameInput.trim()) {
@@ -231,13 +246,69 @@ export default function StudentOnboardingGate({
     setRegisterStep(2);
   };
 
+  const handleDirectRegister = async () => {
+    setAuthError(null);
+    setAuthSuccess(null);
+    if (!displayNameInput.trim()) {
+      setAuthError('يرجى إدخال الاسم الكامل بالعربية أولاً.');
+      return;
+    }
+    const fmt = validateUsernameFormat(usernameInput);
+    if (!fmt.valid) {
+      setAuthError(fmt.message || 'يجب أن يتكون اسم المستخدم من 4 أحرف إنجليزية على الأقل.');
+      return;
+    }
+    setRegSubmitting(true);
+    try {
+      const uniqueness = await checkIdentifierUniqueness({ username: usernameInput.trim() });
+      if (!uniqueness.isUnique) {
+        setAuthError(uniqueness.message || 'اسم المستخدم غير متاح، يرجى اختيار اسم آخر.');
+        setRegSubmitting(false);
+        return;
+      }
+      const univObj = YEMEN_UNIVERSITIES_OPTIONS.find((u) => u.id === regUniversityId);
+      const univNameArabic =
+        univObj?.nameArabic || 'جامعة دار السلام الدولية للعلوم والتكنولوجيا';
+
+      await registerWithUsername(
+        usernameInput.trim(),
+        passwordInput || undefined,
+        displayNameInput.trim() || undefined,
+        {
+          avatarUrl: regAvatarUrl || undefined,
+          universityId: regUniversityId,
+          universityNameArabic: univNameArabic,
+          specialtyArabic: regSpecialtyArabic,
+          studyLevelId: regStudyLevelId
+        }
+      );
+
+      saveUserAcademicContext({
+        universityId: regUniversityId,
+        universityNameArabic: univNameArabic,
+        studyLevelId: regStudyLevelId
+      });
+
+      setAuthSuccess('تم إنشاء الحساب ومزامنة ملفك الأكاديمي في السحابة بنجاح ✓');
+      onAuthenticated('student_dashboard');
+    } catch (err: any) {
+      let msg = err?.message || 'تعذر إتمام التسجيل.';
+      if (msg.includes('email-already-in-use')) {
+        msg = 'اسم المستخدم هذا مستخدم مسبقاً، يرجى اختيار اسم مستخدم آخر.';
+      }
+      setAuthError(msg);
+    } finally {
+      setRegSubmitting(false);
+    }
+  };
+
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
     setAuthSuccess(null);
 
     if (authTab === 'register' && authMethod === 'username' && registerStep === 1) {
-      handleProceedToStepTwo();
+      handleDirectRegister();
       return;
     }
 
@@ -418,8 +489,8 @@ export default function StudentOnboardingGate({
   };
 
   return (
-    <div className="min-h-[100dvh] flex flex-col justify-center py-6 px-3.5 sm:px-6 overflow-y-auto" dir="rtl">
-      <div className="umed-card max-w-xl w-full mx-auto bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-5 sm:p-7 shadow-2xl space-y-5">
+    <div className="min-h-[100dvh] w-full flex flex-col items-center justify-start sm:justify-center py-4 px-3 sm:px-6 overflow-y-auto overscroll-contain" dir="rtl">
+      <div className="umed-card max-w-xl w-full mx-auto bg-[var(--bg-card)] border border-[var(--border-color)] rounded-2xl p-4 sm:p-7 shadow-2xl space-y-4 sm:space-y-5 my-auto">
         {/* Brand Header with Single Install Button in Header */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-color)] pb-4">
           <div className="flex items-center gap-3 min-w-0">
@@ -448,7 +519,7 @@ export default function StudentOnboardingGate({
 
         {/* Device Single-Account Verification Banner */}
         <div
-          className={`p-3.5 rounded-xl border text-xs space-y-2 ${
+          className={`p-3 sm:p-3.5 rounded-xl border text-xs space-y-2 ${
             devicePolicy.checking
               ? 'bg-[var(--bg-input)] border-[var(--border-color)] text-[var(--text-secondary)]'
               : devicePolicy.allowed
@@ -483,19 +554,28 @@ export default function StudentOnboardingGate({
               <p className="text-[11px] text-amber-400 leading-relaxed font-semibold">
                 {devicePolicy.message}
               </p>
-              {devicePolicy.existingUsername && (
+              <div className="flex flex-wrap items-center gap-2">
+                {devicePolicy.existingUsername && (
+                  <button
+                    type="button"
+                    onClick={handleQuickLoginExistingDeviceAccount}
+                    disabled={regSubmitting}
+                    className="flex-1 min-w-[200px] py-2.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-extrabold text-xs flex items-center justify-center gap-2 shadow-lg transition-colors cursor-pointer"
+                  >
+                    <LogIn className="w-4 h-4" />
+                    <span>
+                      الدخول الفوري بحسابك (@{devicePolicy.existingUsername})
+                    </span>
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={handleQuickLoginExistingDeviceAccount}
-                  disabled={regSubmitting}
-                  className="w-full py-2.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-extrabold text-xs flex items-center justify-center gap-2 shadow-lg transition-colors"
+                  onClick={handleResetDeviceBinding}
+                  className="py-2.5 px-3 rounded-xl bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-amber-300 text-[11px] font-bold transition-colors cursor-pointer"
                 >
-                  <LogIn className="w-4 h-4" />
-                  <span>
-                    الدخول الفوري بحسابك المرتبط بهذا الهاتف (@{devicePolicy.existingUsername})
-                  </span>
+                  تسجيل حساب جديد لهذا الجهاز
                 </button>
-              )}
+              </div>
             </div>
           )}
         </div>
@@ -721,15 +801,31 @@ export default function StudentOnboardingGate({
                     />
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={handleProceedToStepTwo}
-                    disabled={uniquenessStatus.checking || uniquenessStatus.available === false}
-                    className="w-full py-3 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 transition-colors shadow-md"
-                  >
-                    <span>التالي: اختيار الجامعة والتخصص والصورة</span>
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
+                  <div className="pt-2 flex flex-col sm:flex-row gap-2.5">
+                    <button
+                      type="button"
+                      onClick={handleDirectRegister}
+                      disabled={regSubmitting || uniquenessStatus.available === false}
+                      className="flex-1 py-3 px-4 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 transition-colors shadow-lg shadow-teal-600/25 cursor-pointer"
+                    >
+                      {regSubmitting ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <UserCheck className="w-4 h-4" />
+                      )}
+                      <span>🟢 إنشاء الحساب والدخول فوراً للمنصة</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleProceedToStepTwo}
+                      disabled={uniquenessStatus.checking || uniquenessStatus.available === false}
+                      className="py-3 px-3.5 rounded-xl bg-[var(--bg-card)] hover:bg-[var(--bg-elevated)] border border-[var(--border-color)] text-teal-400 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <span>تخصيص الجامعة والصورة (خطوة 2)</span>
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               ) : (
                 /* STEP 2: University, Specialty, Study Level, and Avatar */

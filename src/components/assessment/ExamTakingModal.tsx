@@ -632,14 +632,35 @@ export default function ExamTakingModal({
       {/* 1. Focused Top Header with Pinned Per-Question Timer / Progress Bar (Never clips on scroll) */}
       <header className="bg-slate-900 border-b border-slate-800 shadow-lg shrink-0 z-20">
         <div className="px-3 py-2.5 sm:px-5 sm:py-3 flex items-center justify-between gap-2">
-          {/* Assessment Title (Given full flexible room so it doesn't truncate to a single word on mobile) */}
+          {/* Assessment Title & Progress Badge (Ergonomic, no severe truncation on small screens) */}
           <div className="flex items-center gap-2 min-w-0 flex-1">
-            <h2
-              className="text-xs sm:text-base font-extrabold text-white truncate"
-              title={assessment.titleArabic}
-            >
-              {assessment.titleArabic}
-            </h2>
+            <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border shadow-inner ${
+              assessment.assessmentType === 'competition'
+                ? 'bg-amber-500/15 border-amber-500/30 text-amber-400'
+                : 'bg-teal-500/15 border-teal-500/30 text-teal-400'
+            }`}>
+              {assessment.assessmentType === 'competition' ? (
+                <Trophy className="w-4 h-4" />
+              ) : (
+                <FileText className="w-4 h-4" />
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <h2
+                className="text-xs sm:text-sm md:text-base font-extrabold text-white truncate"
+                title={assessment.titleArabic}
+              >
+                {assessment.titleArabic}
+              </h2>
+              {isSolvingActive && questions.length > 0 && (
+                <div className="text-[10px] text-teal-400 font-mono font-bold flex items-center gap-1.5 leading-none mt-0.5">
+                  <span className="tabular-nums">سؤال {currentQuestionIndex + 1} من {questions.length}</span>
+                  {Boolean(answers[questions[currentQuestionIndex]?.id]) && (
+                    <span className="text-emerald-400 text-[10px]">● تمت الإجابة</span>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Prominent Timer + Submit Button + Close */}
@@ -729,8 +750,8 @@ export default function ExamTakingModal({
         )}
       </header>
 
-      {/* 2. Main Content Area */}
-      <main className="flex-1 overflow-y-auto p-3 sm:p-6 pb-6 max-w-6xl w-full mx-auto overscroll-contain">
+      {/* 2. Main Content Area (With generous safe bottom padding so Option D is never cramped) */}
+      <main className="flex-1 overflow-y-auto p-3 sm:p-6 pb-12 sm:pb-8 max-w-6xl w-full mx-auto overscroll-contain">
         
         {/* A) Official Result & Ranked Leaderboard Screen */}
         {result ? (
