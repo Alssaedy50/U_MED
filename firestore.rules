@@ -173,7 +173,7 @@ service cloud.firestore {
     match /studyLevels/{levelId} {
       allow read: if true;
       allow create, update: if isUniversityAdmin(request.resource.data.universityId) || isAnyAdmin();
-      allow delete: if isUniversityAdmin(resource.data.universityId);
+      allow delete: if isPlatformOwner() || isUniversityAdmin(resource.data.universityId) || isAnyAdmin();
     }
 
     match /studyPeriods/{periodId} {

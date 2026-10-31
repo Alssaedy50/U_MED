@@ -744,7 +744,7 @@ export const DAR_AL_SALAM_SEED = {
     nameEnglish: 'Bachelor of Medicine and Bachelor of Surgery',
     degree: 'bachelor' as const,
     studySystem: 'block' as StudySystem,
-    totalRegularLevels: 7,
+    totalRegularLevels: 6,
     hasInternship: true,
     internshipDurationMonths: 12,
     isActive: true,
@@ -757,10 +757,10 @@ export const DAR_AL_SALAM_SEED = {
     versionName: '2024-BLOCKS',
     isCurrent: true,
     effectiveFrom: '2024-09-01',
-    notes: 'نظام البلوكات المتكامل بـ 7 مستويات اعتيادية + سنة الامتياز',
+    notes: 'نظام البلوكات والمقررات السريرية المعتمد: 6 سنوات دراسية + سنة الامتياز (المستوى السابع)',
     createdAt: '2024-01-01T00:00:00Z',
   },
-  // 7 Regular Study Levels + Distinct Internship Stage
+  // 6 Regular Study Levels + Level 7 as Internship Stage (Total 7 Levels, No Level 8)
   studyLevels: [
     {
       id: 'lvl-1',
@@ -770,7 +770,7 @@ export const DAR_AL_SALAM_SEED = {
       order: 1,
       stageType: 'regular' as StageType,
       titleArabic: 'المستوى الأول',
-      titleEnglish: 'Level 1 (Foundation)',
+      titleEnglish: 'Level 1 (Foundation & Basic Sciences)',
       isActive: true,
     },
     {
@@ -792,7 +792,7 @@ export const DAR_AL_SALAM_SEED = {
       order: 3,
       stageType: 'regular' as StageType,
       titleArabic: 'المستوى الثالث',
-      titleEnglish: 'Level 3 (Basic Medical Sciences II)',
+      titleEnglish: 'Level 3 (System Blocks I)',
       isActive: true,
     },
     {
@@ -803,7 +803,7 @@ export const DAR_AL_SALAM_SEED = {
       order: 4,
       stageType: 'regular' as StageType,
       titleArabic: 'المستوى الرابع',
-      titleEnglish: 'Level 4 (System Blocks I)',
+      titleEnglish: 'Level 4 (System Blocks II)',
       isActive: true,
     },
     {
@@ -814,7 +814,7 @@ export const DAR_AL_SALAM_SEED = {
       order: 5,
       stageType: 'regular' as StageType,
       titleArabic: 'المستوى الخامس',
-      titleEnglish: 'Level 5 (System Blocks II & Clinical Skills)',
+      titleEnglish: 'Level 5 (Junior Clinical Clerkships)',
       isActive: true,
     },
     {
@@ -825,7 +825,7 @@ export const DAR_AL_SALAM_SEED = {
       order: 6,
       stageType: 'regular' as StageType,
       titleArabic: 'المستوى السادس',
-      titleEnglish: 'Level 6 (Junior Clinical Clerkships)',
+      titleEnglish: 'Level 6 (Senior Clinical Clerkships & Final Rotations)',
       isActive: true,
     },
     {
@@ -834,20 +834,9 @@ export const DAR_AL_SALAM_SEED = {
       programId: 'prog-mbbs',
       universityId: 'univ-dar-al-salam',
       order: 7,
-      stageType: 'regular' as StageType,
-      titleArabic: 'المستوى السابع',
-      titleEnglish: 'Level 7 (Senior Clinical Practice & Final Rotations)',
-      isActive: true,
-    },
-    {
-      id: 'lvl-internship',
-      curriculumVersionId: 'cur-dar-2024',
-      programId: 'prog-mbbs',
-      universityId: 'univ-dar-al-salam',
-      order: 8,
       stageType: 'internship' as StageType,
-      titleArabic: 'سنة الامتياز (التدريب السريري التكميلي)',
-      titleEnglish: 'Internship Year (Clinical Rotation Program)',
+      titleArabic: 'المستوى السابع - سنة الامتياز (التدريب السريري التناوبي)',
+      titleEnglish: 'Level 7 - Internship Year (Clinical Rotation Program)',
       durationMonths: 12,
       isActive: true,
     },

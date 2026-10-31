@@ -528,11 +528,13 @@ export default function StudentDashboard({
     loadStudentData(false, updatedEnr);
   };
 
-  const isInternship = activeEnrollment.currentStudyLevelId === 'lvl-internship';
+  const isInternship =
+    activeEnrollment.currentStudyLevelId === 'lvl-internship' ||
+    activeEnrollment.currentStudyLevelId === 'lvl-7';
   const currentUniversityName = userProfile?.universityNameArabic || getUniversityName(activeEnrollment.universityId);
   const currentSpecialtyArabic = userProfile?.specialtyArabic || 'الطب البشري والجراحة العامة (MBBS)';
   const currentLevelLabel = isInternship
-    ? 'سنة الامتياز السريرية'
+    ? 'المستوى السابع - سنة الامتياز'
     : `المستوى ${activeEnrollment.currentStudyLevelId.replace('lvl-', '')}`;
 
   const effectiveAssessmentTarget = localAssessmentJump || assessmentNavTarget;
@@ -561,7 +563,11 @@ export default function StudentDashboard({
             </select>
 
             <select
-              value={activeEnrollment.currentStudyLevelId}
+              value={
+                activeEnrollment.currentStudyLevelId === 'lvl-internship'
+                  ? 'lvl-7'
+                  : activeEnrollment.currentStudyLevelId
+              }
               onChange={(e) => handleQuickLevelChange(e.target.value)}
               className="px-2 py-1 rounded-lg bg-[var(--bg-input)] border border-[var(--border-color)] text-teal-400 text-[11px] font-bold focus:outline-none focus:border-teal-500 tabular-nums"
               title="تغيير المستوى الدراسي"
@@ -572,7 +578,7 @@ export default function StudentDashboard({
               <option value="lvl-4">المستوى 4</option>
               <option value="lvl-5">المستوى 5</option>
               <option value="lvl-6">المستوى 6</option>
-              <option value="lvl-internship">الامتياز</option>
+              <option value="lvl-7">المستوى 7 (الامتياز)</option>
             </select>
           </div>
         </div>
@@ -649,7 +655,11 @@ export default function StudentDashboard({
               </select>
 
               <select
-                value={activeEnrollment.currentStudyLevelId}
+                value={
+                  activeEnrollment.currentStudyLevelId === 'lvl-internship'
+                    ? 'lvl-7'
+                    : activeEnrollment.currentStudyLevelId
+                }
                 onChange={(e) => handleQuickLevelChange(e.target.value)}
                 className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-teal-400 text-xs font-bold focus:outline-none focus:border-teal-500 tabular-nums truncate"
                 title="تغيير المستوى الدراسي / الدفعة"
@@ -660,7 +670,7 @@ export default function StudentDashboard({
                 <option value="lvl-4">المستوى الرابع (Year 4)</option>
                 <option value="lvl-5">المستوى الخامس (Year 5)</option>
                 <option value="lvl-6">المستوى السادس (Year 6)</option>
-                <option value="lvl-internship">سنة الامتياز السريرية</option>
+                <option value="lvl-7">المستوى السابع - سنة الامتياز</option>
               </select>
 
               <button

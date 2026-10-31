@@ -26,6 +26,8 @@ import {
   Archive,
   Stethoscope,
   Sparkles,
+  ShieldAlert,
+  Settings2,
   X
 } from 'lucide-react';
 import {
@@ -38,6 +40,7 @@ import {
   CourseOffering,
   CourseInstructor,
   TeachingType,
+  StudySystem,
   DAR_AL_SALAM_SEED,
   UserRole
 } from '../../types/umed.ts';
@@ -55,6 +58,7 @@ import {
   fetchStudyLevels,
   saveStudyLevel,
   toggleStudyLevelActive,
+  deleteStudyLevel,
   fetchActiveStudyPeriods,
   fetchArchivedStudyPeriods,
   saveStudyPeriod,
@@ -144,6 +148,43 @@ export default function AcademicStructureManager({
   const [instructorTeachingType, setInstructorTeachingType] = useState<TeachingType>('both');
   const [instructorSpecialization, setInstructorSpecialization] = useState<string>('');
 
+  // Level Add / Edit State
+  const [showLevelModal, setShowLevelModal] = useState<boolean>(false);
+  const [editingLevel, setEditingLevel] = useState<StudyLevel | null>(null);
+  const [levelTitleAr, setLevelTitleAr] = useState<string>('');
+  const [levelTitleEn, setLevelTitleEn] = useState<string>('');
+  const [levelOrder, setLevelOrder] = useState<number>(1);
+  const [levelStageType, setLevelStageType] = useState<'regular' | 'internship'>('regular');
+  const [levelDurationMonths, setLevelDurationMonths] = useState<number>(12);
+  const [savingLevel, setSavingLevel] = useState<boolean>(false);
+
+  // Level Deletion Modal State
+  const [levelPendingDelete, setLevelPendingDelete] = useState<StudyLevel | null>(null);
+  const [levelDeleteDeps, setLevelDeleteDeps] = useState<{
+    canDelete: boolean;
+    reason?: string;
+    dependentCount: number;
+  } | null>(null);
+  const [deletingLevelLoading, setDeletingLevelLoading] = useState<boolean>(false);
+
+  // University Edit State
+  const [showEditUnivModal, setShowEditUnivModal] = useState<boolean>(false);
+  const [editUnivNameAr, setEditUnivNameAr] = useState<string>('');
+  const [editUnivNameEn, setEditUnivNameEn] = useState<string>('');
+  const [editUnivCityAr, setEditUnivCityAr] = useState<string>('');
+  const [editUnivType, setEditUnivType] = useState<'public' | 'private'>('private');
+  const [editUnivPolicy, setEditUnivPolicy] = useState<'immediate' | 'approval_required'>('immediate');
+  const [savingUniv, setSavingUniv] = useState<boolean>(false);
+
+  // College & Program Edit State
+  const [showEditColProgModal, setShowEditColProgModal] = useState<boolean>(false);
+  const [editColNameAr, setEditColNameAr] = useState<string>('');
+  const [editColNameEn, setEditColNameEn] = useState<string>('');
+  const [editProgNameAr, setEditProgNameAr] = useState<string>('');
+  const [editProgNameEn, setEditProgNameEn] = useState<string>('');
+  const [editProgSystem, setEditProgSystem] = useState<StudySystem>('block');
+  const [savingColProg, setSavingColProg] = useState<boolean>(false);
+
   const showToast = (type: 'success' | 'error', message: string) => {
     setFeedback({ type, message });
     window.setTimeout(() => setFeedback(null), 4500);
@@ -180,7 +221,7 @@ export default function AcademicStructureManager({
       const curVers = activeProgId ? await fetchCurriculumVersions(activeProgId) : [];
       setCurriculumVersions(curVers);
 
-      const lvls = await fetchStudyLevels(activeProgId || undefined);
+      const lvls = await fetchStudyLevels(activeProgId || undefined, activeUnivId);
       const sortedLvls = [...lvls].sort((a, b) => a.order - b.order);
       setStudyLevels(sortedLvls);
       if (sortedLvls.length > 0 && !sortedLvls.some((l) => l.id === selectedLevelId)) {
@@ -239,7 +280,7 @@ export default function AcademicStructureManager({
     }
   }, [selectedUnivId, selectedLevelId, loadLevelDetails]);
 
-  // 1. Integrated University Auto-Provisioning (University + College + MBBS Program + Curriculum + 8 Study Levels)
+  // 1. Integrated University Auto-Provisioning (University + College + MBBS Program + Curriculum + 7 Study Levels)
   const handleCreateIntegratedUniversity = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newUnivNameAr.trim()) return;
@@ -288,7 +329,7 @@ export default function AcademicStructureManager({
         nameEnglish: 'Bachelor of Medicine, Bachelor of Surgery (MBBS)',
         degree: 'bachelor',
         studySystem: 'block',
-        totalRegularLevels: 7,
+        totalRegularLevels: 6,
         hasInternship: true,
         internshipDurationMonths: 12,
         isActive: true,
@@ -310,11 +351,11 @@ export default function AcademicStructureManager({
       await saveProgram(newProg);
       await saveCurriculumVersion(newCurVer);
 
-      // Provision the 8 standard study levels (lvl-1 to lvl-internship)
+      // Provision the 7 standard medical study levels (lvl-1 to lvl-6 regular, lvl-7 internship)
       for (const seedLvl of DAR_AL_SALAM_SEED.studyLevels) {
         const levelRecord: StudyLevel = {
           ...seedLvl,
-          id: seedLvl.id,
+          id: `lvl-${univId}-${seedLvl.order}`,
           universityId: univId,
           programId: progId,
           curriculumVersionId: curVerId,
@@ -328,13 +369,205 @@ export default function AcademicStructureManager({
       setNewUnivNameEn('');
       showToast(
         'success',
-        `تم إنشاء "${newUniv.nameArabic}" وتوليد كلية الطب البشري والبرنامج العام والمستويات الثمانية (lvl-1 إلى الامتياز) تلقائياً.`
+        `تم إنشاء "${newUniv.nameArabic}" وتوليد كلية الطب البشري والبرنامج العام والمستويات الأكاديمية السبعة (المستويات 1-6 وسنة الامتياز كمستوى سابع) تلقائياً.`
       );
       await loadMasterHierarchy(univId);
     } catch (err: any) {
       showToast('error', err?.message || 'حدث خطأ أثناء إنشاء الجامعة المتكاملة.');
     } finally {
       setCreatingUniv(false);
+    }
+  };
+
+  const handleOpenEditUnivModal = (u: University) => {
+    setEditUnivNameAr(u.nameArabic);
+    setEditUnivNameEn(u.nameEnglish || '');
+    setEditUnivCityAr(u.cityArabic || 'صنعاء');
+    setEditUnivType(u.type || 'private');
+    setEditUnivPolicy(u.enrollmentPolicy || 'immediate');
+    setShowEditUnivModal(true);
+  };
+
+  const handleSaveEditUniv = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editUnivNameAr.trim() || !selectedUnivId) return;
+    setSavingUniv(true);
+    try {
+      const targetUniv = universities.find((u) => u.id === selectedUnivId);
+      if (!targetUniv) return;
+      const updated: University = {
+        ...targetUniv,
+        nameArabic: editUnivNameAr.trim(),
+        nameEnglish: editUnivNameEn.trim() || editUnivNameAr.trim(),
+        cityArabic: editUnivCityAr.trim() || 'صنعاء',
+        type: editUnivType,
+        enrollmentPolicy: editUnivPolicy,
+        updatedAt: new Date().toISOString()
+      };
+      await saveUniversity(updated);
+      setShowEditUnivModal(false);
+      showToast('success', `تم تحديث بيانات الجامعة "${updated.nameArabic}" بنجاح.`);
+      await loadMasterHierarchy(selectedUnivId);
+    } catch (err: any) {
+      showToast('error', err?.message || 'تعذر تحديث بيانات الجامعة.');
+    } finally {
+      setSavingUniv(false);
+    }
+  };
+
+  const handleOpenEditColProgModal = () => {
+    const col = colleges.find((c) => c.id === selectedCollegeId) || colleges[0];
+    const prog = programs.find((p) => p.id === selectedProgramId) || programs[0];
+    setEditColNameAr(col?.nameArabic || 'كلية الطب البشري');
+    setEditColNameEn(col?.nameEnglish || 'College of Human Medicine');
+    setEditProgNameAr(prog?.nameArabic || 'بكالوريوس الطب والجراحة العامة');
+    setEditProgNameEn(prog?.nameEnglish || 'Bachelor of Medicine, Bachelor of Surgery (MBBS)');
+    setEditProgSystem(prog?.studySystem || 'block');
+    setShowEditColProgModal(true);
+  };
+
+  const handleSaveEditColProg = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editColNameAr.trim() || !editProgNameAr.trim() || !selectedUnivId) return;
+    setSavingColProg(true);
+    try {
+      const col = colleges.find((c) => c.id === selectedCollegeId) || colleges[0];
+      const prog = programs.find((p) => p.id === selectedProgramId) || programs[0];
+      if (col) {
+        await saveCollege({
+          ...col,
+          nameArabic: editColNameAr.trim(),
+          nameEnglish: editColNameEn.trim() || editColNameAr.trim()
+        });
+      }
+      if (prog) {
+        await saveProgram({
+          ...prog,
+          nameArabic: editProgNameAr.trim(),
+          nameEnglish: editProgNameEn.trim() || editProgNameAr.trim(),
+          studySystem: editProgSystem,
+          totalRegularLevels: 6,
+          hasInternship: true,
+          internshipDurationMonths: 12
+        });
+      }
+      setShowEditColProgModal(false);
+      showToast('success', 'تم تحديث بيانات الكلية والبرنامج الأكاديمي بنجاح.');
+      await loadMasterHierarchy(selectedUnivId);
+    } catch (err: any) {
+      showToast('error', err?.message || 'تعذر تحديث بيانات الكلية والبرنامج.');
+    } finally {
+      setSavingColProg(false);
+    }
+  };
+
+  // 2. Study Level Management Handlers (Add, Edit, Delete with cascade/safeguards)
+  const handleOpenAddLevelModal = () => {
+    setEditingLevel(null);
+    const existingOrders = studyLevels.map((l) => l.order || 0);
+    const nextOrder = existingOrders.length > 0 ? Math.max(...existingOrders) + 1 : 1;
+    const isInternship = nextOrder >= 7;
+    setLevelOrder(nextOrder <= 7 ? nextOrder : nextOrder);
+    setLevelStageType(isInternship ? 'internship' : 'regular');
+    setLevelTitleAr(
+      isInternship
+        ? 'المستوى السابع - سنة الامتياز (التدريب السريري التناوبي)'
+        : `المستوى ${nextOrder}`
+    );
+    setLevelTitleEn(
+      isInternship
+        ? 'Level 7 - Internship Year (Clinical Rotations)'
+        : `Level ${nextOrder}`
+    );
+    setLevelDurationMonths(12);
+    setShowLevelModal(true);
+  };
+
+  const handleOpenEditLevelModal = (lvl: StudyLevel) => {
+    setEditingLevel(lvl);
+    setLevelOrder(lvl.order || 1);
+    setLevelStageType(lvl.stageType || (lvl.order === 7 ? 'internship' : 'regular'));
+    setLevelTitleAr(lvl.titleArabic);
+    setLevelTitleEn(lvl.titleEnglish || '');
+    setLevelDurationMonths(lvl.durationMonths || 12);
+    setShowLevelModal(true);
+  };
+
+  const handleSaveLevel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!levelTitleAr.trim() || !selectedUnivId) return;
+    setSavingLevel(true);
+    try {
+      const curVerId = curriculumVersions[0]?.id || `cur-${selectedUnivId}-2024`;
+      const progId = selectedProgramId || `prog-mbbs-${selectedUnivId}`;
+      const levelId =
+        editingLevel?.id ||
+        (selectedUnivId === 'univ-dar-al-salam' && levelOrder <= 7
+          ? `lvl-${levelOrder}`
+          : `lvl-${selectedUnivId}-${levelOrder}-${Date.now().toString(36)}`);
+
+      const levelRecord: StudyLevel = {
+        id: levelId,
+        universityId: selectedUnivId,
+        programId: progId,
+        curriculumVersionId: curVerId,
+        order: Number(levelOrder) || 1,
+        stageType: levelStageType,
+        titleArabic: levelTitleAr.trim(),
+        titleEnglish: levelTitleEn.trim() || levelTitleAr.trim(),
+        durationMonths:
+          levelStageType === 'internship' ? Number(levelDurationMonths) || 12 : undefined,
+        isActive: editingLevel ? editingLevel.isActive : true
+      };
+
+      await saveStudyLevel(levelRecord);
+      setShowLevelModal(false);
+      setEditingLevel(null);
+      showToast('success', `تم حفظ المستوى "${levelRecord.titleArabic}" بنجاح.`);
+      await loadMasterHierarchy(selectedUnivId);
+      setSelectedLevelId(levelRecord.id);
+    } catch (err: any) {
+      showToast('error', err?.message || 'تعذر حفظ بيانات المستوى الدراسي.');
+    } finally {
+      setSavingLevel(false);
+    }
+  };
+
+  const handleInitiateDeleteLevel = async (lvl: StudyLevel) => {
+    setLevelPendingDelete(lvl);
+    setDeletingLevelLoading(true);
+    try {
+      const deps = await checkEntityDependencies('level', lvl.id);
+      setLevelDeleteDeps(deps);
+    } catch {
+      setLevelDeleteDeps({ canDelete: true, dependentCount: 0 });
+    } finally {
+      setDeletingLevelLoading(false);
+    }
+  };
+
+  const handleConfirmDeleteLevel = async (forceCascade: boolean) => {
+    if (!levelPendingDelete) return;
+    setDeletingLevelLoading(true);
+    try {
+      await deleteStudyLevel(levelPendingDelete.id, forceCascade);
+      showToast(
+        'success',
+        forceCascade
+          ? `تم حذف المستوى "${levelPendingDelete.titleArabic}" وكافة البلوكات والمقررات التابعة له نهائياً.`
+          : `تم حذف المستوى "${levelPendingDelete.titleArabic}" بنجاح.`
+      );
+      const remaining = studyLevels.filter((l) => l.id !== levelPendingDelete.id);
+      if (selectedLevelId === levelPendingDelete.id && remaining.length > 0) {
+        setSelectedLevelId(remaining[0].id);
+      }
+      setLevelPendingDelete(null);
+      setLevelDeleteDeps(null);
+      await loadMasterHierarchy(selectedUnivId);
+    } catch (err: any) {
+      showToast('error', err?.message || 'تعذر حذف المستوى الدراسي.');
+    } finally {
+      setDeletingLevelLoading(false);
     }
   };
 
@@ -577,20 +810,30 @@ export default function AcademicStructureManager({
             </select>
 
             {currentUniversity && isOwner && (
-              <div className="flex items-center justify-between pt-1 text-[11px]">
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await toggleUniversityActive(
-                      currentUniversity.id,
-                      currentUniversity.isActive
-                    );
-                    await loadMasterHierarchy(currentUniversity.id);
-                  }}
-                  className="text-teal-400 hover:underline font-semibold"
-                >
-                  {currentUniversity.isActive ? 'تعطيل الجامعة مؤقتاً' : 'تفعيل الجامعة'}
-                </button>
+              <div className="flex items-center justify-between pt-1 text-[11px] flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleOpenEditUnivModal(currentUniversity)}
+                    className="text-teal-400 hover:underline font-semibold flex items-center gap-1"
+                  >
+                    <Edit2 className="w-3 h-3" />
+                    <span>تعديل الجامعة</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await toggleUniversityActive(
+                        currentUniversity.id,
+                        currentUniversity.isActive
+                      );
+                      await loadMasterHierarchy(currentUniversity.id);
+                    }}
+                    className="text-[var(--text-muted)] hover:underline font-semibold"
+                  >
+                    {currentUniversity.isActive ? 'تعطيل مؤقت' : 'تفعيل'}
+                  </button>
+                </div>
                 {currentUniversity.id !== 'univ-dar-al-salam' && (
                   <button
                     type="button"
@@ -619,6 +862,18 @@ export default function AcademicStructureManager({
                 {currentProgram?.nameArabic || 'بكالوريوس الطب والجراحة العامة'}
               </span>
             </div>
+            {isOwner && (
+              <div className="pt-1.5 border-t border-[var(--border-color)] flex justify-end">
+                <button
+                  type="button"
+                  onClick={handleOpenEditColProgModal}
+                  className="text-[11px] text-teal-400 hover:underline font-semibold flex items-center gap-1"
+                >
+                  <Edit2 className="w-3 h-3" />
+                  <span>تعديل مسميات الكلية والبرنامج</span>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* 3. Study Levels Tree List */}
@@ -627,10 +882,21 @@ export default function AcademicStructureManager({
               <label className="text-xs font-bold text-[var(--text-secondary)]">
                 2. المستويات الدراسية والدفعات ({studyLevels.length}):
               </label>
+              {isOwner && (
+                <button
+                  type="button"
+                  onClick={handleOpenAddLevelModal}
+                  className="px-2.5 py-1 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-[10px] font-bold flex items-center gap-1 shadow-sm transition"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span>إضافة مستوى</span>
+                </button>
+              )}
             </div>
-            <div className="space-y-1.5 max-h-[380px] overflow-y-auto pr-0.5">
+            <div className="space-y-1.5 max-h-[420px] overflow-y-auto pr-0.5">
               {studyLevels.map((lvl) => {
                 const isSelected = lvl.id === selectedLevelId;
+                const isIntern = lvl.stageType === 'internship' || lvl.order === 7;
                 return (
                   <div
                     key={lvl.id}
@@ -646,6 +912,8 @@ export default function AcademicStructureManager({
                         className={`w-6 h-6 rounded-lg text-[11px] font-mono font-bold flex items-center justify-center shrink-0 ${
                           isSelected
                             ? 'bg-white/20 text-white'
+                            : isIntern
+                            ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
                             : 'bg-teal-500/15 text-teal-400'
                         }`}
                       >
@@ -658,7 +926,7 @@ export default function AcademicStructureManager({
                             isSelected ? 'text-teal-100' : 'text-[var(--text-muted)]'
                           }`}
                         >
-                          {lvl.stageType === 'internship'
+                          {isIntern
                             ? 'سنة الامتياز السريري'
                             : lvl.order <= 3
                             ? 'المرحلة الأساسية'
@@ -667,23 +935,60 @@ export default function AcademicStructureManager({
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={async (ev) => {
-                        ev.stopPropagation();
-                        await toggleStudyLevelActive(lvl.id, lvl.isActive);
-                        await loadMasterHierarchy(selectedUnivId);
-                      }}
-                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        lvl.isActive
-                          ? isSelected
-                            ? 'bg-white/20 text-white'
-                            : 'bg-emerald-500/15 text-emerald-400'
-                          : 'bg-rose-500/20 text-rose-300'
-                      }`}
-                    >
-                      {lvl.isActive ? 'مفعل' : 'معطل'}
-                    </button>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {isOwner && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              handleOpenEditLevelModal(lvl);
+                            }}
+                            className={`p-1.5 rounded-lg transition ${
+                              isSelected
+                                ? 'bg-white/20 hover:bg-white/30 text-white'
+                                : 'bg-[var(--bg-card)] hover:bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:text-teal-400'
+                            }`}
+                            title="تعديل هذا المستوى"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              handleInitiateDeleteLevel(lvl);
+                            }}
+                            className={`p-1.5 rounded-lg transition ${
+                              isSelected
+                                ? 'bg-rose-500/30 hover:bg-rose-500/50 text-white'
+                                : 'bg-[var(--bg-card)] hover:bg-rose-500/20 text-rose-400'
+                            }`}
+                            title="حذف هذا المستوى"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        onClick={async (ev) => {
+                          ev.stopPropagation();
+                          await toggleStudyLevelActive(lvl.id, lvl.isActive);
+                          await loadMasterHierarchy(selectedUnivId);
+                        }}
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          lvl.isActive
+                            ? isSelected
+                              ? 'bg-white/20 text-white'
+                              : 'bg-emerald-500/15 text-emerald-400'
+                            : 'bg-rose-500/20 text-rose-300'
+                        }`}
+                        title={lvl.isActive ? 'تعطيل المستوى' : 'تفعيل المستوى'}
+                      >
+                        {lvl.isActive ? 'مفعل' : 'معطل'}
+                      </button>
+                    </div>
                   </div>
                 );
               })}
@@ -734,9 +1039,31 @@ export default function AcademicStructureManager({
               </button>
             </div>
 
-            <span className="text-xs font-bold text-teal-400">
-              {currentLevel?.titleArabic} — {currentUniversity?.nameArabic}
-            </span>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-bold text-teal-400">
+                {currentLevel?.titleArabic} — {currentUniversity?.nameArabic}
+              </span>
+              {isOwner && currentLevel && (
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleOpenEditLevelModal(currentLevel)}
+                    className="px-2 py-1 rounded-lg bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] border border-[var(--border-color)] text-[var(--text-secondary)] text-[11px] font-bold flex items-center gap-1 transition"
+                  >
+                    <Edit2 className="w-3 h-3 text-teal-400" />
+                    <span>تعديل هذا المستوى</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleInitiateDeleteLevel(currentLevel)}
+                    className="px-2 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-400 text-[11px] font-bold flex items-center gap-1 transition"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    <span>حذف المستوى</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* TAB 1: STUDY PERIODS / BLOCKS */}
@@ -1280,14 +1607,521 @@ export default function AcademicStructureManager({
               <button
                 type="submit"
                 disabled={creatingUniv}
-                className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5"
+                className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md"
               >
                 {creatingUniv ? (
                   <RefreshCw className="w-4 h-4 animate-spin" />
                 ) : (
                   <CheckCircle2 className="w-4 h-4" />
                 )}
-                <span>إنشاء الجامعة وتجهيز المستويات الثمانية</span>
+                <span>إنشاء الجامعة وتجهيز المستويات الأكاديمية المعتمدة (7 مستويات)</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Add / Edit Study Level Modal */}
+      {showLevelModal && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4"
+          dir="rtl"
+        >
+          <form
+            onSubmit={handleSaveLevel}
+            className="bg-[var(--bg-card)] border border-teal-500/40 rounded-2xl p-5 sm:p-6 max-w-lg w-full space-y-4 shadow-2xl"
+          >
+            <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-400">
+                  <GraduationCap className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-extrabold text-[var(--text-primary)]">
+                    {editingLevel ? 'تعديل بيانات المستوى الدراسي' : 'إضافة مستوى دراسي جديد'}
+                  </h3>
+                  <p className="text-[11px] text-[var(--text-muted)]">
+                    {currentUniversity?.nameArabic} — {currentCollege?.nameArabic}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowLevelModal(false);
+                  setEditingLevel(null);
+                }}
+                className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block font-bold text-[var(--text-secondary)] mb-1">
+                  اسم المستوى بالعربية *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={levelTitleAr}
+                  onChange={(e) => setLevelTitleAr(e.target.value)}
+                  placeholder="مثال: المستوى السابع - سنة الامتياز (تدريب سريري)"
+                  className="w-full px-3 py-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-[var(--text-secondary)] mb-1">
+                  اسم المستوى بالإنجليزية (اختياري)
+                </label>
+                <input
+                  type="text"
+                  value={levelTitleEn}
+                  onChange={(e) => setLevelTitleEn(e.target.value)}
+                  placeholder="Level 7 - Internship Year"
+                  dir="ltr"
+                  className="w-full px-3 py-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)]"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-[var(--text-secondary)] mb-1">
+                    ترتيب المستوى (الرقم الأكاديمي) *
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="10"
+                    required
+                    value={levelOrder}
+                    onChange={(e) => {
+                      const num = Number(e.target.value) || 1;
+                      setLevelOrder(num);
+                      if (num === 7) {
+                        setLevelStageType('internship');
+                      }
+                    }}
+                    className="w-full px-3 py-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono"
+                  />
+                  <span className="text-[10px] text-[var(--text-muted)] mt-0.5 block">
+                    كليات الطب في اليمن: المستويات 1-6 اعتيادية، والمستوى 7 هو سنة الامتياز
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-[var(--text-secondary)] mb-1">
+                    نوع المرحلة الدراسية *
+                  </label>
+                  <select
+                    value={levelStageType}
+                    onChange={(e) => {
+                      const val = e.target.value as 'regular' | 'internship';
+                      setLevelStageType(val);
+                      if (val === 'internship' && !levelTitleAr.includes('امتياز')) {
+                        setLevelTitleAr('المستوى السابع - سنة الامتياز (التدريب السريري)');
+                      }
+                    }}
+                    className="w-full px-3 py-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)]"
+                  >
+                    <option value="regular">دراسة منتظمة (سنوات أكاديمية وسريرية)</option>
+                    <option value="internship">سنة الامتياز السريري (Internship Rotation)</option>
+                  </select>
+                </div>
+              </div>
+
+              {levelStageType === 'internship' && (
+                <div>
+                  <label className="block font-bold text-[var(--text-secondary)] mb-1">
+                    مدة التدريب السريري لسنة الامتياز (بالأشهر)
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="24"
+                    value={levelDurationMonths}
+                    onChange={(e) => setLevelDurationMonths(Number(e.target.value) || 12)}
+                    className="w-full px-3 py-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] font-mono"
+                  />
+                  <span className="text-[10px] text-[var(--text-muted)] mt-0.5 block">
+                    المدة المعتمدة لسنة الامتياز الطبي في اليمن: 12 شهراً
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="pt-3 border-t border-[var(--border-color)] flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowLevelModal(false);
+                  setEditingLevel(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-[var(--bg-input)] text-[var(--text-secondary)] text-xs font-bold"
+              >
+                إلغاء
+              </button>
+              <button
+                type="submit"
+                disabled={savingLevel}
+                className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md"
+              >
+                {savingLevel ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="w-4 h-4" />
+                )}
+                <span>{editingLevel ? 'حفظ تعديلات المستوى' : 'إضافة المستوى'}</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Delete Study Level Confirmation Modal */}
+      {levelPendingDelete && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4"
+          dir="rtl"
+        >
+          <div className="bg-[var(--bg-card)] border border-rose-500/40 rounded-2xl p-5 sm:p-6 max-w-md w-full space-y-4 shadow-2xl">
+            <div className="flex items-center gap-3 text-rose-400">
+              <div className="w-10 h-10 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center shrink-0">
+                <ShieldAlert className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-extrabold text-[var(--text-primary)]">
+                  تأكيد حذف المستوى الدراسي
+                </h3>
+                <p className="text-xs text-rose-400 font-semibold">
+                  {levelPendingDelete.titleArabic} (الترتيب: {levelPendingDelete.order})
+                </p>
+              </div>
+            </div>
+
+            {deletingLevelLoading && !levelDeleteDeps ? (
+              <div className="py-4 text-center text-xs text-[var(--text-muted)] flex items-center justify-center gap-2">
+                <RefreshCw className="w-4 h-4 animate-spin text-teal-400" />
+                <span>جارٍ فحص الارتباطات الأكاديمية للمستوى...</span>
+              </div>
+            ) : levelDeleteDeps && !levelDeleteDeps.canDelete ? (
+              <div className="space-y-3 text-xs">
+                <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 leading-relaxed">
+                  {levelDeleteDeps.reason}
+                </div>
+                <p className="text-[11px] text-[var(--text-muted)]">
+                  يمكنك إما إلغاء الحذف وتعطيل المستوى للحفاظ على السجلات، أو المتابعة بـ "الحذف النهائي المتسلسل" لإزالة المستوى وجميع البلوكات والمقررات التابعة له.
+                </p>
+              </div>
+            ) : (
+              <p className="text-xs text-[var(--text-muted)] leading-relaxed">
+                هل أنت متأكد من رغبتك في حذف هذا المستوى الدراسي نهائياً من الهيكل الأكاديمي للجامعة؟ لن يمكن التراجع عن هذا الإجراء.
+              </p>
+            )}
+
+            <div className="pt-3 border-t border-[var(--border-color)] flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={deletingLevelLoading}
+                onClick={() => {
+                  setLevelPendingDelete(null);
+                  setLevelDeleteDeps(null);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-[var(--bg-input)] text-[var(--text-secondary)] text-xs font-bold"
+              >
+                إلغاء
+              </button>
+
+              {levelDeleteDeps && !levelDeleteDeps.canDelete ? (
+                <>
+                  <button
+                    type="button"
+                    disabled={deletingLevelLoading}
+                    onClick={async () => {
+                      await toggleStudyLevelActive(levelPendingDelete.id, true);
+                      setLevelPendingDelete(null);
+                      setLevelDeleteDeps(null);
+                      await loadMasterHierarchy(selectedUnivId);
+                      showToast('success', `تم تعطيل المستوى "${levelPendingDelete.titleArabic}" بنجاح.`);
+                    }}
+                    className="px-3 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold"
+                  >
+                    تعطيل المستوى فقط (آمن)
+                  </button>
+                  <button
+                    type="button"
+                    disabled={deletingLevelLoading}
+                    onClick={() => handleConfirmDeleteLevel(true)}
+                    className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1 shadow-md"
+                  >
+                    {deletingLevelLoading ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-3.5 h-3.5" />
+                    )}
+                    <span>حذف متسلسل شامل (نهائي)</span>
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  disabled={deletingLevelLoading}
+                  onClick={() => handleConfirmDeleteLevel(false)}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1 shadow-md"
+                >
+                  {deletingLevelLoading ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-3.5 h-3.5" />
+                  )}
+                  <span>تأكيد حذف المستوى</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit University Information Modal */}
+      {showEditUnivModal && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4"
+          dir="rtl"
+        >
+          <form
+            onSubmit={handleSaveEditUniv}
+            className="bg-[var(--bg-card)] border border-teal-500/40 rounded-2xl p-5 sm:p-6 max-w-lg w-full space-y-4 shadow-2xl"
+          >
+            <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-400">
+                  <Building2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-extrabold text-[var(--text-primary)]">
+                    تعديل بيانات الجامعة
+                  </h3>
+                  <p className="text-[11px] text-[var(--text-muted)]">
+                    تعديل المسمى العربي والإنجليزي والمحافظة ونوع الجامعة
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowEditUnivModal(false)}
+                className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block font-bold text-[var(--text-secondary)] mb-1">
+                  اسم الجامعة بالعربية *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editUnivNameAr}
+                  onChange={(e) => setEditUnivNameAr(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)]"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-[var(--text-secondary)] mb-1">
+                    الاسم بالإنجليزية
+                  </label>
+                  <input
+                    type="text"
+                    value={editUnivNameEn}
+                    onChange={(e) => setEditUnivNameEn(e.target.value)}
+                    dir="ltr"
+                    className="w-full px-3 py-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)]"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-[var(--text-secondary)] mb-1">
+                    المدينة / المحافظة
+                  </label>
+                  <input
+                    type="text"
+                    value={editUnivCityAr}
+                    onChange={(e) => setEditUnivCityAr(e.target.value)}
+                    className="w-full px-3 py-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)]"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-[var(--text-secondary)] mb-1">
+                    نوع الجامعة
+                  </label>
+                  <select
+                    value={editUnivType}
+                    onChange={(e) => setEditUnivType(e.target.value as 'public' | 'private')}
+                    className="w-full px-3 py-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)]"
+                  >
+                    <option value="public">حكومية (Public)</option>
+                    <option value="private">أهلية / خاصة (Private)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-bold text-[var(--text-secondary)] mb-1">
+                    سياسة القبول والتسجيل
+                  </label>
+                  <select
+                    value={editUnivPolicy}
+                    onChange={(e) =>
+                      setEditUnivPolicy(e.target.value as 'immediate' | 'approval_required')
+                    }
+                    className="w-full px-3 py-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)]"
+                  >
+                    <option value="immediate">تفعيل فوري للطلاب</option>
+                    <option value="approval_required">يتطلب مراجعة واعتماد المشرف</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-3 border-t border-[var(--border-color)] flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowEditUnivModal(false)}
+                className="px-4 py-2 rounded-xl bg-[var(--bg-input)] text-[var(--text-secondary)] text-xs font-bold"
+              >
+                إلغاء
+              </button>
+              <button
+                type="submit"
+                disabled={savingUniv}
+                className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md"
+              >
+                {savingUniv ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="w-4 h-4" />
+                )}
+                <span>حفظ بيانات الجامعة</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Edit College & Program Modal */}
+      {showEditColProgModal && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4"
+          dir="rtl"
+        >
+          <form
+            onSubmit={handleSaveEditColProg}
+            className="bg-[var(--bg-card)] border border-teal-500/40 rounded-2xl p-5 sm:p-6 max-w-lg w-full space-y-4 shadow-2xl"
+          >
+            <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-400">
+                  <Settings2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-extrabold text-[var(--text-primary)]">
+                    تعديل بيانات الكلية والبرنامج الأكاديمي
+                  </h3>
+                  <p className="text-[11px] text-[var(--text-muted)]">
+                    تخصيص مسمى الكلية والدرجة العلمية ونظام الدراسة
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowEditColProgModal(false)}
+                className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block font-bold text-[var(--text-secondary)] mb-1">
+                  اسم الكلية بالعربية *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editColNameAr}
+                  onChange={(e) => setEditColNameAr(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-[var(--text-secondary)] mb-1">
+                  اسم الكلية بالإنجليزية
+                </label>
+                <input
+                  type="text"
+                  value={editColNameEn}
+                  onChange={(e) => setEditColNameEn(e.target.value)}
+                  dir="ltr"
+                  className="w-full px-3 py-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-[var(--text-secondary)] mb-1">
+                  اسم البرنامج الأكاديمي بالعربية *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editProgNameAr}
+                  onChange={(e) => setEditProgNameAr(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-[var(--text-secondary)] mb-1">
+                  نظام الدراسة المعتمد
+                </label>
+                <select
+                  value={editProgSystem}
+                  onChange={(e) => setEditProgSystem(e.target.value as StudySystem)}
+                  className="w-full px-3 py-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)]"
+                >
+                  <option value="block">نظام البلوكات الطبية المتكاملة (Integrated System Blocks)</option>
+                  <option value="semester">نظام الفصول الدراسية (Semesters)</option>
+                  <option value="traditional">نظام السنوات التقليدية (Traditional Annual)</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="pt-3 border-t border-[var(--border-color)] flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowEditColProgModal(false)}
+                className="px-4 py-2 rounded-xl bg-[var(--bg-input)] text-[var(--text-secondary)] text-xs font-bold"
+              >
+                إلغاء
+              </button>
+              <button
+                type="submit"
+                disabled={savingColProg}
+                className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md"
+              >
+                {savingColProg ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="w-4 h-4" />
+                )}
+                <span>حفظ بيانات الكلية والبرنامج</span>
               </button>
             </div>
           </form>

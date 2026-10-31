@@ -90,7 +90,7 @@ const inFlightFetches: Partial<Record<CollectionKey, Promise<any[]>>> = {};
 const hierarchyListeners = new Set<() => void>();
 let realtimeWatchersStarted = false;
 
-// One-time cleanup of legacy uncreated seed data from browser localStorage
+// One-time cleanup of legacy uncreated seed data and phantom Level 8 from browser localStorage
 if (typeof window !== 'undefined') {
   try {
     const PURGE_FLAG = 'umed_purged_uncreated_seed_v3';
@@ -106,6 +106,34 @@ if (typeof window !== 'undefined') {
         }
       });
       localStorage.setItem(PURGE_FLAG, 'true');
+    }
+
+    const LEVEL8_PURGE_FLAG = 'umed_purged_level8_v2';
+    if (localStorage.getItem(LEVEL8_PURGE_FLAG) !== 'true') {
+      const raw = localStorage.getItem(STORAGE_KEYS.studyLevels);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          // Remove any level with order > 7 and ensure Level 7 is stageType internship
+          const cleaned = parsed
+            .filter((lvl: any) => lvl && lvl.order <= 7 && lvl.id !== 'lvl-internship')
+            .map((lvl: any) => {
+              if (lvl.order === 7 || lvl.id === 'lvl-7') {
+                return {
+                  ...lvl,
+                  order: 7,
+                  stageType: 'internship',
+                  titleArabic: 'المستوى السابع - سنة الامتياز (التدريب السريري التناوبي)',
+                  titleEnglish: 'Level 7 - Internship Year (Clinical Rotation Program)',
+                  durationMonths: 12
+                };
+              }
+              return lvl;
+            });
+          localStorage.setItem(STORAGE_KEYS.studyLevels, JSON.stringify(cleaned));
+        }
+      }
+      localStorage.setItem(LEVEL8_PURGE_FLAG, 'true');
     }
   } catch (e) {}
 }
@@ -653,16 +681,44 @@ export async function saveCurriculumVersion(curriculum: CurriculumVersion): Prom
 // 6. Study Levels & Internship Stage
 // ---------------------------------------------------------------------------
 
-export async function fetchStudyLevels(programId?: string): Promise<StudyLevel[]> {
+export async function fetchStudyLevels(programId?: string, universityId?: string): Promise<StudyLevel[]> {
   const list = await fetchHybridCollection<StudyLevel>(
     'studyLevels',
     'studyLevels',
-    (l) => !programId || l.programId === programId || programId.startsWith('prog-mbbs')
+    (l) => {
+      if (universityId && l.universityId && l.universityId !== universityId) return false;
+      if (programId && l.programId && l.programId !== programId) return false;
+      return true;
+    }
   );
-  return [...list].sort((a, b) => (a.order || 0) - (b.order || 0));
+
+  // Auto-deduplicate and filter out phantom Level 8 or legacy order > 7
+  const cleaned: StudyLevel[] = [];
+  const seenIds = new Set<string>();
+
+  for (const lvl of list) {
+    if (!lvl || !lvl.id || seenIds.has(lvl.id)) continue;
+    // Normalize Level 7 / Internship stage
+    if (lvl.order === 7 || lvl.id === 'lvl-7') {
+      lvl.order = 7;
+      lvl.stageType = 'internship';
+      if (!lvl.titleArabic || lvl.titleArabic === 'المستوى السابع') {
+        lvl.titleArabic = 'المستوى السابع - سنة الامتياز (التدريب السريري التناوبي)';
+      }
+    } else if (lvl.order > 7) {
+      // Skip legacy phantom 8th level
+      continue;
+    }
+    seenIds.add(lvl.id);
+    cleaned.push(lvl);
+  }
+
+  return cleaned.sort((a, b) => (a.order || 0) - (b.order || 0));
 }
 
 export async function saveStudyLevel(level: StudyLevel): Promise<void> {
+  // Ensure unmark deleted if re-saving
+  unmarkIdDeleted(level.id);
   await upsertHybridItem<StudyLevel>('studyLevels', 'studyLevels', level);
 }
 
@@ -685,9 +741,15 @@ export async function toggleStudyLevelActive(levelId: string, currentStatus: boo
 
 export async function deleteStudyLevel(levelId: string, forceCascade: boolean = false): Promise<void> {
   if (forceCascade) {
-    const periods = await fetchStudyPeriods(levelId);
+    const [periods, courses] = await Promise.all([
+      fetchStudyPeriods(levelId),
+      fetchCourseOfferings(levelId)
+    ]);
     for (const period of periods) {
       await deleteStudyPeriod(period.id, true);
+    }
+    for (const course of courses) {
+      await deleteCourseOffering(course.id);
     }
   }
   await removeHybridItem<StudyLevel>('studyLevels', 'studyLevels', levelId);
@@ -897,12 +959,16 @@ export async function checkEntityDependencies(
         };
       }
     } else if (entityType === 'level') {
-      const periods = await fetchStudyPeriods(entityId);
-      if (periods.length > 0) {
+      const [periods, courses] = await Promise.all([
+        fetchStudyPeriods(entityId),
+        fetchCourseOfferings(entityId)
+      ]);
+      const totalDeps = periods.length + courses.length;
+      if (totalDeps > 0) {
         return {
           canDelete: false,
-          reason: `يوجد ${periods.length} بلوك/فترة دراسية مسجلة في هذا المستوى الدراسي. يمكنك اختيار "التعطيل الآمن" أو "الحذف النهائي المتسلسل".`,
-          dependentCount: periods.length
+          reason: `يوجد ${periods.length} بلوك/فترة دراسية و ${courses.length} مقرر دراسي مسجل في هذا المستوى. يمكنك إما "تعطيل المستوى مؤقتاً" أو "حذف المستوى وجميع عناصره التابعة (حذف متسلسل)" بعد التأكيد.`,
+          dependentCount: totalDeps
         };
       }
     } else if (entityType === 'period') {

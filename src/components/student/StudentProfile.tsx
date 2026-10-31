@@ -237,8 +237,8 @@ export default function StudentProfile({
   const currentLevelObj = studyLevels.find((l) => l.id === effectiveLevelId);
   const currentLevelTitle = currentLevelObj
     ? currentLevelObj.titleArabic
-    : effectiveLevelId === 'lvl-internship'
-    ? 'سنة الامتياز السريرية'
+    : effectiveLevelId === 'lvl-internship' || effectiveLevelId === 'lvl-7'
+    ? 'المستوى السابع - سنة الامتياز'
     : `المستوى ${effectiveLevelId.replace('lvl-', '')}`;
   const currentSpecialtyTitle = userProfile?.specialtyArabic || 'الطب العام والجراحة (MBBS)';
   const currentAvatarUrl = userProfile?.avatarUrl || '';

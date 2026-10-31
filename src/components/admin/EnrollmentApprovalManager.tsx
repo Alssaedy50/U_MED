@@ -252,7 +252,8 @@ export default function EnrollmentApprovalManager({
     if (!lvlId) return 'غير محدد';
     const found = studyLevels.find(l => l.id === lvlId);
     if (found) return found.titleArabic;
-    return lvlId === 'lvl-internship' ? 'سنة الامتياز (سريري)' : `المستوى ${lvlId.replace('lvl-', '')}`;
+    if (lvlId === 'lvl-internship' || lvlId === 'lvl-7') return 'المستوى السابع - سنة الامتياز';
+    return `المستوى ${lvlId.replace('lvl-', '')}`;
   };
 
   const filteredList = enrollments.filter(item => {

@@ -861,7 +861,7 @@ export const STUDY_LEVELS_OPTIONS: { id: string; nameArabic: string }[] = [
   { id: 'lvl-4', nameArabic: 'المستوى الرابع (Year 4)' },
   { id: 'lvl-5', nameArabic: 'المستوى الخامس (Year 5)' },
   { id: 'lvl-6', nameArabic: 'المستوى السادس (Year 6)' },
-  { id: 'lvl-internship', nameArabic: 'سنة الامتياز السريرية (Internship)' }
+  { id: 'lvl-7', nameArabic: 'المستوى السابع - سنة الامتياز (Internship)' }
 ];
 
 export const MEDICAL_PRESET_AVATARS: string[] = [

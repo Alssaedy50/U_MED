@@ -153,7 +153,7 @@ export default function HierarchyGovernanceConsole({
       setUniversities(effectiveUnivs);
 
       const activeUniv = assignedUniversityId || selectedUnivId || effectiveUnivs[0].id;
-      const lvls = await fetchStudyLevels();
+      const lvls = await fetchStudyLevels(undefined, activeUniv);
       const sortedLvls = [...lvls].sort((a, b) => a.order - b.order);
       setStudyLevels(sortedLvls);
 
